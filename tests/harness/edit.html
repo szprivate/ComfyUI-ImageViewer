@@ -11,6 +11,8 @@
 //   /imageviewer/timeline_cuts    window.__cuts[path]
 //   /imageviewer/timeline_upload  the dropped file "kept" as D:/in/edits/<name>
 //   /imageviewer/resolve_media    a canvas node's file, as D:/in/<its widget's value>
+//   /imageviewer/timeline_still   a still frame "written" as D:/out/still_<n>.png; the requests in window.__stills, the
+//                           History pushes in window.__pushed
 //   /imageviewer/timeline_render  answered at once; the request kept in window.__rendered
 //   /imageviewer/fonts            window.__fonts (title_render.font_list's answer; its urls served by the test), else none
 //   POST /imageviewer/timeline    a save: the cut sent comes back as the file now reads, as D:/out/cut.otio (a clip with
@@ -107,6 +109,15 @@ window.__fetchApi = async (path, opts = {}) => {
       const kind = /\.(mp4|mov|webm)$/i.test(name) ? "video" : "image";
       return json({ tabs: [{ label: name, kind, frames: [{ path: "D:/in/" + name, name }] }] });
     }
+    // Still frame: each request kept in window.__stills; the PNG "written" as D:/out/still_<n>.png (a still to the probe).
+    case "/imageviewer/timeline_still": {
+      const b = JSON.parse(opts.body);
+      (window.__stills ||= []).push(b);
+      const out = "D:/out/still_" + window.__stills.length + ".png";
+      window.__media[out] = { duration: 0, audio: false, video: true, still: true };
+      return json({ path: out, name: out.split("/").pop(), width: 1920, height: 1080, relative: out });
+    }
+    case "/imageviewer/push": (window.__pushed ||= []).push(JSON.parse(opts.body)); return json({ shown: 1 });
     // Export film: what was asked for is kept in window.__rendered.
     case "/imageviewer/timeline_render": {
       window.__rendered = JSON.parse(opts.body);

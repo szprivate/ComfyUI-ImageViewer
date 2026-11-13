@@ -1120,6 +1120,61 @@ try:
                 info[str(raw)] = await _media_work(one, raw)
             return web.json_response({"info": info}, headers={"Cache-Control": "no-cache"})
 
+        async def _imageviewer_timeline_still(request):
+            """A still frame of a clip's source: ``{"path", "name", "width", "height", "relative"}``.
+
+            Body ``{"file", "src", "name", "context"}``: the frame *file* shows at *src* seconds of
+            its own time (the Edit panel sends the clip under its playhead, timeline_media.still_frame)
+            is written as a PNG at its own size where the export rule puts a frame - the shot's
+            images folder, or ``imageviewer/images`` - as the next version, never over a file.
+            """
+            from . import export_rules, timeline_media
+            allowed, why = path_access.same_origin(request)
+            if not allowed:
+                return web.Response(status=403, text=why)
+            try:
+                body = await request.json()
+            except Exception:
+                return web.Response(status=400, text="the request is not JSON")
+            if not isinstance(body, dict):
+                return web.Response(status=400, text="the request is not an object")
+            path = os.path.abspath(str(body.get("file") or ""))
+            if not path_access.may_serve(path):
+                return web.Response(status=403, text=path_access.refusal(path))
+            if not os.path.isfile(path):
+                return web.Response(status=404, text="that file does not exist")
+            try:
+                src = float(body.get("src") or 0)
+            except (TypeError, ValueError):
+                return web.Response(status=400, text="src is not a number of seconds")
+            if not (0 <= src < 1e7):
+                return web.Response(status=400, text="src is not a moment of the file")
+            name = str(body.get("name") or "") or os.path.splitext(os.path.basename(path))[0]
+            try:
+                base = folder_paths.get_output_directory()
+            except Exception:
+                base = None
+            if not base:
+                return web.Response(status=500, text="ComfyUI has no output folder")
+
+            def _make():
+                img = timeline_media.still_frame(path, src)
+                where = export_rules.target("frame", f"{export_rules.slug(name, 'still')}_still", "png",
+                                            base, body.get("context"))
+                out = where["path"]
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                tmp = out + ".tmp"
+                img.save(tmp, "PNG")
+                os.replace(tmp, out)
+                return {"path": out, "name": os.path.basename(out), "width": img.width,
+                        "height": img.height, "relative": where["relative"]}
+            try:
+                return web.json_response(await _media_work(_make))
+            except ValueError as exc:
+                return web.Response(status=422, text=str(exc))
+            except OSError as exc:
+                return web.Response(status=500, text=f"not written: {exc}")
+
         async def _imageviewer_timeline_locate(request):
             """Files named the way ComfyUI names its outputs (``filename`` / ``type`` /
             ``subfolder``: the queue's and the history's), as the paths a cut holds."""
@@ -3470,7 +3525,9 @@ try:
         _safe_add("GET", "/api/imageviewer/timeline_cuts", _imageviewer_timeline_cuts)
         _safe_add("GET", "/api/imageviewer/timeline_shots", _imageviewer_timeline_shots)
         _safe_add("POST", "/imageviewer/timeline_probe", _imageviewer_timeline_probe)
+        _safe_add("POST", "/imageviewer/timeline_still", _imageviewer_timeline_still)
         _safe_add("POST", "/api/imageviewer/timeline_probe", _imageviewer_timeline_probe)
+        _safe_add("POST", "/api/imageviewer/timeline_still", _imageviewer_timeline_still)
         _safe_add("POST", "/imageviewer/timeline_locate", _imageviewer_timeline_locate)
         _safe_add("POST", "/api/imageviewer/timeline_locate", _imageviewer_timeline_locate)
         _safe_add("POST", "/imageviewer/timeline_upload", _imageviewer_timeline_upload)

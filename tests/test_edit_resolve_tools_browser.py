@@ -425,6 +425,40 @@ class EditResolveToolsBrowserTests(Base):
         pg.evaluate("() => __panel.editSrcViewerMode('dual')")
         self.assertEqual(self.errors, [])
 
+    # ── still frame ──
+
+    def test_a_still_frame_of_the_playhead_goes_to_the_history_and_with_shift_into_the_cut(self):
+        # V1: a 0-96 (a film, in 0), c 96-168 (a still), b 168-264 (in 1).
+        pg = self.page()
+        self.fit(pg)
+        self.focus_timeline(pg)
+        n = self.undo_len(pg)
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(200); }")
+        pg.keyboard.press("g")
+        pg.wait_for_function("() => (window.__pushed || []).length === 1", timeout=5000)
+        asked = pg.evaluate("() => window.__stills[0]")
+        # frame 200 is 32.5 frames into b, which starts 1 s into its file
+        self.assertEqual(asked["file"], "D:/out/b.mp4")
+        self.assertAlmostEqual(asked["src"], 1 + 32.5 / 24, places=4)
+        self.assertEqual(pg.evaluate("() => [window.__pushed[0].paths, window.__pushed[0].focus]"), [["D:/out/still_1.png"], False])
+        self.assertEqual(self.undo_len(pg), n, "the cut is not touched")
+        self.assertEqual(len(pg.evaluate(self.V1S)), 3)
+        # The wand menu has both; Alt+G also inserts the still at the playhead: b is split there, one step.
+        pg.locator(".edit-tools-btn").click()
+        items = pg.evaluate("() => [...document.querySelectorAll('.previz-menu-item')].map(e => e.textContent)"
+                            " .concat([...__panel.shadowRoot.querySelectorAll('.previz-menu-item')].map(e => e.textContent))")
+        self.assertTrue(any("Still frame from the playhead" in t for t in items), items)
+        pg.keyboard.press("Escape")
+        self.focus_timeline(pg)
+        pg.evaluate("() => { __panel._editTlSel = null; __panel.setFrame(200); }")
+        pg.keyboard.press("Alt+g")
+        pg.wait_for_function("() => __panel._editTlCut.clips.length === 5", timeout=5000)
+        v1 = pg.evaluate(self.V1S)
+        self.assertEqual([v1[2], v1[4]], [["b", 24, 32], ["b", 56, 64]])
+        self.assertEqual(pg.evaluate("() => __panel._editTlCut.clips[3].file"), "D:/out/still_2.png")
+        self.assertEqual(self.undo_len(pg), n + 1)
+        self.assertEqual(self.errors, [])
+
     # ── the source viewer ──
 
     V1S = "() => { const c = __panel._editTlCut; return c.clips.map((x, i) => [x.name, Math.round(x.in * 24), Math.round(x.length * 24)]); }"

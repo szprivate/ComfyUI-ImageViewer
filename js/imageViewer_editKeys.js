@@ -40,6 +40,9 @@
 //   Del / Shift+Del with nothing selected and an in and out set: lift / extract the range;
 //   Ctrl+Shift+, / . swap the selected clip; Y / Alt+Y / Shift+Y select forward / backward (imageViewer_editRange.js)
 //
+//   G            a still of the frame under the playhead, as a PNG in the History; Alt+G also inserts it
+//                at the playhead (imageViewer_editMatch.js)
+//
 //   W            dynamic trim: J / K / L move the selected edit point or clip (imageViewer_editDynamic.js)
 //
 //   Ctrl+O       Open cut...
@@ -86,6 +89,7 @@ export const EDIT_KEYS = [
     ["Q", "Source viewer: in a single viewer, show the source or the timeline (the switch at the monitor's top right makes it single or dual)"],
     ["F9 / F10 / F11 / F12", "Source viewer: insert / overwrite / replace / place on top, with the source's in-out and the timeline's (three-point editing). Shift+F10 ripple overwrite, Shift+F11 fit to fill, Shift+F12 append at the end"],
     ["F", "Match frame: open the source of the clip under the playhead (the selected one when the playhead is in it, else the picture on top) in the Viewer tab, on the frame the cut shows"],
+    ["G / Alt+G", "Still frame: the frame under the playhead (the selected clip's when the playhead is in it, else the picture on top) saved as a PNG at the source's size and put into the History; Alt+G also inserts it at the playhead as a still"],
     ["Ctrl+Alt+L", "Unlink a film's sound onto a sound track / relink it, from either part (the offset stays; right-click: Resync, Merge audio back into clip)"],
     ["M", "A marker at the playhead: on the selected clip when the playhead is inside it (it rides with the picture), else on the timeline; M on a marker opens it"],
     ["Alt+M", "Take away the markers at the playhead"],
@@ -168,6 +172,7 @@ export const EditKeysMixin = {
             else if (letter === "i") this._editTlClearMark("in");
             else if (letter === "o") this._editTlClearMark("out");
             else if (letter === "v" && !shift) this.editTlPasteDialog();
+            else if (letter === "g" && !shift && this.editTlStillFrame) this.editTlStillFrame({ insert: true });
             else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, true);
             else if (comma || period) this.editTlSlipBy((comma ? -1 : 1) * (shift ? Math.round(this._editTlCut.fps || 24) : 1));
             else done = false;
@@ -202,6 +207,7 @@ export const EditKeysMixin = {
         else if (letter === "d" && !shift) this.editTlDisableToggle();
         else if (letter === "f" && !shift && this.editTlMatchFrame) this.editTlMatchFrame();
         else if (letter === "f" && shift && this.editSrcMatchBack) this.editSrcMatchBack();
+        else if (letter === "g" && !shift && this.editTlStillFrame) this.editTlStillFrame();
         else if (letter === "y") this.editTlSelectForward(shift ? -1 : 1, false);
         else if (letter === "q" && !shift && this.editSrcSwap) this.editSrcSwap();
         else if (low === "z" && shift) this._editTlZoom(1);

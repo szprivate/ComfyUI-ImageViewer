@@ -430,6 +430,50 @@ def _make_film_strip(path, n, height, window=None):
 
 # ── beats (agentY edit_look.beats, ported) ───────────────────────────────────
 
+def still_frame(path, seconds=0.0):
+    """The picture *path* shows at *seconds* of its own time, at its own size, as a PIL image.
+
+    A film gives the frame on screen at that moment - the last one that begins at or before it,
+    the rule the render reads a source by (timeline_render._pictures_at) - and its last frame
+    past its end. A picture gives itself. Raises ValueError for a file without a picture.
+    """
+    from PIL import Image
+    name = os.path.basename(path)
+    if is_still(path):
+        try:
+            with Image.open(path) as im:
+                im.load()
+                return im.convert("RGBA" if "A" in im.getbands() or "transparency" in im.info else "RGB")
+        except Exception as exc:  # noqa: BLE001 - whatever Pillow could not read
+            raise ValueError(f"{name} could not be read: {exc}") from None
+    import av
+    t = max(0.0, float(seconds or 0.0))
+    try:
+        with av.open(path) as src:
+            if not src.streams.video:
+                raise ValueError(f"{name} has no picture")
+            stream = src.streams.video[0]
+            if t > 0.5:
+                try:
+                    src.seek(int((t - 0.5) * 1_000_000))
+                except Exception:  # noqa: BLE001 - a file that will not seek is read from its start
+                    pass
+            shown = None
+            for frame in src.decode(stream):
+                if frame.time is None:
+                    continue
+                if shown is not None and frame.time > t + 1e-6:
+                    break
+                shown = frame
+            if shown is None:
+                raise ValueError(f"{name} could not be read")
+            return shown.to_image().convert("RGB")
+    except ValueError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - PyAV's own errors
+        raise ValueError(f"{name} could not be read: {exc}") from None
+
+
 def onset_strength(samples, rate=_RATE, hop=_HOP):
     """How much NEW energy arrives in each hop of *samples*.
 

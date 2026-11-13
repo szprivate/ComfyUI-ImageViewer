@@ -531,6 +531,10 @@ export const EditTimelineMixin = {
             const r = tools.getBoundingClientRect(), hist = this._editTlHistory();
             this._previzOpenMenu([
                 { label: "Split at the playhead (Ctrl+B, S)", disabled: !has(), run: () => this.editTlSplitAtPlayhead() },
+                { label: "Still frame from the playhead (G)", title: "The frame under the playhead as a PNG at the source's size, into the History",
+                  disabled: !has() || !this._editTlMatchAt(), run: () => this.editTlStillFrame() },
+                { label: "Still frame, inserted at the playhead (Alt+G)", title: "The same, and the still goes into the cut at the playhead",
+                  disabled: !has() || !this._editTlMatchAt(), run: () => this.editTlStillFrame({ insert: true }) },
                 "-",
                 { label: "Auto edit…", title: "Cut on the beat, an even rhythm, a reference's rhythm, the best part of each shot - or ask agentY",
                   disabled: !has(), run: () => this.editTlAutoDialog && this.editTlAutoDialog() },
@@ -1367,6 +1371,7 @@ export const EditTimelineMixin = {
             entries.push({ label: off ? "Enable clip (D)" : "Disable clip (D)", run: () => this.editTlDisableToggle() });
             if (clip && clip.file && !clip.title) {
                 entries.push({ label: "Match frame (F)", disabled: !this._editTlMatchAt(), run: () => this.editTlMatchFrame() });
+                entries.push({ label: "Still frame from the playhead (G)", disabled: !this._editTlMatchAt(), run: () => this.editTlStillFrame() });
                 entries.push({ label: "Open in Source viewer", run: () => {
                     const span = D.selSpan(this._editTlCut, sel), fps = this._editTlCut.fps || 24;
                     const head = ((Number(this.currentFrame) || 0) + 0.5) / fps;
