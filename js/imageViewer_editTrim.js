@@ -448,7 +448,7 @@ export const EditTrimMixin = {
                     this._editTlEditSel = info;
                     this._editTlSeek(this._editTlEditTime(info, start));
                     this._editTlEditClick(info);                    // twice: into the Trim mode on it
-                } else this._editTlSeek(began);
+                }
             }
             this.editTlRefresh();
             if (this.editTwoUpRest) this.editTwoUpRest();            // still on a cut: the view stays

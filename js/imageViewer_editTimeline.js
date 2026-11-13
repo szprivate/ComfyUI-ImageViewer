@@ -1741,7 +1741,8 @@ export const EditTimelineMixin = {
         }, (moved, ev) => {
             this._editTlDropMark(null);
             this._editTlGhost(null);
-            if (!moved) { this._editTlSeek(began); this.editTlRefresh(); return; }
+            // A click selects it; the playhead stays where it is.
+            if (!moved) { this.editTlRefresh(); return; }
             if (onto !== "V1") {
                 // Onto another track: the clips after it on V1 stay where they are (a gap is left) - Ctrl+Shift: they close up.
                 const got = this._editTlLand(start, sel, onto, landed, insert);
@@ -1804,7 +1805,7 @@ export const EditTimelineMixin = {
             this._editTlSetSelList(got.sel, got.moved[D.selId(sel)] || null);
             this.editTlRefresh();
         }, (moved) => {
-            if (!moved) { this._editTlCut = start; this._editTlMulti = null; this._editTlSel = sel; this._editTlSeek(span.start); }
+            if (!moved) { this._editTlCut = start; this._editTlMulti = null; this._editTlSel = sel; }
             this.editTlRefresh();
         });
         return true;
@@ -1984,7 +1985,6 @@ export const EditTimelineMixin = {
                 this._editTlCut = start;
                 if (got) { this._editTlSel = got.sel; this._editTlApply(D.followLink(start, got.cut, sel)); return; }
             }
-            if (!moved) this._editTlSeek(was.at);
             this.editTlRefresh();
         });
     },
@@ -2005,7 +2005,6 @@ export const EditTimelineMixin = {
             else this._editTlCut = D.moveText(start, i, this._editTlSnapSpanAt(was.start + seconds, Number(was.length), own));
             this.editTlRefresh();
         }, (moved) => {
-            if (!moved) this._editTlSeek(was.start);
             this.editTlRefresh();
         });
     },
