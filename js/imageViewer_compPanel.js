@@ -23,6 +23,7 @@ import * as C from "./imageViewer_compModel.js";
 import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
 import { decodeDeep } from "./imageViewer_compDeep.js";
 import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
+import { showInstallLog } from "./imageViewer_installLog.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -818,6 +819,7 @@ export const CompPanelMixin = {
             `${item.label} needs model files that are not on this machine:\n${list}\nTogether ${mb(plan.total)}, from Hugging Face.${more}`, "Download");
         if (!yes) return false;
         const { job } = await cpPost("/imageviewer/paint/download", { workflow: item.id });
+        showInstallLog(job, { host: this.container });
         run.stop = () => { cpPost("/imageviewer/paint/download", { job, cancel: true }).catch(() => {}); };
         let st;
         try {

@@ -937,6 +937,7 @@ def start_download(wid, folder_paths):
     job = secrets.token_hex(8)
     st = {"id": job, "workflow": wid, "files": [dict(f, done=0, state="waiting") for f in files], "state": "running",
           "error": None, "cancel": False}
+    _open_log(st, f"Downloading the models of {plan['label']}")
     with _LOCK:
         _DOWNLOADS[job] = st
     threading.Thread(target=_download_all, args=(st,), daemon=True).start()
@@ -956,14 +957,32 @@ def start_file_download(files, folder_paths, what="models"):
         raise GenerateError("nothing to download")
     job = secrets.token_hex(8)
     st = {"id": job, "workflow": what, "files": todo, "state": "running", "error": None, "cancel": False}
+    _open_log(st, f"Downloading {what.replace('_', ' ')}")
     with _LOCK:
         _DOWNLOADS[job] = st
     threading.Thread(target=_download_all, args=(st,), daemon=True).start()
     return job
 
 
+def _open_log(st, title):
+    """The install log the page's log window follows (install_log; its id is the job's: `log` in the state)."""
+    from . import install_log
+    log = install_log.new(title, "download", stop=lambda: st.update(cancel=True), log_id=st["id"])
+    st["log"] = log.id
+    for f in st["files"]:
+        log.say(f"{f['name']}  ->  {f.get('to') or f['folder']}")
+    return log
+
+
+def _mb(n):
+    return "?" if not n else (f"{n / 1e9:.2f} GB" if n >= 1e9 else f"{n / 1e6:.0f} MB")
+
+
 def _download_all(st):
     import urllib.request
+    from . import install_log
+    log = install_log.get(st.get("log"))
+    say = log.say if log else (lambda _l: None)
     for f in st["files"]:
         if st["cancel"]:
             break
@@ -972,24 +991,37 @@ def _download_all(st):
             os.makedirs(os.path.dirname(f["to"]), exist_ok=True)
             if os.path.exists(f["to"]):
                 f["state"] = "there"
+                say(f"{f['name']}: already there")
                 continue
             f["state"] = "fetching"
+            say("")
+            say(f"GET {f['url']}")
             req = urllib.request.Request(f["url"], headers={"User-Agent": "ComfyUI-ImageViewer"})
+            t0 = last = time.time()
             with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as fh:   # noqa: S310 - hosts allowed only
                 n = r.headers.get("Content-Length")
                 f["size"] = int(n) if n and n.isdigit() else f.get("size")
+                say(f"{f['name']}: {_mb(f['size'])}")
                 while not st["cancel"]:
                     b = r.read(CHUNK)
                     if not b:
                         break
                     fh.write(b)
                     f["done"] += len(b)
+                    now = time.time()
+                    if now - last >= 2:
+                        last = now
+                        rate = f["done"] / max(0.001, now - t0)
+                        share = f" ({100 * f['done'] / f['size']:.0f} %)" if f.get("size") else ""
+                        say(f"  {_mb(f['done'])} of {_mb(f['size'])}{share}, {rate / 1e6:.1f} MB/s")
             if st["cancel"]:
                 os.remove(tmp)
                 f["state"] = "stopped"
+                say(f"{f['name']}: stopped, the part fetched removed")
                 break
             os.replace(tmp, f["to"])
             f["state"] = "done"
+            say(f"{f['name']}: done, {_mb(f['done'])} in {time.time() - t0:.0f} s -> {f['to']}")
         except Exception as e:  # noqa: BLE001 - said in the job's state
             try:
                 os.remove(tmp)
@@ -997,8 +1029,12 @@ def _download_all(st):
                 pass
             f["state"] = "failed"
             st["error"] = f"{f['name']}: {e}"
+            say(f"!! {f['name']}: {e}")
             break
     st["state"] = "stopped" if st["cancel"] else ("failed" if st["error"] else "done")
+    say(f"-- {st['state']} --")
+    if log:
+        log.finish(st["state"], st["error"])
 
 
 def download_status(job, cancel=False):

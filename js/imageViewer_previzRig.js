@@ -11,6 +11,7 @@
 import * as S from "./imageViewer_scene3d.js";
 import * as R from "./imageViewer_rigData.js";
 import { notice } from "./imageViewer_exportUI.js";
+import { openLatestInstallLog } from "./imageViewer_installLog.js";
 
 export const PrevizRigMixin = {
 
@@ -474,6 +475,7 @@ export const PrevizRigMixin = {
             { label: "Auto-rig…", disabled: !model,
               run: () => this.previzAutoRigDialog && this.previzAutoRigDialog(modelId) },
             { label: "Install AI rigging / motion models…", run: () => this.previzRigInstallDialog && this.previzRigInstallDialog() },
+            { label: "Install log…", run: () => openLatestInstallLog({ host: this.container }) },
             { label: "Remove rig", disabled: !rigged, run: () => this.previzRemoveRig(modelId) },
             "-",
             { label: "Select all controls", disabled: !rigged, run: () => this.previzRigSelectControls(modelId) },
