@@ -32,6 +32,7 @@ import { createCompGpu } from "./imageViewer_compGpu.js";
 import * as KL from "./imageViewer_keyLanes.js";
 import { createPaintTool, PAINT_TOOL_CSS } from "./imageViewer_compPaintTool.js";
 import { createViewTools, VIEW_TOOLS_CSS } from "./imageViewer_compViewTools.js";
+import * as WUI from "./imageViewer_compWarpUI.js";
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -189,7 +190,7 @@ function keepGrid(g) { try { localStorage.setItem(GRID_KEY, JSON.stringify(g)); 
 
 export function installCompStyles(rootNode) {
     const doc = rootNode.ownerDocument || rootNode;
-    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS + PAINT_TOOL_CSS + VIEW_TOOLS_CSS], ["data-kl", KL.KL_CSS]]) {
+    for (const [attr, text] of [["data-mg", MG_CSS], ["data-comp", CSS + PAINT_TOOL_CSS + VIEW_TOOLS_CSS + WUI.CSS], ["data-kl", KL.KL_CSS]]) {
         if (!rootNode.querySelector || !rootNode.querySelector(`style[${attr}]`)) {
             const style = el(doc, "style"); style.setAttribute(attr, "1"); style.textContent = text;
             (rootNode.head || rootNode).appendChild(style);
@@ -783,6 +784,7 @@ export function createCompEditor(host, opts = {}) {
         layer = svgEl(doc, "g", { transform: `translate(0 ${st.hoff})` });
         over.append(layer);
         if (n.type === "transform") { drawJack(n); return; }
+        if (WUI.draws(n.type)) { WUI.drawHandles(wctx(), n); return; }
         if (n.type === "crop") { drawCropBox(n); return; }
         if (n.type === "paint") { paintTool.overlay(layer); return; }
         const hs = handlesOf(n);
@@ -861,6 +863,20 @@ export function createCompEditor(host, opts = {}) {
         const h = 4 / z;
         for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
             part(svgEl(doc, "rect", { class: "cp-jsq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner");
+    }
+    /** What imageViewer_compWarpUI.js works with: the editor's helpers and state, for the node on show. */
+    function wctx() {
+        return {
+            doc, st, o, stage, layer, pane, z: st.zoom.s || 1, frame: st.frame,
+            el: (tag, cls, text) => el(doc, tag, cls, text), svg: (tag, attrs) => svgEl(doc, tag, attrs), tip: tipped, btn, toast,
+            node, comp: () => st.comp, inFmt, mutate, renderOverlay,
+            refresh: (which) => refresh(which),
+            xy: (e) => { const p = compXY(e); return [p[0], p[1] - (st.hoff || 0)]; },
+            set: (n, p, v) => { const d = C.NODE_TYPES[n.type].params[p]; if (d && d.key) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v; },
+            begin: () => { if (liveBak.size) liveRestore(); st.hist.push(st.comp); },
+            live: () => { renderOverlay(); queueRender(); },
+            end: () => { st.dirty = true; refresh(["bar", "props", "stage", "graph", "curves"]); },
+        };
     }
     /** A handle dragged: compute(xy0, xy, ev) gives the values; at the playhead (a key there when animated); one undo step. */
     function dragPatch(e, id, compute) {
@@ -1393,6 +1409,7 @@ export function createCompEditor(host, opts = {}) {
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
         let used = true;
         if (st.pick && k === "Escape") { st.pick = null; renderOverlay(); renderProps(); }
+        else if (k === "Escape" && WUI.escape(wctx())) { /* stopped placing a point / drawing lines */ }
         else if (!ctrl && (part === root || part === props) && paintTool.key(e)) { /* the Paint tool's */ }
         else if (part === root && viewTools.key(e)) { /* the viewer tools' */ }
         else if (k === "2" && primary()) viewTools.setB(primary().id);
@@ -1631,7 +1648,8 @@ export function createCompEditor(host, opts = {}) {
      * "target": where a node writes - rgba, one channel, a layer, or a new one typed in; "layer": a layer only.
      */
     function channelSelect(n, p, d, value, write) {
-        const have = C.channelsAt(st.comp, n.inputs[0]);
+        // A map's channels are the map's (STMap, VectorWarp: input 1), everyone else's what comes in.
+        const have = C.channelsAt(st.comp, n.type === "stmap" || n.type === "vectorwarp" ? n.inputs[1] : n.inputs[0]);
         const s = el(doc, "select");
         const add = (v, label, parent = s) => parent.append(new Option(label || v, v));
         const group = (label) => { const g = doc.createElement("optgroup"); g.label = label; s.append(g); return g; };
@@ -1825,8 +1843,9 @@ export function createCompEditor(host, opts = {}) {
         if (n.type === "colorcorrect") {
             ccSection(n, t.params);
             if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(n, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "strokes" && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(n, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
+        if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "roto") {
             if (first) rotoSection(n);
             else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));

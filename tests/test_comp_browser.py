@@ -1058,6 +1058,92 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-handles.png"))
         self.assertEqual(self.errors, [])
 
+    def test_tracker_corner_pin_lens_and_grid_warp_on_the_picture(self):
+        from PIL import Image
+        ys, xs = np.mgrid[0:80, 0:120].astype(np.float64)
+        rng = np.random.default_rng(3)
+        g = np.zeros_like(xs)
+        for a, b, c in (rng.random((40, 3)) - [0.5, 0.5, 0]) * [1.2, 1.2, 6]:
+            g += np.sin(xs * a + ys * b + c)
+        u8 = np.clip(128 + g * 18, 0, 255).astype(np.uint8)
+        Image.fromarray(np.dstack([u8, u8, u8, np.full_like(u8, 255)]), "RGBA").save(os.path.join(self.dirs["output"], "trk_tex.png"))
+        path = os.path.join(self.dirs["output"], "trk.comp.json")
+        comp = {"comp": 1, "format": {"width": 120, "height": 80, "fps": 24, "frames": 5}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "trk_tex.png", "inputs": [], "x": 0, "y": 0},
+                          {"id": "Transform1", "type": "transform", "inputs": ["Read1"], "x": 0, "y": 60,
+                           "tracks": {"translate": [{"f": 0, "v": [0, 0], "ease": "linear"}, {"f": 4, "v": [6, -3]}]}},
+                          {"id": "Tracker1", "type": "tracker", "inputs": ["Transform1"], "x": 0, "y": 120},
+                          {"id": "Output1", "type": "output", "inputs": ["Tracker1"], "x": 0, "y": 180}]}
+        pg = self.page()
+        ok = pg.evaluate("""async ([path, comp]) => { const r = await fetch('/imageviewer/comp', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path, comp }) }); if (!r.ok) return false; return !!(await __panel.compOpenFile(path)); }""", [path, comp])
+        self.assertTrue(ok)
+        ED = self.ED
+        pg.wait_for_function(f"() => {{ const e = {ED}; return e && e.comp() && e.comp().nodes.length === 4; }}", timeout=10000)
+        pg.evaluate(f"() => {{ {ED}.select(['Tracker1']); {ED}.setFrame(0); }}")
+        pg.wait_for_timeout(300)
+        # + Point, then a click on the picture puts a point there.
+        pg.locator(".cp-pane button", has_text="+ Point").click()
+        b = pg.evaluate(f"() => {ED}.canvasBox()")
+        sb = pg.evaluate(f"() => {{ const r = {ED}.stage.getBoundingClientRect(); return [r.x, r.y]; }}")
+        k = b["w"] / b["cw"]
+        pg.mouse.click(sb[0] + b["x"] + 60 * k, sb[1] + b["y"] + 40 * k)
+        pts = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Tracker1').points.points")
+        self.assertEqual(len(pts), 1)
+        self.assertAlmostEqual(pts[0]["keys"][0][1], 60, delta=1.5)
+        self.assertAlmostEqual(pts[0]["keys"][0][2], 40, delta=1.5)
+        # Track to the end through the server; the keys come in, one undo step.
+        pg.locator(".cp-pane button", has_text="▶▶").click()
+        pg.wait_for_function(f"() => {{ const n = {ED}.comp().nodes.find((n) => n.id === 'Tracker1'); return n.points.points[0].keys.length === 5 && !{ED}.state.trkRun; }}", timeout=20000)
+        keys = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Tracker1').points.points[0].keys")
+        x0, y0 = keys[0][1], keys[0][2]
+        self.assertAlmostEqual(keys[4][1] - x0, 6, delta=0.4)
+        self.assertAlmostEqual(keys[4][2] - y0, -3, delta=0.4)
+        # Make: Stabilise is a Transform beside the tracker.
+        pg.locator(".cp-pane button", has_text="Stabilise").click()
+        made = pg.evaluate(f"() => {ED}.comp().nodes.filter((n) => n.type === 'transform').length")
+        self.assertEqual(made, 2)
+        # A CornerPin: its corner squares drag.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('cornerpin'); }}")
+        pg.wait_for_timeout(300)
+        h = pg.locator(".cp-over rect.cp-wpin[data-param=to3]")
+        self.assertEqual(h.count(), 1)
+        hb = h.bounding_box()
+        z = pg.evaluate(f"() => {ED}.state.zoom.s")
+        cx, cy = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx - 20, cy + 10, steps=4); pg.mouse.up()
+        to3 = pg.evaluate(f"() => {{ const n = {ED}.comp().nodes.find((n) => n.type === 'cornerpin'); return n.to3; }}")
+        self.assertIsNotNone(to3)
+        self.assertAlmostEqual(to3[0], 120 - 20 / z, delta=1.5)
+        self.assertAlmostEqual(to3[1], 0 + 10 / z, delta=1.5)
+        # A GridWarp: a destination point drags.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('gridwarp'); }}")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.locator(".cp-over circle.cp-wpt").count(), 25)
+        hb = pg.locator(".cp-over circle.cp-wpt").nth(12).bounding_box()
+        cx, cy = hb["x"] + hb["width"] / 2, hb["y"] + hb["height"] / 2
+        pg.mouse.move(cx, cy); pg.mouse.down(); pg.mouse.move(cx + 15, cy, steps=4); pg.mouse.up()
+        moved = pg.evaluate(f"""() => {{ const n = {ED}.comp().nodes.find((n) => n.type === 'gridwarp');
+            const d = n.dst_points || (n.tracks && n.tracks.dst_points && n.tracks.dst_points[0].v); return d ? d.points || d : null; }}""")
+        self.assertIsNotNone(moved, "the drag wrote the destination points")
+        # LensDistortion: Draw lines, two clicks and a double-click make a line; Solve says what it found.
+        pg.evaluate(f"() => {{ {ED}.select(['Read1']); {ED}.addNode('lensdistortion'); }}")
+        pg.wait_for_timeout(300)
+        pg.locator(".cp-pane button", has_text="Draw lines").click()
+        b = pg.evaluate(f"() => {ED}.canvasBox()")
+        k = b["w"] / b["cw"]
+        for i, (px, py) in enumerate([(10, 20), (60, 14), (110, 20)]):
+            if i == 2:
+                pg.mouse.dblclick(sb[0] + b["x"] + px * k, sb[1] + b["y"] + py * k)
+            else:
+                pg.mouse.click(sb[0] + b["x"] + px * k, sb[1] + b["y"] + py * k)
+        lines = pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.type === 'lensdistortion').lines")
+        self.assertTrue(lines and len(lines) == 1 and len(lines[0]) >= 3, lines)
+        if SHOTS:
+            pg.wait_for_timeout(400)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-lens-lines.png"))
+        self.assertEqual(self.errors, [])
+
     def test_a_reformat_makes_the_picture_its_new_size_and_the_jack_after_it_sits_in_its_middle(self):
         pg = self.page()
         self.new_comp(pg)

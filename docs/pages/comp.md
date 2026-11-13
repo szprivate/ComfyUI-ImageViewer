@@ -55,6 +55,8 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 | Input / output | Read, Constant, Roto (drawn with the viewer's Roto tool), Paint, Output |
 | Merging | Merge (over, plus, multiply, screen, in, out, atop, mask, stencil …), Copy, ChannelMerge, ChannelMath |
 | Geometry | Transform, Reformat, Crop |
+| Warping | CornerPin, STMap, VectorWarp, GridWarp, LensDistortion |
+| Tracking | Tracker (1–4 points), PlanarTracker |
 | Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), OCIOColorSpace, OCIODisplay |
 | Keying | Keyer, LumaKeyer, ChromaKeyer, Erode/Dilate, Premult, Unpremult |
 | Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian |
@@ -98,6 +100,15 @@ The **Viewer** menu in the bar holds the tools for looking at the picture. None 
 | Guides | The format's box (anything outside it is overscan), action safe (93 %) and title safe (90 %), and the centre |
 
 The sampler and the scopes read the preview at its proxy size.
+
+## Tracking and warps
+
+- **Tracker**: **+ Point**, then click the picture. Each point has a pattern box (what is followed) and a search box (how far it may move in a frame), sized in its panel; dragging a point on the picture keys it there at the current frame. The arrows in its panel track one frame or to the end, either way; tracking runs on the server at full resolution and the keys appear as they come. A point whose match falls below a threshold stops there. The node itself can stabilise or match-move (translate, rotate, scale or perspective, from the points it has), or hand that over to a new node: **Make** builds a keyed Transform or CornerPin beside it.
+- **PlanarTracker**: **Place surface**, drag its four corners onto a flat surface, then track. The corners follow the surface as a whole, so it keeps going when parts of it are covered. **Make** gives a keyed CornerPin.
+- **CornerPin**: drag the squares (where the corners go) and the rings (the points they come from). Corners count 1 bottom left, 2 bottom right, 3 top right, 4 top left.
+- **STMap / VectorWarp**: move the picture by a map from a second input: absolute UV coordinates (0–1, bottom left origin) or pixel offsets.
+- **GridWarp**: a source and a destination grid; drag the destination points, Shift+drag the source points. The warp is smooth between them.
+- **LensDistortion**: undistort or redistort with k1 / k2 about a centre, or output the matching ST map. **Draw lines** along things that are straight in the world (double-click ends a line), then **Solve** finds the coefficients.
 
 ## Colour
 
