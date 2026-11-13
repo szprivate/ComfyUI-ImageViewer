@@ -546,6 +546,8 @@ export const CompPanelMixin = {
             rotoMatte: (roto, f, cw, ch, W, H, doc) => this._cpRotoMatte(roto, f, cw, ch, W, H, doc),
             onView: () => { if (this._cpRoto && this._cpRoto.rec === rec) this.updateToolOverlay(); },
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
+            playing: () => !!this.isPlaying,
+            onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),
             ocioLut: (spec) => this._cpOcioLut(spec),
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },

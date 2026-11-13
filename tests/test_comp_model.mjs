@@ -189,16 +189,43 @@ test("a heavy node's result is kept between renders and taken again while nothin
     const d = C.addNode(comp, C.makeNode(comp, "depthblur", { inputs: [r.id, r.id] }));
     const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [d.id] }));
     const cache = new Map();
-    let calls = 0;
-    const source = () => { calls++; return pattern(16, 16, 0, 0, 0); };
+    const pic = pattern(16, 16, 0, 0, 0);
+    const source = () => pic;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    const after = calls;
+    const kept = [...cache.values()][0];
+    assert.equal(cache.size, 1, "only the heavy node is kept by default");
     g.gain = 2;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    assert.equal(calls, after, "the depth blur came from the cache");
+    assert.equal(cache.size, 1, "the depth blur came from the cache");
+    assert.equal([...cache.values()][0], kept);
     d.focus = 0.1;
     C.renderNode(comp, g.id, 0, { scale: 1, source, cache });
-    assert.ok(calls > after, "its own setting changed: made again");
+    assert.equal(cache.size, 2, "its own setting changed: made again");
+    C.renderNode(comp, g.id, 0, { scale: 1, source: () => pattern(16, 16, 0, 0, 0), cache });
+    assert.equal(cache.size, 3, "other pixels from the Read: made again");
+});
+
+test("with cacheAll every node is kept, within a byte budget, and the keys used are told", () => {
+    const comp = C.newComp({ width: 16, height: 16 });
+    const r = C.addNode(comp, read(comp, "a.png"));
+    const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [r.id] }));
+    const b = C.addNode(comp, C.makeNode(comp, "blur", { inputs: [g.id], size: 2 }));
+    const pic = pattern(16, 16, 0, 0, 0), cache = new Map(), keysUsed = new Map();
+    const one = C.renderNode(comp, b.id, 0, { scale: 1, source: () => pic, cache, cacheAll: true, keysUsed });
+    assert.equal(cache.size, 3, "read, grade, blur");
+    assert.ok(keysUsed.get(`${b.id}@0`));
+    b.size = 3;
+    let made = 0;
+    const two = C.renderNode(comp, b.id, 0, { scale: 1, source: () => { made++; return pic; }, cache, cacheAll: true });
+    assert.notEqual(one, two);
+    assert.equal(cache.size, 4, "only the blur made again");
+    const small = new Map();
+    for (let f = 0; f < 6; f++) C.renderNode(comp, b.id, f, { scale: 1, source: () => pic, cache: small, cacheAll: true, cacheBytes: 16 * 16 * 16 * 4 });
+    assert.ok(small.__bytes <= 16 * 16 * 16 * 4 && small.size === 4, "the oldest go first");
+    const only = new Map();
+    C.renderNode(comp, b.id, 0, { scale: 1, source: () => pic, cache: only, cacheIds: new Set([b.id]) });
+    assert.deepEqual([...only.keys()].length, 1);
+    assert.notEqual(C.upstreamHash(comp, b.id), C.upstreamHash(comp, g.id));
 });
 
 test("the keyer takes the screen out and keeps the rest; despill takes green out of an edge", () => {

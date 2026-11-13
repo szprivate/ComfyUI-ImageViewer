@@ -342,6 +342,27 @@ export const PlaybackMixin = {
     renderCacheMarks() {
         const box = this.container && this.container.querySelector('#timeline-cache');
         if (!box) return;
+        // A comp tab: the frames of the picture on screen that its editor keeps (rendered, or rendered ahead).
+        if (this._cpOn) {
+            const ed = this.compEditor && this.compEditor();
+            const kept = ed && ed.cachedFrames ? ed.cachedFrames() : new Set();
+            const n = this._cpFrameCount();
+            let html = '';
+            if (n > 1 && kept.size) {
+                const bounds = this.getTimelineBounds(n), span = bounds.max - bounds.min;
+                const pct = (v) => (Math.max(0, Math.min(span, v)) / span * 100).toFixed(3);
+                if (span > 0) for (let d = bounds.min; d <= bounds.max; d++) {
+                    if (!kept.has(d)) continue;
+                    let e = d;
+                    while (e < bounds.max && kept.has(e + 1)) e++;
+                    const a = d - bounds.min - 0.5, b = e - bounds.min + 0.5;
+                    html += `<i style="left:${pct(a)}%;width:${(pct(b) - pct(a)).toFixed(3)}%"></i>`;
+                    d = e;
+                }
+            }
+            if (box._marks !== html) { box._marks = html; box.innerHTML = html; }
+            return;
+        }
         const imgs   = this._baseFrames() || [];
         const cached = this._cachedUrls;
         const stills = imgs.length > 1 && cached && cached.size
