@@ -401,6 +401,32 @@ class CompBrowserTests(unittest.TestCase):
         self.assertGreaterEqual(len(set(seen)), 4, seen)
         self.assertEqual(self.errors, [])
 
+    def test_frames_are_kept_rendered_ahead_and_marked_on_the_timeline(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate(f"""() => {{ const e = {ED}; const n = e.comp().nodes.find((x) => x.id === 'Constant1');
+            n.tracks = {{ color: [{{ f: 0, v: [0, 0, 0, 1] }}, {{ f: 40, v: [1, 1, 1, 1] }}] }}; e.refresh(); }}""")
+        pg.wait_for_timeout(300)
+        made = pg.evaluate(f"() => {ED}.renderAhead()")
+        self.assertGreater(made, 5, made)
+        kept = pg.evaluate(f"() => [...{ED}.cachedFrames()].sort((a, b) => a - b)")
+        self.assertIn(0, kept)
+        self.assertIn(1, kept)
+        pg.wait_for_timeout(100)
+        self.assertGreater(pg.evaluate("() => __panel.container.querySelectorAll('#timeline-cache i').length"), 0,
+                           "the kept frames are marked on the viewer's timeline")
+        # A frame kept comes back as it was drawn; a change of a node forgets what it reached.
+        pg.evaluate("() => __panel.setFrame(10)")
+        pg.wait_for_timeout(250)
+        px10 = self.pixel(pg, 0.5, 0.5)
+        pg.evaluate(f"() => {{ const e = {ED}; e.comp().nodes.find((x) => x.id === 'Constant1').tracks.color[1].v = [1, 0, 0, 1]; e.refresh(); }}")
+        pg.wait_for_timeout(250)
+        self.assertNotEqual(self.pixel(pg, 0.5, 0.5), px10, "the picture follows the change")
+        kept2 = pg.evaluate(f"() => [...{ED}.cachedFrames()]")
+        self.assertNotIn(20, kept2, "frames made before the change are no longer counted")
+        self.assertEqual(self.errors, [])
+
     def test_a_node_dropped_on_a_wire_goes_into_the_flow(self):
         pg = self.page()
         self.new_comp(pg)

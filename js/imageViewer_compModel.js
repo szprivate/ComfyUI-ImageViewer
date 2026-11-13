@@ -995,7 +995,10 @@ export function upstreamKey(comp, id) {
 
 /**
  * The picture `id` makes at `frame`. ctx: { scale, source(node, frame) -> picture | null (a Read's pixels at
- * their own size, linear premultiplied), cache?: Map (kept between calls for the HEAVY nodes) }. Nodes that
+ * their own size, linear premultiplied), cache?: Map (results kept between calls: the HEAVY nodes', every
+ * node's with `cacheAll`, only `cacheIds`' when given; within `cacheBytes` or `cacheMax` entries; keyed by
+ * frame, scale, `upstreamHash`, the sources handed over and the LUTs there; `keysUsed`: a Map that gets
+ * each cached node's key, `${id}@${frame}` -> key) }. Nodes that
  * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
  * Returns a picture of its own size (formatAt) x scale.
  */
@@ -1067,12 +1070,83 @@ export function maskMix(src, sex, img, ex, m, mix, invert) {
     return [out, oex];
 }
 
+/** cyrb53: a 53-bit hash of a string, as a base-36 string. */
+export function hashString(str, seed = 0) {
+    let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+    for (let i = 0; i < str.length; i++) {
+        const ch = str.charCodeAt(i);
+        h1 = Math.imul(h1 ^ ch, 2654435761);
+        h2 = Math.imul(h2 ^ ch, 1597334677);
+    }
+    h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+    h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+    return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+/**
+ * A hash of node `id`'s settings and everything upstream of it (what `upstreamKey` spells out), built
+ * from its inputs' hashes so a graph is hashed once per render (`memo`: id -> hash).
+ */
+export function upstreamHash(comp, id, memo = new Map(), depth = 0) {
+    if (!id) return "-";
+    if (memo.has(id)) return memo.get(id);
+    const n = nodeById(comp, id);
+    if (!n || depth > 256) return "?";
+    memo.set(id, "~");   // a loop (refused by connect) hashes as itself
+    const { x, y, name, ...rest } = n;
+    const h = hashString(JSON.stringify(rest) + "|" + n.inputs.map((s) => upstreamHash(comp, s, memo, depth + 1)).join(","));
+    memo.set(id, h);
+    return h;
+}
+// A token per object handed to renderNode (a decoded source frame): the same object, the same token.
+const tokens = new WeakMap();
+let tokenNext = 1;
+function tokenOf(o) {
+    if (!o || typeof o !== "object") return "0";
+    let t = tokens.get(o);
+    if (!t) { t = tokenNext++; tokens.set(o, t); }
+    return t;
+}
+/** The bytes a kept result holds (its picture and its extra channels). */
+export function resultBytes(r) {
+    let b = r.img && r.img.data ? r.img.data.byteLength : 0;
+    for (const v of Object.values(r.ex || {})) b += v.byteLength || 0;
+    return b;
+}
+/**
+ * Keep `value` in `cache` (a Map in use order, oldest first) under `key`: within `maxBytes` when given (the
+ * oldest go first, the newest always stays), else within `maxCount` entries (24).
+ */
+export function cacheKeep(cache, key, value, maxBytes, maxCount) {
+    if (cache.has(key)) { cache.__bytes = (cache.__bytes || 0) - (cache.get(key).__b || 0); cache.delete(key); }
+    value.__b = resultBytes(value);
+    cache.set(key, value);
+    cache.__bytes = (cache.__bytes || 0) + value.__b;
+    if (maxBytes) {
+        while (cache.__bytes > maxBytes && cache.size > 1) {
+            const [k, v] = cache.entries().next().value;
+            cache.delete(k);
+            cache.__bytes -= v.__b || 0;
+        }
+    } else {
+        while (cache.size > (maxCount || 24)) {
+            const [k, v] = cache.entries().next().value;
+            cache.delete(k);
+            cache.__bytes -= v.__b || 0;
+        }
+    }
+}
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
     const xmemo = ctx.xmemo || (ctx.xmemo = new Map());   // the extra channels beside each picture
-    const keys = new Map();
+    const keys = new Map(), hashes = new Map();
+    // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
+    // or which decoded frame) and which OCIO transforms had arrived.
+    const sourceSig = (nid, f) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+    let lut = null;
+    const lutSig = () => lut ?? (lut = ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(","));
     // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
     const X = (img, ex) => ({ __x: true, img, ex });
     const exOf = (nid, f) => (nid && xmemo.get(`${nid}@${f}`)) || {};
@@ -1082,10 +1156,16 @@ export function renderNode(comp, id, frame, ctx) {
         if (memo.has(mk)) return memo.get(mk);
         const n = nodeById(comp, nid);
         let ck = null;
-        if (n && !n.disable && HEAVY.has(n.type) && ctx.cache) {
-            if (!keys.has(nid)) keys.set(nid, upstreamKey(comp, nid));
-            ck = `${f}@${scale}@${keys.get(nid)}`;
-            if (ctx.cache.has(ck)) { const kept = ctx.cache.get(ck); memo.set(mk, kept.img); xmemo.set(mk, kept.ex); return kept.img; }
+        if (n && !n.disable && ctx.cache && (ctx.cacheIds ? ctx.cacheIds.has(nid) : ctx.cacheAll ? true : HEAVY.has(n.type))) {
+            if (!keys.has(nid)) keys.set(nid, upstreamHash(comp, nid, hashes));
+            ck = `${f}@${scale}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}`;
+            if (ctx.keysUsed) ctx.keysUsed.set(mk, ck);
+            if (ctx.cache.has(ck)) {
+                const kept = ctx.cache.get(ck);
+                ctx.cache.delete(ck); ctx.cache.set(ck, kept);   // most recently used last
+                memo.set(mk, kept.img); xmemo.set(mk, kept.ex);
+                return kept.img;
+            }
         }
         let img = make(n, f, depth), ex;
         if (img && img.__x) { ex = img.ex; img = img.img; }
@@ -1108,10 +1188,7 @@ export function renderNode(comp, id, frame, ctx) {
         if (n && !n.disable && MASKABLE.has(n.type)) [img, ex] = maskStage(n, f, depth, img, ex);
         memo.set(mk, img);
         xmemo.set(mk, ex);
-        if (ck) {
-            ctx.cache.set(ck, { img, ex });
-            while (ctx.cache.size > (ctx.cacheMax || 24)) ctx.cache.delete(ctx.cache.keys().next().value);
-        }
+        if (ck) cacheKeep(ctx.cache, ck, { img, ex }, ctx.cacheBytes, ctx.cacheMax);
         return img;
     };
     // A MASKABLE node's result held back by its mix and its mask's channel (where it is 0 the input shows).

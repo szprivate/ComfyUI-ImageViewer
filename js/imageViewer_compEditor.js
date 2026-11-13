@@ -216,7 +216,14 @@ export function createCompEditor(host, opts = {}) {
         }));
     }
     if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); } }).catch(() => {});
-    const heavy = new Map();   // HEAVY nodes' results, kept between renders (renderNode's ctx.cache)
+    // Every node's results, kept between renders within CACHE_BYTES (renderNode's ctx.cache, cacheAll): a change
+    // makes again only what is downstream of it, and a frame seen before (or rendered ahead) comes back at once.
+    const heavy = new Map();
+    const CACHE_BYTES = 640 * 1024 * 1024;
+    // The frames of the picture on screen whose result is kept: f -> {key, hash, id, scale} (cachedFrames()).
+    const frameKeys = new Map();
+    let ahead = null;           // the frames being rendered ahead while nothing else happens
+    const AHEAD = 48;
     let lastPics = null;
     let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0;
     const SHOW_EVERY_MS = 120;
@@ -494,8 +501,11 @@ export function createCompEditor(host, opts = {}) {
         lastShown = performance.now(); drawnGen = gen;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
+        const keysUsed = new Map();
         const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte,
-            ocio: lutOf });
+            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES, keysUsed });
+        noteFrame(id, f, scale, keysUsed);
+        aheadSoon();
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
         if (canvas.width !== img.w || canvas.height !== img.h) { canvas.width = img.w; canvas.height = img.h; }
@@ -518,6 +528,58 @@ export function createCompEditor(host, opts = {}) {
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${chan}${ev}${shown} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+    }
+    /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
+    function noteFrame(id, f, scale, keysUsed) {
+        const key = keysUsed.get(`${id}@${f}`);
+        if (!key) return;
+        frameKeys.set(f, { key, id, scale, hash: C.upstreamHash(st.comp, id) });
+        if (o.onCache) o.onCache();
+    }
+    /** The frames of the picture on screen as it is now set up that are kept and come back without work. */
+    function cachedFrames() {
+        const out = new Set();
+        if (!st.comp) return out;
+        const id = viewedId(), scale = scaleNow(), hash = C.upstreamHash(st.comp, id);
+        for (const [f, e] of frameKeys) if (e.id === id && e.scale === scale && e.hash === hash && heavy.has(e.key)) out.add(f);
+        return out;
+    }
+    // ── rendering ahead: while nothing else happens, the next frames of the picture on screen are made and kept
+    // (only the picture itself, so the cache holds frames rather than every node of a few), at most AHEAD and
+    // at most half the cache; it stops at the first change, a newer draw or playback, and starts again later.
+    function aheadSoon() {
+        if (ahead) { clearTimeout(ahead.t); ahead.stop = true; ahead = null; }
+        if (!st.comp || (o.playing && o.playing())) return;
+        const job = { stop: false, gen: renderGen, t: 0 };
+        job.t = win().setTimeout(() => aheadRun(job), 400);
+        ahead = job;
+    }
+    async function aheadRun(job) {
+        const id = viewedId(), scale = scaleNow(), F = st.comp.format.frames, start = st.frame;
+        const fb = Math.max(1, Math.round(viewFmt().width * scale) * Math.round(viewFmt().height * scale) * 16);
+        const n = Math.min(AHEAD, F - 1, Math.floor(CACHE_BYTES / 2 / fb));
+        let made = 0;
+        for (let k = 1; k <= n; k++) {
+            if (job.stop || job.gen !== renderGen || !st.comp || (o.playing && o.playing())) return;
+            const f = (start + k) % F;
+            if (cachedFrames().has(f)) continue;
+            const pics = new Map();
+            try {
+                await Promise.all(C.sourceNeeds(st.comp, id, f).map(async ({ node: nn, frame: nf }) => {
+                    pics.set(`${nn.id}@${nf}`, o.loadSource ? await o.loadSource(nn, nf, { scale, format: fmt() }).catch(() => null) : null);
+                }));
+            } catch (_) { /* made without */ }
+            if (job.stop || job.gen !== renderGen || !st.comp) return;
+            const keysUsed = new Map();
+            C.renderNode(st.comp, id, f, { scale, source: (s2, nf) => pics.get(`${s2.id}@${nf}`) || null, cache: heavy, matte,
+                ocio: lutOf, cacheIds: new Set([id]), cacheBytes: CACHE_BYTES, keysUsed });
+            noteFrame(id, f, scale, keysUsed);
+            made++;
+            // A breath between frames, so the page stays live.
+            await new Promise((r) => win().setTimeout(r, 0));
+        }
+        if (job === ahead) ahead = null;
+        return made;
     }
     function layoutCanvas() {
         if (!st.comp) return;
@@ -725,7 +787,8 @@ export function createCompEditor(host, opts = {}) {
         // The colour that goes INTO the node (what a keyer sees), else what is on screen.
         const srcId = n.inputs && n.inputs[0] ? n.inputs[0] : viewedId();
         const { pics, scale, frame } = lastPics;
-        const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy, matte });
+        const img = C.renderNode(st.comp, srcId, frame, { scale, source: (s, nf) => pics.get(`${s.id}@${nf}`) || null, cache: heavy, matte,
+            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES });
         const dy = downBy(C.formatAt(st.comp, srcId));   // the picture clicked on and the one read may differ in size
         const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor((xy[1] - dy) * scale)));
         const i = (y * img.w + x) * 4, a = img.data[i + 3];
@@ -1744,6 +1807,12 @@ export function createCompEditor(host, opts = {}) {
     return {
         parts,
         state: st,
+        /** The frames of the picture on screen kept in the cache (the timeline's marks). */
+        cachedFrames,
+        /** Forget every kept result (a source changed on disk). */
+        clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
+        /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
+        renderAhead: () => { if (ahead) { clearTimeout(ahead.t); ahead.stop = true; } const job = { stop: false, gen: renderGen, t: 0 }; ahead = job; return aheadRun(job); },
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
         /** How the picture is looked at: {ev, channel} (either may be left out). */
         stage,
@@ -1756,7 +1825,8 @@ export function createCompEditor(host, opts = {}) {
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;
-            st.pick = null; heavy.clear(); lastPics = null;
+            st.pick = null; heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); lastPics = null;
+            if (o.onCache) o.onCache();
             st.zoom.fit = true; st.graph.fitted = false;
             refresh();
             return { ok: !errors.length, errors };
