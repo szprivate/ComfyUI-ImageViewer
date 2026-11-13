@@ -330,7 +330,8 @@ export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "oc
     "keyer", "motionblur", "depthblur", "defocus"]);
 /** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
 export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
-for (const t of MASKABLE) {
+for (const t of MASKABLE) maskable(t);
+function maskable(t) {
     const d = NODE_TYPES[t];
     d.inputs = [...d.inputs, "mask"];
     if (!d.params.mix) d.params.mix = { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true, help: "How much of the result: 0 is what comes in" };
@@ -343,6 +344,7 @@ export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy",
     "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "output"];
 // The finishing nodes (keying, time, colour, filters, AI) are in imageViewer_compExtra.js.
 Object.assign(NODE_TYPES, EX.EXTRA_TYPES);
+for (const t of EX.EXTRA_MASKABLE) { MASKABLE.add(t); if (NODE_TYPES[t].params.mix) OWN_MIX.add(t); maskable(t); }
 TYPE_ORDER.splice(TYPE_ORDER.indexOf("output"), 0, ...EX.EXTRA_ORDER);
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
 export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus", ...EX.EXTRA_HEAVY]);
@@ -1171,7 +1173,20 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH, PT, O };
+/**
+ * What an AI node's result was made from, as a short hash: what comes into it (and its mask) and the words /
+ * factor it asks with. A result whose key is not the node's key now is out of date (said in Parameters; it is
+ * still shown until it is run again).
+ */
+export function aiKey(comp, n) {
+    const ins = n.inputs || [];
+    const text = [ins[0] ? upstreamKey(comp, ins[0]) : "", ins[1] ? upstreamKey(comp, ins[1]) : "", n.type, n.prompt || "", n.factor || ""].join("\u0001");
+    let h = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return h.toString(36);
+}
+
+export { OC, CH, PT, O, EX };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));

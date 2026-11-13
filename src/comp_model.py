@@ -2024,7 +2024,7 @@ _TWO_IN = {"merge", "copy", "channelmerge"}
 # Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
 MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
             "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
-            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"]
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"] + list(_X.EXTRA_MASKABLE)
 OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
 for _mt in MASKABLE:
     _md = NODE_TYPES[_mt]

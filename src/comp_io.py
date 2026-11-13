@@ -219,9 +219,10 @@ class Sources:
 
     ``allow(path)`` may refuse a file (the routes pass ``path_access.may_serve``)."""
 
-    def __init__(self, comp_path=None, allow=None):
+    def __init__(self, comp_path=None, allow=None, allow_lut=None):
         self.comp_path = comp_path
         self.allow = allow
+        self.allow_lut = allow_lut   # what a LUT node may read (a LUT file is not media)
         self.infos = {}
         self.videos = {}
         self.stills = {}
@@ -288,13 +289,29 @@ def _ocio_ok(cs):
         return False
 
 
-def ocio_hook():
-    """The OCIO nodes' transforms, exact (None without PyOpenColorIO: they pass their picture through)."""
+def ocio_hook(comp_path=None, allow=None):
+    """The OCIO nodes' transforms, exact, and a LUT node's file ({"file": ...}, beside the comp when relative;
+    ``allow(path)`` may refuse it). A transform OCIO cannot do (or no PyOpenColorIO) answers None: that node
+    passes its picture through."""
     try:
         from . import comp_ocio
-        return comp_ocio.hook if comp_ocio.available() else None
+        ocio = comp_ocio.hook if comp_ocio.available() else None
     except Exception:  # noqa: BLE001
-        return None
+        ocio = None
+
+    def hook(spec):
+        if spec.get("file"):
+            from . import comp_files
+            path = resolve_file(spec["file"], comp_path)
+            if allow and not allow(path):
+                return None
+            try:
+                lut = comp_files.load_lut(path)
+            except (comp_files.LutError, OSError):
+                return None
+            return lambda rgb: M.apply_lut(rgb, lut)
+        return ocio(spec) if ocio else None
+    return hook
 
 
 def display_encoder(display=None, view=None):
@@ -315,7 +332,7 @@ def render_frames(comp, frames=None, sources=None, scale=1.0):
     if not comp["output"]:
         raise ValueError("the comp has no Output node")
     frames = list(range(comp["format"]["frames"])) if frames is None else list(frames)
-    hook = ocio_hook()
+    hook = ocio_hook(getattr(sources, "comp_path", None), getattr(sources, "allow_lut", None))
     try:
         for f in frames:
             yield f, M.render_node(comp, comp["output"], f, sources, scale, ocio=hook)

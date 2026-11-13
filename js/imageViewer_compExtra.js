@@ -172,6 +172,9 @@ export const EXTRA_TYPES = {
 export const EXTRA_ORDER = Object.keys(EXTRA_TYPES);
 /** Effects with one picture going through them (the Layers view reads them as a layer's effects). */
 export const EXTRA_CHAIN = EXTRA_ORDER.filter((t) => !["appendclip"].includes(t));
+/** The per-pixel ones that take a mask input (the last) and a mix, as the other colour / filter / keyer nodes do. */
+export const EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
+    "loglin", "colormatch", "grain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"];
 /** Slow ones: kept between renders. */
 export const EXTRA_HEAVY = ["denoise", "median", "timeblur"];
 
@@ -300,6 +303,8 @@ function aiMake(n, f, p, api) {
     if (!got) return kind === "upscale" ? api.resample(s, api.fitMatrix(s.w, s.h, w, h, "stretch"), w, h) : s;
     const r = api.resample(got, api.fitMatrix(got.w, got.h, w, h, "stretch"), w, h);
     const out = api.blank(w, h), o = out.data, R = r.data, S = s.data;
+    // An inpaint changes the mask's place only: outside it the plate stays as it came in (in float).
+    const mk = kind === "inpaint" && ins[1] ? api.conform(api.run(ins[1], f), w, h).data : null;
     for (let i = 0; i < w * h * 4; i += 4) {
         if (kind === "matte" || kind === "depth") {
             let m = 0.2126 * R[i] + 0.7152 * R[i + 1] + 0.0722 * R[i + 2];
@@ -307,7 +312,10 @@ function aiMake(n, f, p, api) {
             if (p.output === "matte") { o[i] = m; o[i + 1] = m; o[i + 2] = m; o[i + 3] = 1; }
             else { o[i] = S[i] * m; o[i + 1] = S[i + 1] * m; o[i + 2] = S[i + 2] * m; o[i + 3] = S[i + 3] * m; }
         } else if (kind === "upscale") { o[i] = R[i]; o[i + 1] = R[i + 1]; o[i + 2] = R[i + 2]; o[i + 3] = R[i + 3]; }
-        else { const a = S[i + 3]; o[i] = R[i] * a; o[i + 1] = R[i + 1] * a; o[i + 2] = R[i + 2] * a; o[i + 3] = R[i + 3] * a; }
+        else {
+            const a = S[i + 3], m = mk ? mk[i + 3] : 1;
+            for (let c = 0; c < 4; c++) o[i + c] = S[i + c] * (1 - m) + R[i + c] * a * m;
+        }
     }
     return out;
 }

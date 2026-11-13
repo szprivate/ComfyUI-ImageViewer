@@ -13,6 +13,14 @@ and a render of its Output by the export rule.
     GET  /imageviewer/comp_lut?src=&dst= | ?src=&display=&view=
                                                           a transform baked for the preview: float32 LUT, gzip;
                                                           X-Lut-Size, X-Lut-Shaper (comp_ocio.bake)
+    GET  /imageviewer/comp_lut?file=&comp=                 a LUT node's file read the same way (comp_files.load_lut)
+    GET  /imageviewer/comp_cdl?file=&comp=                 a .cc / .cdl / .ccc -> {slope, offset, power, saturation, id}
+    POST /imageviewer/comp_cdl {comp, file, values, id?, overwrite?}  writes one (409 {exists} unless overwrite)
+    POST /imageviewer/comp_ai {path, comp, node, frame, workflow?, graph?, tune?}
+                                                          an AI node's frame as Paint's Generate workflow (comp_ai):
+                                                          {job, graphs, output, ...}; 409 {missing}
+    POST /imageviewer/comp_ai_place {job, image {filename, subfolder, type}}
+                                                          the answer written beside the comp -> {file, frame, node}
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
     POST /imageviewer/comp_render {path, format, options? {bit_depth, compression, quality, compress_level, codec},
                                    first_number?, padding?, first?, last?, name?, context?, display?, view?}
@@ -39,6 +47,8 @@ import time
 
 import numpy as np
 
+from . import comp_ai
+from . import comp_files
 from . import comp_io
 from . import comp_nuke
 from . import comp_track
@@ -240,7 +250,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
     # ── rendering ────────────────────────────────────────────────────────────
 
     def run_job(job, comp, comp_path, spec):
-        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        sources = comp_io.Sources(comp_path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
         fmt, f0, f1 = spec["format"], spec["first"], spec["last"]
         out_dir = folder_paths.get_output_directory()
         name = spec["name"]
@@ -454,7 +464,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
     # ── Export to Nuke ───────────────────────────────────────────────────────
 
     def run_nuke(job, comp, comp_path, spec):
-        sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        sources = comp_io.Sources(comp_path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
         try:
             t = export_rules.target("comp", spec["name"], "nk", folder_paths.get_output_directory(), spec.get("context"))
             nk = t["path"]
@@ -463,7 +473,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             text, plan = comp_nuke.build(comp, info_of=sources.info, nk_path=nk, bake_dir=bake_dir, bake=spec["bake"])
             frames = range(comp["format"]["frames"])
             job["total"] = len(frames) * len(plan["bake"]) + 1
-            hook = comp_io.ocio_hook()
+            hook = comp_io.ocio_hook(comp_path, path_access.is_allowed)
             for f in frames:
                 memo = {}
                 for b in plan["bake"]:
@@ -540,15 +550,24 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
     async def get_lut(request):
         from . import comp_ocio
         q = request.query
-        spec = {"src": q.get("src") or ""}
-        if q.get("display"):
-            spec.update(display=q.get("display"), view=q.get("view") or "*")
+        if q.get("file"):   # a LUT node's file, beside the comp when relative (comp_files)
+            path = comp_io.resolve_file(q.get("file"), abspath(q.get("comp")) or None)
+            if not path_access.is_allowed(path):
+                return err(path_access.refusal(path), 403)
+            try:
+                got = await off(comp_files.load_lut, path)
+            except (comp_files.LutError, OSError) as e:
+                return err(f"{os.path.basename(path)}: {e}", 404)
         else:
-            spec["dst"] = q.get("dst") or ""
-        try:
-            got = await off(comp_ocio.bake, spec)
-        except Exception as e:  # noqa: BLE001
-            return err(e, 500)
+            spec = {"src": q.get("src") or ""}
+            if q.get("display"):
+                spec.update(display=q.get("display"), view=q.get("view") or "*")
+            else:
+                spec["dst"] = q.get("dst") or ""
+            try:
+                got = await off(comp_ocio.bake, spec)
+            except Exception as e:  # noqa: BLE001
+                return err(e, 500)
         if got is None:
             return err("the OCIO config cannot do that transform (or OpenColorIO is not installed)", 404)
         size, shaper, data = got
@@ -557,6 +576,99 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
             "X-Lut-Size": str(size), "X-Lut-Shaper": shaper, "X-ImageViewer-Enc": "gzip", "Cache-Control": "max-age=60",
             "Access-Control-Expose-Headers": "X-Lut-Size, X-Lut-Shaper, X-ImageViewer-Enc"})
 
+    # ── CDL files (comp_files): read into a CDL node, written from one ──
+
+    async def cdl(request):
+        if request.method == "GET":
+            q = request.query
+            path = comp_io.resolve_file(q.get("file"), abspath(q.get("comp")) or None)
+            if not path.lower().endswith(comp_files.CDL_EXTS):
+                return err(f"a CDL file ends in {', '.join(comp_files.CDL_EXTS)}")
+            if not path_access.is_allowed(path):
+                return err(path_access.refusal(path), 403)
+            if not os.path.isfile(path):
+                return err("file not found", 404)
+            try:
+                return web.json_response(dict(await off(comp_files.read_cdl, path), path=path))
+            except (comp_files.LutError, OSError) as e:
+                return err(e, 422)
+        body = await body_of(request)
+        path = comp_io.resolve_file(body.get("file"), abspath(body.get("comp")) or None)
+        if not path.lower().endswith(comp_files.CDL_EXTS):
+            return err(f"a CDL file ends in {', '.join(comp_files.CDL_EXTS)}")
+        if not path_access.is_allowed(path):
+            return err(path_access.refusal(path), 403)
+        if os.path.exists(path) and not body.get("overwrite"):
+            return web.json_response({"error": "there is a file of that name", "exists": True, "path": path}, status=409)
+        values = body.get("values") if isinstance(body.get("values"), dict) else {}
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            await off(comp_files.write_cdl, path, values, str(body.get("id") or "")[:200])
+        except (comp_files.LutError, OSError, TypeError, ValueError) as e:
+            return err(f"not written: {e}", 400)
+        return web.json_response({"ok": True, "path": path})
+
+    # ── AI nodes (comp_ai): one frame through a ComfyUI workflow, the answer beside the comp ──
+
+    def node_classes():
+        try:
+            import nodes  # ComfyUI's own: the node classes this server has
+            return set(nodes.NODE_CLASS_MAPPINGS)
+        except Exception:  # noqa: BLE001 - not inside ComfyUI (the tests): no check
+            return None
+
+    async def ai_prepare(request):
+        from . import paint_generate as G
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_ai.prepare, comp, path, str(body.get("node") or ""), int(body.get("frame") or 0),
+                            sources, folder_paths.get_input_directory(),
+                            ocio=comp_io.ocio_hook(path, path_access.is_allowed),
+                            wid=body.get("workflow") or None, graph=body.get("graph"),
+                            tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
+                            folder_paths=folder_paths, node_classes=node_classes())
+        except G.Missing as e:
+            return web.json_response({"error": str(e), "missing": e.missing}, status=409)
+        except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
+    def output_ref(img):
+        if not img.get("filename"):
+            return None
+        try:
+            base = folder_paths.get_directory_by_type(img.get("type") or "output")
+        except Exception:  # noqa: BLE001
+            base = None
+        if not base:
+            return None
+        p = os.path.abspath(os.path.join(base, str(img.get("subfolder") or ""), str(img["filename"])))
+        return p if path_access.within(p, base) else None
+
+    async def ai_place(request):
+        body = await body_of(request)
+        img = body.get("image") if isinstance(body.get("image"), dict) else {}
+        path = output_ref(img)
+        if not path or not os.path.isfile(path) or not path_access.may_serve(path):
+            return err("the workflow's picture was not found", 404)
+        try:
+            res = await off(comp_ai.place, str(body.get("job") or ""), path)
+        except (comp_ai.AiError, ValueError, OSError) as e:
+            return err(e)
+        if not path_access.is_allowed(res["path"]):
+            return err(path_access.refusal(res["path"]), 403)
+        return web.json_response(res)
+
     async def get_formats(request):
         return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
 
@@ -564,6 +676,10 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None)
         add("GET", f"{prefix}/comp_formats", get_formats)
         add("GET", f"{prefix}/comp_ocio", get_ocio)
         add("GET", f"{prefix}/comp_lut", get_lut)
+        add("GET", f"{prefix}/comp_cdl", cdl)
+        add("POST", f"{prefix}/comp_cdl", cdl)
+        add("POST", f"{prefix}/comp_ai", ai_prepare)
+        add("POST", f"{prefix}/comp_ai_place", ai_place)
         add("GET", f"{prefix}/comp", get_comp)
         add("POST", f"{prefix}/comp", save_comp)
         add("POST", f"{prefix}/comp_new", new_comp)

@@ -453,6 +453,11 @@ def extra_cases(sources):
         c.append(one(N("edgedetect", 1, ["Read1"], **kw)))
     for kw in ({}, {"size": 6, "width": 2, "amount": 0.7}):
         c.append(one(N("edgeblur", 1, ["Read1"], **kw)))
+    # Through a mask (the last input) and a mix, as the other per-pixel nodes.
+    c.append(one(N("cdl", 1, ["Read1", "Read2"], slope_r=1.5, saturation=0.4, mix=0.7)))
+    c.append(one(N("grain", 1, ["Read1", None, "Read2"], amount=0.4, mask_invert="on"), frame=2))
+    c.append(one(N("denoise", 1, ["Read1", "Read2"], mix=0.5, mask_channel="r")))
+    c.append(one(N("differencekeyer", 1, ["Read1", "Read2", "Read2"], mix=0.6)))
     # AI nodes: their result is a picture beside the comp (here a source keyed by the node's result Read).
     res = lambda *fs: {"frames": {str(f): f"r_{f}.png" for f in fs}}
     ai = dict(sources)

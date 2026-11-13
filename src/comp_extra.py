@@ -90,6 +90,9 @@ def _cdl_params():
 AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_relight": "relight", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
 _AI_DATA = {"matte", "depth"}
 
+# The per-pixel ones that take a mask input (the last) and a mix (the page's EXTRA_MASKABLE).
+EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
+                  "loglin", "colormatch", "grain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"]
 EXTRA_TYPES = {
     "differencekeyer": {"inputs": ["src", "clean"], "params": {
         "threshold": _n("num", 0.05, True, 0), "softness": _n("num", 0.1, True, 0),
@@ -726,7 +729,11 @@ def _ai_make(n, f, p, api):
         return (S * m[..., None]).astype(np.float32)
     if kind == "upscale":
         return R.astype(np.float32)
-    return (R * S[..., 3:4]).astype(np.float32)
+    out = R * S[..., 3:4]
+    if kind == "inpaint" and len(ins) > 1 and ins[1]:
+        m = _f64(M.conform(api.run(ins[1], f), w, h))[..., 3:4]
+        out = S * (1 - m) + out * m
+    return out.astype(np.float32)
 
 
 # ── the nodes ────────────────────────────────────────────────────────────────

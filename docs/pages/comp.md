@@ -57,15 +57,29 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 | Geometry | Transform, Reformat, Crop |
 | Warping | CornerPin, STMap, VectorWarp, GridWarp, LensDistortion |
 | Tracking | Tracker (1–4 points), PlanarTracker |
-| Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), OCIOColorSpace, OCIODisplay |
-| Keying | Keyer, LumaKeyer, ChromaKeyer, Erode/Dilate, Premult, Unpremult |
-| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian |
-| Time | Retime, Vectors (optical flow) |
+| Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), CDL, LUT, HueCurves, Clamp, Log/Lin, ColorMatch, OCIOColorSpace, OCIODisplay |
+| Keying | Keyer, LumaKeyer, ChromaKeyer, DifferenceKeyer, Despill, CoreEdge, EdgeExtend, LightWrap, Erode/Dilate, Premult, Unpremult |
+| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian, Grain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
+| Time | Retime (nearest, mix or vector blend), Vectors (optical flow), FrameHold, FrameRange, TimeOffset, AppendClip, TimeBlur |
 | Channels | Shuffle, AddChannels, Remove |
+| AI | AI Matte, AI Depth, AI Relight, AI Inpaint, AI Upscale |
 
 Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
 
 Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
+
+A few notes on the newer nodes:
+
+- **DifferenceKeyer** keys against a clean plate on its second input. **Despill** pulls the screen colour back and can put a replacement colour in its place. **CoreEdge** splits a matte into a solid core and a soft edge; **EdgeExtend** pushes the colours inside a matte outwards so a soft edge has the right colour under it; **LightWrap** lets the background bleed over the foreground's edge.
+- **Grain** is seeded per frame. With a plate on its second input it measures how strong that plate's grain is and scales its own to match. **Denoise** is an edge-preserving guided filter.
+- **TimeBlur** averages frames across a shutter; **AppendClip** plays one input after the other with an optional dissolve. Retime's **vectors** blend warps the two frames on either side along their optical flow.
+- **CDL** applies slope, offset, power and saturation, forwards or inverse. Its Parameters section reads a `.cc`, `.cdl` or `.ccc` (the first correction) and writes one next to the comp. **LUT** reads a `.cube` file directly; with OpenColorIO on the server it also reads `.3dl`, `.spi3d`, `.csp`, `.clf` and the other formats OCIO knows. **Log/Lin** converts between scene-linear and Cineon, LogC3, S-Log3 or ACEScct.
+
+### AI nodes
+
+AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. They use the same workflows as Paint's Generate, so the workflow picked there for background removal, image edit, fill / remove or upscale is the one that runs (Matte uses background removal, Depth and Relight an image edit with words, Inpaint fill or remove inside the alpha of its mask input, Upscale the upscalers).
+
+Nothing runs by itself. In the node's Parameters section, **This frame** runs it on the frame at the playhead and **All frames** on every frame, one after the other. Each answer is saved next to the comp as `<comp>_ai/<node>/<node>_<kind>.<frame>_<run>.png` and stored in the node, so it travels with the comp (one undo step per frame). A frame without its own result shows the nearest earlier one; before the first run the node passes its input through. When the input or the prompt changes afterwards, Parameters marks the results as out of date; they stay until they are run again. **Forget** removes them from the node and leaves the files.
 
 ## Working speed
 
