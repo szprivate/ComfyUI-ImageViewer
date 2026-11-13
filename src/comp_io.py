@@ -37,8 +37,28 @@ def read(path) -> dict:
         raise ValueError("the comp file is too large")
     with open(p, "r", encoding="utf-8-sig") as fh:
         data = json.load(fh)
-    if not isinstance(data, dict) or data.get("comp") != M.COMP_VERSION:
+    return upgrade(data)
+
+
+# What changed between versions of the file: each step takes a comp of that version to the next one. Version 1 is
+# the first; a later viewer adds its steps here, so an old file always opens.
+MIGRATIONS = {}
+
+
+def upgrade(data):
+    """A comp of any version this viewer knows, brought to ``COMP_VERSION``; a newer one is refused with a note."""
+    if not isinstance(data, dict) or not isinstance(data.get("comp"), int) or isinstance(data.get("comp"), bool):
         raise ValueError('the file is not a comp (it needs "comp": 1)')
+    v = data["comp"]
+    if v > M.COMP_VERSION:
+        raise ValueError(f"the comp was saved by a newer viewer (comp version {v}; this one reads up to "
+                         f"{M.COMP_VERSION}): update the ComfyUI Image Viewer")
+    while v < M.COMP_VERSION:
+        step = MIGRATIONS.get(v)
+        if step is None:
+            raise ValueError(f"comp version {v} cannot be read any more")
+        data = step(data)
+        v = data["comp"]
     return data
 
 
@@ -95,6 +115,16 @@ def source_info(path) -> dict:
     """``{kind: still | sequence | video, first, last, width?, height?, fps?}`` or ``{kind: "missing"}``."""
     if not path:
         return {"kind": "missing"}
+    if M.is_comp_path(path):
+        if not os.path.isfile(path):
+            return {"kind": "missing"}
+        try:
+            c, _ = M.normalize(read(path))
+        except (ValueError, OSError) as e:
+            return {"kind": "missing", "error": str(e)}
+        size = M.format_at(c, c.get("output"))
+        return {"kind": "comp", "first": 0, "last": c["format"]["frames"] - 1, "fps": c["format"]["fps"],
+                "width": size["width"], "height": size["height"]}
     if is_sequence(path):
         folder, name = os.path.split(path)
         m = _SEQ.search(name)
@@ -108,7 +138,13 @@ def source_info(path) -> dict:
                 nums.append(int(mm.group(1)))
         if not nums:
             return {"kind": "missing"}
-        return {"kind": "sequence", "first": min(nums), "last": max(nums)}
+        nums.sort()
+        info = {"kind": "sequence", "first": nums[0], "last": nums[-1],
+                "gaps": nums[-1] - nums[0] + 1 - len(nums)}
+        tc = _timecode_of(frame_path(path, nums[0]))
+        if tc:
+            info["timecode"] = tc
+        return info
     if not os.path.isfile(path):
         return {"kind": "missing"}
     if os.path.splitext(path)[1].lower() in VIDEO_EXTS:
@@ -120,15 +156,51 @@ def source_info(path) -> dict:
                 fps = float(s.average_rate or 24)
                 if not n and s.duration and s.time_base:
                     n = int(round(float(s.duration * s.time_base) * fps))
-                return {"kind": "video", "first": 0, "last": max(0, n - 1), "fps": fps,
+                info = {"kind": "video", "first": 0, "last": max(0, n - 1), "fps": fps,
                         "width": s.codec_context.width, "height": s.codec_context.height}
+                tc = (s.metadata or {}).get("timecode") or (c.metadata or {}).get("timecode")
+                if tc:
+                    info["timecode"] = str(tc)
+                return info
         except Exception as e:  # noqa: BLE001
             return {"kind": "missing", "error": str(e)}
     info = {"kind": "still", "first": 0, "last": 0}
+    tc = _timecode_of(path)
+    if tc:
+        info["timecode"] = tc
     size = _still_size(path)
     if size:
         info["width"], info["height"] = size
     return info
+
+
+def _timecode_of(path):
+    """An EXR's own timecode (its header's timeCode), else None."""
+    if not str(path).lower().endswith(".exr"):
+        return None
+    from . import comp_write
+    return comp_write.exr_header(path, 1 << 16).get("timeCode")
+
+
+def sequence_numbers(path):
+    """The frame numbers of a sequence pattern that are on disk, in order."""
+    folder, name = os.path.split(path)
+    m = _SEQ.search(name)
+    if not m:
+        return []
+    digits = int(m.group(2)) if m.group(2) else len(m.group(1))
+    head, tail = name[:m.start()], name[m.end():]
+    rx = re.compile(re.escape(head) + r"(\d{%d,})" % digits + re.escape(tail) + r"$")
+    nums = []
+    for f in glob.glob(os.path.join(glob.escape(folder), glob.escape(head) + "*" + glob.escape(tail))):
+        mm = rx.match(os.path.basename(f))
+        if mm:
+            nums.append(int(mm.group(1)))
+    return sorted(nums)
+
+
+class MissingFrame(ValueError):
+    """A Read whose missing-frame rule is "error" met a frame that is not on disk."""
 
 
 def _still_size(path):
@@ -219,17 +291,36 @@ class Sources:
 
     ``allow(path)`` may refuse a file (the routes pass ``path_access.may_serve``)."""
 
-    def __init__(self, comp_path=None, allow=None, allow_lut=None):
+    MAX_DEPTH = 8
+
+    def __init__(self, comp_path=None, allow=None, _stack=(), allow_lut=None):
         self.comp_path = comp_path
         self.allow = allow
         self.allow_lut = allow_lut   # what a LUT node may read (a LUT file is not media)
         self.infos = {}
         self.videos = {}
         self.stills = {}
+        self.numbers = {}
+        self.precomps = {}
+        self.stack = tuple(_stack) + ((os.path.abspath(comp_path),) if comp_path else ())
         self.notes = []
 
+    def note(self, s):
+        if s not in self.notes:
+            self.notes.append(s)
+
+    def path_of(self, node):
+        """The file a Read reads: its localised copy (``local``) while that is there, else its ``file``."""
+        local = node.get("local")
+        if local:
+            lp = resolve_file(local, self.comp_path)
+            probe = frame_path(lp, 0) if is_sequence(lp) else lp
+            if os.path.isfile(probe) or (is_sequence(lp) and sequence_numbers(lp)):
+                return lp
+        return resolve_file(node.get("file"), self.comp_path)
+
     def info(self, node):
-        path = resolve_file(node.get("file"), self.comp_path)
+        path = self.path_of(node)
         if path not in self.infos:
             if path and self.allow and not self.allow(path):
                 self.infos[path] = {"kind": "refused"}
@@ -237,16 +328,55 @@ class Sources:
             else:
                 self.infos[path] = source_info(path)
                 if self.infos[path]["kind"] == "missing" and path:
-                    self.notes.append(f"{os.path.basename(path)}: not found")
+                    self.note(f"{os.path.basename(path)}: not found")
         return path, self.infos[path]
+
+    def _held(self, path, n):
+        """The nearest frame number of a sequence that is on disk: the last one before n, else the first after."""
+        nums = self.numbers.get(path)
+        if nums is None:
+            nums = self.numbers[path] = sequence_numbers(path)
+        before = [k for k in nums if k <= n]
+        if before:
+            return before[-1]
+        return nums[0] if nums else None
+
+    def _precomp(self, node, path, n):
+        """Another comp's Output at its frame n (a precomp): rendered here, with its own Reads."""
+        if path in self.stack or len(self.stack) >= self.MAX_DEPTH:
+            self.note(f"{os.path.basename(path)}: reads itself (a precomp loop), left black")
+            return None
+        got = self.precomps.get(path)
+        if got is None:
+            try:
+                c, _ = M.normalize(read(path))
+            except (ValueError, OSError) as e:
+                self.note(f"{os.path.basename(path)}: {e}")
+                return None
+            got = self.precomps[path] = (c, Sources(path, self.allow, self.stack))
+        c, src = got
+        if not c["output"]:
+            self.note(f"{os.path.basename(path)}: the comp has no Output")
+            return None
+        img = M.render_node(c, c["output"], n, src, 1.0, ocio=ocio_hook())
+        for s in src.notes:
+            self.note(f"{os.path.basename(path)} > {s}")
+        return img
 
     def __call__(self, node, frame):
         path, info = self.info(node)
         kind = info.get("kind")
-        if kind not in ("still", "sequence", "video"):
+        if kind not in ("still", "sequence", "video", "comp"):
             return None
         cs = node.get("colorspace") or "auto"
         n = M.source_frame(node, info, frame)
+        if kind == "comp":
+            key = ("comp", path, n)
+            if key not in self.stills:
+                self.stills[key] = self._precomp(node, path, n)
+                while len([k for k in self.stills if k[0] == "comp"]) > 16:
+                    self.stills.pop(next(k for k in self.stills if k[0] == "comp"))
+            return self.stills[key]
         ocs = cs not in M.COLORSPACES and _ocio_ok(cs)
         if kind == "video":
             v = self.videos.get(path) or self.videos.setdefault(path, _Video(path))
@@ -259,6 +389,13 @@ class Sources:
                 return M.from_float(comp_ocio.from_space(raw[..., :3], cs), raw[..., 3] if raw.shape[-1] > 3 else None, linear=True)
             return M.decode8(u8, linear=cs == "linear")
         file = frame_path(path, n) if kind == "sequence" else path
+        if kind == "sequence" and not os.path.isfile(file):
+            rule = node.get("missing") or "black"
+            if rule == "error":
+                raise MissingFrame(f"{os.path.basename(file)}: frame {n} is missing")
+            if rule == "hold":
+                k = self._held(path, n)
+                file = frame_path(path, k) if k is not None else file
         key = (file, cs)
         if key in self.stills:
             return self.stills[key]
@@ -279,6 +416,9 @@ class Sources:
         for v in self.videos.values():
             v.close()
         self.videos.clear()
+        for _, src in self.precomps.values():
+            src.close()
+        self.precomps.clear()
 
 
 def _ocio_ok(cs):

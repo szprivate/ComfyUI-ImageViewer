@@ -157,11 +157,11 @@ export const EXTRA_TYPES = {
         results,
     } },
     ai_relight: { label: "AI Relight", cat: "AI", inputs: ["src"], params: {
-        prompt: { kind: "text", def: "soft warm light from the left, as late afternoon sun", help: "The light you want" },
+        prompt: { kind: "prompt", def: "soft warm light from the left, as late afternoon sun", help: "The light you want" },
         results,
     } },
     ai_inpaint: { label: "AI Inpaint", cat: "AI", inputs: ["src", "mask"], params: {
-        prompt: { kind: "text", def: "", help: "What to make in the mask's place; empty: take out what is there (a clean plate)" },
+        prompt: { kind: "prompt", def: "", help: "What to make in the mask's place; empty: take out what is there (a clean plate)" },
         results,
     } },
     ai_upscale: { label: "AI Upscale", cat: "AI", inputs: ["src"], params: {

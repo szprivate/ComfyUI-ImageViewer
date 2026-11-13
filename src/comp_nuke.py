@@ -28,7 +28,8 @@ import numpy as np
 from . import comp_model as M
 
 NATIVE = {"read", "constant", "merge", "transform", "reformat", "crop", "grade", "blur", "shuffle", "copy", "premult",
-          "unpremult", "retime", "channelmath", "channelmerge", "ocio_colorspace", "ocio_display", "erode", "output"}
+          "unpremult", "retime", "channelmath", "channelmerge", "ocio_colorspace", "ocio_display", "erode", "output",
+          "write", "metadata"}
 NUKE_VERSION = "13.0 v1"
 _CH = {"r": "red", "g": "green", "b": "blue", "a": "alpha"}
 _SHUF = {"r": "red", "g": "green", "b": "blue", "a": "alpha", "0": "black", "1": "white"}
@@ -149,7 +150,7 @@ def _bakeable(n):
     return None
 
 
-def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True):
+def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True, comp_path=""):
     """``(text, plan)``: the script, and ``{bake: [{id, name, dir, pattern}], notes: [...], native: [...]}``.
 
     ``info_of(node) -> (absolute path, source_info)`` says what a Read's file is (frames, kind); ``bake_dir`` is where
@@ -208,7 +209,7 @@ def build(comp, *, info_of=None, nk_path="", bake_dir="", bake=True):
                                 pos, label=f"{t} (off)")
             return head[nid]
         plan["native"].append(nid)
-        head[nid] = _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk_path)
+        head[nid] = _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk_path, comp_path)
         return head[nid]
 
     for n in comp["nodes"]:
@@ -236,7 +237,7 @@ def _var(name):
     return "N_" + name
 
 
-def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk_path):
+def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk_path, comp_path=""):
     """Write node ``n`` as stock Nuke nodes; returns the last one's name (the node's picture)."""
     P = lambda p: M.param_at(n, p, 0)  # noqa: E731
     dis = [("disable", "true")] if n.get("disable") else []
@@ -421,6 +422,25 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         return out.add("FilterErode", label, [("inputs", "1"), ("channels", "alpha" if n.get("channels") == "alpha" else "rgba"),
                                               ("size", A.knob(n, "size", lambda v: -(v or 0))), ("filter", "box")] + dis,
                        [src()], pos)
+    if t == "metadata":
+        note("Metadata: written as a NoOp (its keys are the comp's own; the EXRs its Writes make carry them)")
+        return out.add("NoOp", label, [("inputs", "1")] + dis, [src()], pos, label="metadata")
+    if t == "write":
+        from . import comp_write as CW
+        pattern, ft = CW.resolve_pattern(n, comp_path or nk_path)
+        if ft != "exr" and not CW.comp_io.is_sequence(pattern) and ft not in CW.FILM_TYPES:
+            stem, ext = os.path.splitext(pattern)
+            pattern = f"{stem}.{'#' * int(n.get('padding') or 4)}{ext}"
+        frames = CW.write_frames(n, {"format": {"frames": F}})
+        knobs = [("inputs", "1"), ("file", _str(pattern.replace(os.sep, "/"))), ("file_type", {"jpg": "jpeg", "tiff": "tiff"}.get(ft, ft)),
+                 ("first", str(frames[0])), ("last", str(frames[-1])), ("use_limit", "true")]
+        if ft == "exr":
+            knobs += [("channels", "all" if n.get("channels") == "all" else "rgb" if n.get("channels") == "rgb" else "rgba"),
+                      ("datatype", '"32 bit float"' if n.get("depth") == "float" else '"16 bit half"'),
+                      ("colorspace", "linear")]
+        if (n.get("first_number") or 1001) != 0:
+            note("Write: Nuke numbers frames as the comp does (from 0); the viewer's Write numbers them from its 'frame 0 is'")
+        return out.add("Write", label, knobs + dis, [src()], pos)
     if t == "output":
         base = os.path.splitext(os.path.basename(nk_path or "comp.nk"))[0]
         folder = os.path.join(os.path.dirname(nk_path or "."), f"{base}_render")

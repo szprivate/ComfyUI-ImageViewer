@@ -90,6 +90,14 @@ def _cdl_params():
 AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_relight": "relight", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
 _AI_DATA = {"matte", "depth"}
 
+# The names the page shows (and the Python API uses) for these nodes.
+EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edgeextend": "EdgeExtend", "lightwrap": "LightWrap", "coreedge": "CoreEdge",
+                "framehold": "FrameHold", "framerange": "FrameRange", "timeoffset": "TimeOffset", "appendclip": "AppendClip", "timeblur": "TimeBlur",
+                "cdl": "CDL", "lut": "LUT", "huecurves": "HueCurves", "clamp": "Clamp", "loglin": "Log2Lin",
+                "colormatch": "ColorMatch", "grain": "Grain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
+                "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth", "ai_relight": "AI Relight",
+                "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale"}
+
 # The per-pixel ones that take a mask input (the last) and a mix (the page's EXTRA_MASKABLE).
 EXTRA_MASKABLE = ["differencekeyer", "despill", "edgeextend", "lightwrap", "coreedge", "cdl", "lut", "huecurves", "clamp",
                   "loglin", "colormatch", "grain", "denoise", "sharpen", "median", "edgedetect", "edgeblur"]
@@ -143,9 +151,9 @@ EXTRA_TYPES = {
     "ai_matte": {"inputs": ["src"], "params": {"output": _n("enum", "premultiplied", choices=["premultiplied", "matte"]),
                                                "write": _WRITE, "results": _RESULTS}},
     "ai_depth": {"inputs": ["src"], "params": {"invert": _n("enum", "off", choices=_ONOFF), "results": _RESULTS}},
-    "ai_relight": {"inputs": ["src"], "params": {"prompt": _n("text", "soft warm light from the left, as late afternoon sun"),
+    "ai_relight": {"inputs": ["src"], "params": {"prompt": _n("prompt", "soft warm light from the left, as late afternoon sun"),
                                                  "results": _RESULTS}},
-    "ai_inpaint": {"inputs": ["src", "mask"], "params": {"prompt": _n("text", ""), "results": _RESULTS}},
+    "ai_inpaint": {"inputs": ["src", "mask"], "params": {"prompt": _n("prompt", ""), "results": _RESULTS}},
     "ai_upscale": {"inputs": ["src"], "params": {"factor": _n("enum", "2", choices=["2", "4"]), "results": _RESULTS}},
 }
 EXTRA_ORDER = list(EXTRA_TYPES)
