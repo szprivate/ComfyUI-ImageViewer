@@ -1116,7 +1116,7 @@ export function ocioNeeds(comp, frame) {
     }
     return [...out].map(([key, spec]) => ({ key, spec }));
 }
-export { OC, CH, PT };
+export { OC, CH, PT, O };
 
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
@@ -1241,6 +1241,14 @@ export function cacheKeep(cache, key, value, maxBytes, maxCount) {
     }
 }
 
+const sourceSigOf = (comp, nid, f, ctx) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(",");
+/** The key renderNode keeps node `id`'s result at `frame` under in `ctx.cache` (another renderer - the GPU - keeps
+ *  its pictures under the same key, so the two share one cache). */
+export function resultKey(comp, id, frame, ctx) {
+    return `${frame}@${ctx.scale || 1}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx)}@${lutSigOf(comp, frame, ctx)}`;
+}
+
 export function renderNode(comp, id, frame, ctx) {
     const scale = ctx.scale || 1;
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
@@ -1249,9 +1257,9 @@ export function renderNode(comp, id, frame, ctx) {
     const keys = new Map(), hashes = new Map();
     // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
     // or which decoded frame) and which OCIO transforms had arrived.
-    const sourceSig = (nid, f) => sourceNeeds(comp, nid, f).map(({ node: s, frame: sf }) => `${s.id}:${sf}:${tokenOf(ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+    const sourceSig = (nid, f) => sourceSigOf(comp, nid, f, ctx);
     let lut = null;
-    const lutSig = () => lut ?? (lut = ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(","));
+    const lutSig = () => lut ?? (lut = lutSigOf(comp, frame, ctx));
     // A node's result with its own extra channels (otherwise its first input's are taken, moved for SPATIAL ones).
     const X = (img, ex) => ({ __x: true, img, ex });
     const exOf = (nid, f) => (nid && xmemo.get(`${nid}@${f}`)) || {};

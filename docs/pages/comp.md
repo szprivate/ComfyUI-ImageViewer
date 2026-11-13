@@ -69,6 +69,8 @@ Each image keeps its own resolution; images of different sizes are aligned at th
 
 Every node's result is kept in memory while you work (up to about 640 MB). Changing a node remakes only what lies downstream of it, and a frame you have already seen comes back at once. Each image also knows the box its visible pixels lie in, so a small element, roto shape or blurred patch over a large plate is only worked out inside that box (about eight times faster for a small blurred element over a 1080p plate). When nothing else is happening, the next frames of the picture on screen are rendered ahead. Frames that are ready are marked on the timeline, so playback over them runs at speed. The proxy menu in the bar sets the working resolution; the render is always full size.
 
+The **GPU** button in the bar (on by default) works the per-pixel nodes on the graphics card: Constant, Merge, Grade, Premult, Unpremult, Transform, Reformat, Crop, Blur, and the mask and mix of any node. Other nodes and footage are still prepared on the CPU and passed in. When you zoom in so that only part of the picture is on screen, only that part is worked out (the region of interest), and panning beyond it works out the new part. A comp that carries extra channels stays on the CPU. The info line under the picture shows which path made the frame.
+
 ## Paint
 
 The Paint node lays strokes on the picture that comes into it. Select it and its section in **Parameters** holds the tools, the brush and the list of strokes; drag on the picture to paint.

@@ -28,6 +28,7 @@ import { MG_CSS } from "./imageViewer_mgEditor.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
 import { createCompCurves } from "./imageViewer_compCurves.js";
 import * as J from "./imageViewer_compJack.js";
+import { createCompGpu } from "./imageViewer_compGpu.js";
 import * as KL from "./imageViewer_keyLanes.js";
 import { createPaintTool, PAINT_TOOL_CSS } from "./imageViewer_compPaintTool.js";
 import { createViewTools, VIEW_TOOLS_CSS } from "./imageViewer_compViewTools.js";
@@ -244,8 +245,48 @@ export function createCompEditor(host, opts = {}) {
     const frameKeys = new Map();
     let ahead = null;           // the frames being rendered ahead while nothing else happens
     const AHEAD = 48;
+    // The GPU preview (imageViewer_compGpu.js): on by default where WebGL2 with float targets is there (localStorage
+    // imageviewer.comp.gpu "off" turns it off); a failure turns it off for the session and says so in the info line.
+    let gpu = null, gpuTried = false, gpuWhy = "", lastRoi = null;
+    const gpuWanted = () => { try { return localStorage.getItem("imageviewer.comp.gpu") !== "off"; } catch (_) { return true; } };
+    function gpuNow() {
+        if (!gpuWanted() || gpuWhy) return null;
+        if (!gpuTried) { gpuTried = true; try { gpu = createCompGpu(doc); if (!gpu) gpuWhy = "no WebGL2 float targets"; } catch (e) { gpuWhy = String((e && e.message) || e); } }
+        return gpu;
+    }
+    /** The part of the picture on screen (pixels of the picture at `scale`), or null when most of it shows. */
+    function visibleRegion(scale) {
+        if (st.zoom.fit) return null;
+        const vf = viewFmt(), Wd = stage.clientWidth || 1, Hd = stage.clientHeight || 1;
+        const x0 = Math.max(0, -st.zoom.x / st.zoom.s), y0 = Math.max(0, -st.zoom.y / st.zoom.s);
+        const x1 = Math.min(vf.width, (Wd - st.zoom.x) / st.zoom.s), y1 = Math.min(vf.height, (Hd - st.zoom.y) / st.zoom.s);
+        if (x1 <= x0 || y1 <= y0) return [0, 0, 0, 0];
+        if ((x1 - x0) * (y1 - y0) > 0.7 * vf.width * vf.height) return null;
+        return [Math.floor(x0 * scale) - 2, Math.floor(y0 * scale) - 2, Math.ceil(x1 * scale) + 2, Math.ceil(y1 * scale) + 2];
+    }
+    /**
+     * Node id's picture at f: from the cache, else the GPU (a region only when `roi`: not kept then), else renderNode.
+     * `aheadOnly`: keep only this picture (rendering ahead).
+     */
+    function picture(id, f, scale, pics, roi, aheadOnly) {
+        const ctx = { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte, ocio: lutOf,
+            cacheBytes: CACHE_BYTES, keysUsed: new Map(), ...(aheadOnly ? { cacheIds: new Set([id]) } : { cacheAll: true }) };
+        const key = C.resultKey(st.comp, id, f, ctx);
+        if (heavy.has(key)) { const kept = heavy.get(key); heavy.delete(key); heavy.set(key, kept); const im = kept.img; im.ch = kept.ex; ctx.keysUsed.set(`${id}@${f}`, key); return { img: im, ctx, how: "kept" }; }
+        const g = gpuNow();
+        if (g) {
+            try {
+                const im = g.render(st.comp, id, f, ctx, roi);
+                if (im) {
+                    if (!im.roi) { C.cacheKeep(heavy, key, { img: im, ex: {} }, CACHE_BYTES); ctx.keysUsed.set(`${id}@${f}`, key); }
+                    return { img: im, ctx, how: im.roi ? "gpu, region" : "gpu" };
+                }
+            } catch (e) { gpuWhy = String((e && e.message) || e); gpu = null; }
+        }
+        return { img: C.renderNode(st.comp, id, f, ctx), ctx, how: "cpu" };
+    }
     let lastPics = null;
-    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0;
+    let renderGen = 0, renderQueued = false, lastMs = 0, lastScale = 1, lastShown = 0, drawnGen = 0, lastHow = "cpu";
     const SHOW_EVERY_MS = 120;
     const infos = new Map();
 
@@ -443,6 +484,11 @@ export function createCompEditor(host, opts = {}) {
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
+        const gpuBtn = btn("GPU", "Work the picture on the graphics card (the render is always made on the server)", () => {
+            const on = !gpuWanted();
+            try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ }
+            gpuWhy = ""; gpuTried = false; gpuBtn.classList.toggle("on", on); queueRender();
+        }, gpuWanted() ? "on cp-gpu" : "cp-gpu");
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
             disp = el(doc, "select", "mg-btn cp-display");
@@ -474,7 +520,7 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, ...(disp ? [disp] : []), layerSel, ...[o.barControl && o.barControl()].filter(Boolean),
+            el(doc, "span", "mg-sep"), proxy, gpuBtn, ...(disp ? [disp] : []), layerSel, ...[o.barControl && o.barControl()].filter(Boolean),
             vtBtn,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
@@ -551,10 +597,11 @@ export function createCompEditor(host, opts = {}) {
         lastShown = performance.now(); drawnGen = gen;
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
-        const keysUsed = new Map();
-        const img = C.renderNode(st.comp, id, f, { scale, source: (n, nf) => pics.get(`${n.id}@${nf}`) || null, cache: heavy, matte,
-            ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES, keysUsed });
-        noteFrame(id, f, scale, keysUsed);
+        const roi = visibleRegion(scale);
+        const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false);
+        lastRoi = img.roi || null;
+        lastHow = how;
+        noteFrame(id, f, scale, rctx.keysUsed);
         aheadSoon();
         lastMs = Math.round(performance.now() - t0);
         lastScale = scale;
@@ -584,7 +631,7 @@ export function createCompEditor(host, opts = {}) {
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -627,10 +674,8 @@ export function createCompEditor(host, opts = {}) {
                 }));
             } catch (_) { /* made without */ }
             if (job.stop || job.gen !== renderGen || !st.comp) return;
-            const keysUsed = new Map();
-            C.renderNode(st.comp, id, f, { scale, source: (s2, nf) => pics.get(`${s2.id}@${nf}`) || null, cache: heavy, matte,
-                ocio: lutOf, cacheIds: new Set([id]), cacheBytes: CACHE_BYTES, keysUsed });
-            noteFrame(id, f, scale, keysUsed);
+            const { ctx: actx } = picture(id, f, scale, pics, null, true);
+            noteFrame(id, f, scale, actx.keysUsed);
             made++;
             // A breath between frames, so the page stays live.
             await new Promise((r) => win().setTimeout(r, 0));
@@ -651,6 +696,11 @@ export function createCompEditor(host, opts = {}) {
         canvas.style.transform = `translate(${st.zoom.x}px, ${st.zoom.y}px) scale(${st.zoom.s})`;
         over.setAttribute("width", cw); over.setAttribute("height", ch);
         over.style.transform = canvas.style.transform;
+        // A picture worked only over the part on screen: panned or zoomed past it, it is made again.
+        if (lastRoi) {
+            const want = visibleRegion(lastScale);
+            if (!want || want[0] < lastRoi[0] || want[1] < lastRoi[1] || want[2] > lastRoi[2] || want[3] > lastRoi[3]) queueRender();
+        }
         if (o.onView) o.onView();
     }
     stage.addEventListener("wheel", (e) => {
@@ -2200,6 +2250,10 @@ export function createCompEditor(host, opts = {}) {
         state: st,
         /** The frames of the picture on screen kept in the cache (the timeline's marks). */
         cachedFrames,
+        /** How the last picture was made: "cpu", "gpu", "gpu, region" or "kept"; and why the GPU is off, if it is. */
+        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi }),
+        /** Switch the GPU preview on / off (kept in localStorage). */
+        setGpu: (on) => { try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ } gpuWhy = ""; gpuTried = false; queueRender(); },
         /** Forget every kept result (a source changed on disk). */
         clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
