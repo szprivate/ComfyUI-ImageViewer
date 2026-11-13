@@ -357,6 +357,45 @@ class TimelineMediaRouteTests(unittest.TestCase):
         self.assertEqual(self.caches("peaks") + self.caches("strip8h48"), [c for c in self.caches("peaks") + self.caches("strip8h48")
                                                                         if "secret" not in c])
 
+    # ── a still frame ──
+
+    def test_a_still_frame_is_the_source_frame_at_that_moment_at_its_own_size(self):
+        picture = os.path.join(self.dirs["output"], "green.png")
+        Image.new("RGBA", (40, 30), (10, 200, 10, 128)).save(picture)
+
+        async def go(c):
+            got = []
+            # frame 47 is the last red one, frame 48 the first blue one: each asked for at its middle
+            for src in (47.5 / 24, 48.5 / 24, 99.0):
+                r = await c.post("/imageviewer/timeline_still", json={"file": self.clip, "src": src, "name": "shot a"})
+                got.append((r.status, await r.json()))
+            r = await c.post("/imageviewer/timeline_still", json={"file": picture, "src": 0})
+            got.append((r.status, await r.json()))
+            r = await c.post("/imageviewer/timeline_still", json={"file": self.outside, "src": 0})
+            refused = r.status
+            r = await c.post("/imageviewer/timeline_still", json={"file": self.clip, "src": "x"})
+            return got, refused, r.status
+        got, refused, bad = self.run_async(go)
+        self.assertEqual([s for s, _ in got], [200] * 4)
+        self.assertEqual((refused, bad), (403, 400))
+        paths = [b["path"] for _, b in got]
+        self.assertEqual(len(set(paths)), 4, "every still is a new file")
+        for path in paths:
+            self.assertTrue(path.startswith(self.dirs["output"]) and path.endswith(".png") and os.path.isfile(path), path)
+        self.assertIn("shot_a_still_v001", paths[0])
+        self.assertIn("shot_a_still_v002", paths[1])
+
+        def middle(path):
+            with Image.open(path) as im:
+                return im.size, im.mode, im.getpixel((im.width // 2, im.height // 2))
+        (size, _, red), (_, _, blue), (_, _, last) = (middle(p) for p in paths[:3])
+        self.assertEqual(size, (160, 90))
+        self.assertEqual((got[0][1]["width"], got[0][1]["height"]), (160, 90))
+        self.assertTrue(red[0] > 150 and red[2] < 90, red)
+        self.assertTrue(blue[2] > 150 and blue[0] < 90, blue)
+        self.assertTrue(last[2] > 150 and last[0] < 90, "past the end: the last frame")
+        self.assertEqual(middle(paths[3]), ((40, 30), "RGBA", (10, 200, 10, 128)))
+
     # ── beats and cuts ──
 
     def test_beats_of_a_click_track(self):

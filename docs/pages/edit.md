@@ -50,6 +50,7 @@ The centre of an edit point rolls it. <kbd>,</kbd> / <kbd>.</kbd> nudge by one f
 | Mark in / out | <kbd>I</kbd> / <kbd>O</kbd>; <kbd>X</kbd> marks the clip |
 | Retime / loop | <kbd>Alt</kbd>+drag an edge / <kbd>Ctrl</kbd>+drag the out edge |
 | Match frame / reverse match frame | <kbd>F</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Still frame from the playhead | <kbd>G</kbd>; <kbd>Alt</kbd>+<kbd>G</kbd> also inserts it at the playhead |
 | Marker | <kbd>M</kbd>; on an existing marker it opens name, colour and notes |
 | Swap with neighbour | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>,</kbd> / <kbd>.</kbd> |
 | Select forward | <kbd>Y</kbd> (<kbd>Alt</kbd>: all tracks) |
@@ -57,6 +58,12 @@ The centre of an edit point rolls it. <kbd>,</kbd> / <kbd>.</kbd> nudge by one f
 | Undo / redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
 
 The clip context menu adds freeze frame, reverse, compound clips, link / unlink audio, clip colour and takes. <kbd>?</kbd> on a cut's tab lists every key.
+
+### Still frame
+
+<kbd>G</kbd> saves the frame under the playhead as a PNG and adds it to the History (group *Edit stills*). It is the source frame of the clip: the selected clip if the playhead is inside it, otherwise the topmost picture. The file has the source's resolution and carries no transform, crop, titles or transitions. It is written to the shot's images folder when the canvas has a context node, otherwise to `output/imageviewer/images`, always as a new version.
+
+<kbd>Alt</kbd>+<kbd>G</kbd> does the same and inserts the still into the cut at the playhead, on the selected clip's video track or V1. The clip under the playhead is split and what follows moves on; it is one undo step. Both commands are also in the wand menu of the Edit bar.
 
 ## Source viewer and three-point editing
 
