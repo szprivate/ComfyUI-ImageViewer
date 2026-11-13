@@ -1092,10 +1092,10 @@ const CHAIN = new Set(["transform", "paint", "reformat", "cornerpin", "tracker",
  * source?, name }]. `chain` runs from the node the Merge reads (its A) up to the source; `source` is the
  * Read / Input / Constant at its end. A layer whose A branch holds another Merge is a "group".
  */
-export function layerStack(comp) {
+export function layerStack(comp, from = undefined) {
     const out = [];
     const outNode = nodeById(comp, comp.output);
-    let id = outNode ? outNode.inputs[0] : null;
+    let id = from !== undefined ? from : outNode ? outNode.inputs[0] : null;
     const seen = new Set();
     const branch = (start) => {
         const chain = [];
@@ -1115,8 +1115,8 @@ export function layerStack(comp) {
     while (id && !seen.has(id)) {
         const n = nodeById(comp, id);
         if (!n) break;
-        seen.add(id);
         if (n.type === "merge") {
+            seen.add(id);
             const b = branch(n.inputs[1]);
             out.push({ kind: b.group ? "group" : "layer", merge: n.id, chain: b.chain, source: b.source ? b.source.id : null,
                 name: n.name || (b.source ? b.source.name || sourceName(b.source) : b.group ? "Group" : "(nothing in A)") });
@@ -1129,6 +1129,101 @@ export function layerStack(comp) {
         break;
     }
     return out;
+}
+
+/**
+ * Where the Layers panel starts reading: what the Output reads; with nothing wired into the Output, the node
+ * looked at (`viewed`, a top-level id) or else the end of the largest tree of nodes nothing reads - so a Read
+ * dropped into the graph is a layer before it is wired. {id, loose}: loose = not what the Output reads.
+ */
+export function layerRoot(comp, viewed = null) {
+    const outNode = nodeById(comp, comp.output);
+    if (outNode && outNode.inputs[0] && nodeById(comp, outNode.inputs[0])) return { id: outNode.inputs[0], loose: false };
+    const pic = (n) => n && n.type !== "output" && !G.GRAPH_ONLY.has(n.type) && n.type !== "group_input" && n.type !== "group_output";
+    const v = viewed ? nodeById(comp, viewed) : null;
+    if (pic(v)) return { id: v.id, loose: true };
+    const read = new Set();
+    for (const n of comp.nodes) for (const s of n.inputs || []) if (s) read.add(s);
+    const size = (id, seen = new Set()) => {
+        const n = nodeById(comp, id);
+        if (!n || seen.has(id)) return 0;
+        seen.add(id);
+        return 1 + (n.inputs || []).reduce((a, s) => a + (s ? size(s, seen) : 0), 0);
+    };
+    let best = null, bestN = 0;
+    for (const n of comp.nodes) {
+        if (!pic(n) || read.has(n.id)) continue;
+        const k = size(n.id);
+        if (k > bestN || (k === bestN && best && n.y > best.y)) { best = n; bestN = k; }
+    }
+    return { id: best ? best.id : null, loose: !!best };
+}
+
+/** The picture sources (Reads, Constants ...: nodes without inputs) that are in no layer of `stack`. */
+export function looseSources(comp, stack) {
+    const used = new Set();
+    for (const l of stack) { if (l.merge) used.add(l.merge); for (const id of l.chain) used.add(id); }
+    const up = new Set();
+    const walk = (id) => { const n = nodeById(comp, id); if (!n || up.has(id)) return; up.add(id); for (const s of n.inputs || []) if (s) walk(s); };
+    for (const id of used) walk(id);
+    return comp.nodes.filter((n) => n.type === "read" && !up.has(n.id)).map((n) => n.id);
+}
+
+/** A node already in the comp made a new layer on top (addLayer for a node that is there). Returns {merge, source}. */
+export function layerFrom(comp, id) {
+    const source = nodeById(comp, id);
+    if (!source) return null;
+    const outNode = nodeById(comp, comp.output) || addNode(comp, makeNode(comp, "output", { x: source.x, y: source.y + 200 }));
+    if (!comp.output) comp.output = outNode.id;
+    const top = outNode.inputs[0] ? nodeById(comp, outNode.inputs[0]) : null;
+    if (!top) { outNode.inputs[0] = source.id; return { merge: null, source }; }
+    const merge = addNode(comp, makeNode(comp, "merge", { x: outNode.x, y: outNode.y }));
+    merge.inputs = [top.id, source.id, null];
+    outNode.inputs[0] = merge.id;
+    outNode.y += 70;
+    return { merge, source };
+}
+
+// ── copies: duplicate, copy and paste ────────────────────────────────────────
+const NO_COPY = new Set(["output", "group_input", "group_output"]);
+/** The nodes `ids` of a graph as a fragment to paste (copies; an Output and a group's own ports are left out). */
+export function copyNodes(level, ids) {
+    const want = new Set(ids);
+    const nodes = level.nodes.filter((n) => want.has(n.id) && !NO_COPY.has(n.type)).map((n) => clone(n));
+    return nodes.length ? { nodes } : null;
+}
+
+/**
+ * A fragment (copyNodes) put into a graph as new nodes: ids made new where the graph has them, the wires and
+ * expression links among the copies kept, wires from nodes outside kept only with `outer` (and only where that
+ * node is in this graph). Placed `dx` / `dy` from where they were, or with their middle at `at` ([x, y]).
+ * Returns the new nodes.
+ */
+export function pasteNodes(level, frag, { dx = 0, dy = 0, at = null, outer = false } = {}) {
+    const src = ((frag && frag.nodes) || []).filter((n) => n && NODE_TYPES[n.type] && !NO_COPY.has(n.type)).map((n) => clone(n));
+    if (!src.length) return [];
+    const have = new Set(level.nodes.map((n) => n.id));
+    const ren = new Map();
+    for (const n of src) ren.set(n.id, have.has(n.id) ? freshId(have, baseOf(n.id)) : (have.add(n.id), n.id));
+    if (at) {
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        for (const n of src) { const [w, h] = nodeSize(n); x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + w); y1 = Math.max(y1, n.y + h); }
+        dx = at[0] - (x0 + x1) / 2; dy = at[1] - (y0 + y1) / 2;
+    }
+    // Links are renamed in two steps (Read1 -> Read2 while Read2 -> Read3 must not run into each other).
+    const pairs = [...ren].filter(([a, b]) => a !== b);
+    const tmp = (k) => `__copy_${k}__`;
+    for (const n of src) {
+        n.inputs = (n.inputs || []).map((s) => (!s ? null : ren.has(s) ? ren.get(s) : outer && nodeById(level, s) ? s : null));
+        if (n.expr) {
+            pairs.forEach(([a], k) => { n.expr = renameInExpr(n.expr, a, tmp(k)); });
+            pairs.forEach(([, b], k) => { n.expr = renameInExpr(n.expr, tmp(k), b); });
+        }
+        n.id = ren.get(n.id);
+        n.x = Math.round(n.x + dx); n.y = Math.round(n.y + dy);
+        addNode(level, n);
+    }
+    return src;
 }
 
 export function sourceName(n) {

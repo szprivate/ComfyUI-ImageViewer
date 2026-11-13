@@ -481,6 +481,59 @@ class CompRoutes(unittest.TestCase):
             self.assertEqual(r.status, 400)
         self.run_c(go)
 
+    def test_the_open_dialog_is_for_the_page_on_this_machine_and_only_names_a_file(self):
+        nd = importlib.import_module(self.pkg + ".native_dialog")
+        real = nd.pick_file
+        self.addCleanup(lambda: setattr(nd, "pick_file", real))
+        asked = []
+
+        async def go(c):
+            nd.pick_file = lambda start="", title="", filters=(): (asked.append(start), self.png)[1]
+            st, got = await self.j(c, "/imageviewer/comp_open_dialog", {"start": self.png})
+            self.assertEqual(st, 200, got)
+            self.assertEqual(os.path.normcase(got["path"]), os.path.normcase(os.path.abspath(self.png)))
+            self.assertEqual((got["name"], got["allowed"]), ("plate.png", True))
+            self.assertEqual(os.path.normcase(asked[-1]), os.path.normcase(os.path.dirname(self.png)), "starts in the file's folder")
+            # a folder the viewer may not read is no place to start in, and a file there is named as not allowed
+            far = os.path.join(self.outside, "far.png")
+            open(far, "wb").close()
+            nd.pick_file = lambda start="", title="", filters=(): (asked.append(start), far)[1]
+            st, got = await self.j(c, "/imageviewer/comp_open_dialog", {"start": self.outside})
+            self.assertEqual((st, got["allowed"], asked[-1]), (200, False, ""))
+            nd.pick_file = lambda *a, **k: ""
+            self.assertEqual(await self.j(c, "/imageviewer/comp_open_dialog", {}), (200, {"cancelled": True}))
+
+            def none(*a, **k):
+                raise nd.Unavailable("no desktop")
+            nd.pick_file = none
+            self.assertEqual((await self.j(c, "/imageviewer/comp_open_dialog", {}))[0], 501)
+
+            def busy(*a, **k):
+                raise nd.Busy("up already")
+            nd.pick_file = busy
+            self.assertEqual((await self.j(c, "/imageviewer/comp_open_dialog", {}))[0], 409)
+            # another site's page, and a form post, are refused before any dialog
+            nd.pick_file = lambda *a, **k: self.fail("no dialog for a refused request")
+            r = await c.post("/imageviewer/comp_open_dialog", json={}, headers={"Origin": "http://evil.example"})
+            self.assertEqual(r.status, 403)
+            r = await c.post("/imageviewer/comp_open_dialog", data={"start": ""})
+            self.assertEqual(r.status, 403)
+            self.assertEqual((await c.get("/imageviewer/comp_open_dialog")).status, 405)
+        self.run_c(go)
+
+    def test_only_one_system_dialog_at_a_time_and_none_without_a_desktop(self):
+        nd = importlib.import_module(self.pkg + ".native_dialog")
+        self.assertTrue(nd._lock.acquire(blocking=False))
+        try:
+            with self.assertRaises(nd.Busy):
+                nd.pick_file()
+        finally:
+            nd._lock.release()
+        if sys.platform not in ("win32", "darwin") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+            with self.assertRaises(nd.Unavailable):
+                nd.pick_file()
+        self.assertEqual(nd._filter_text([("Footage", "*.exr;*.png"), ("All files", "*.*")]), "Footage\0*.exr;*.png\0All files\0*.*\0\0")
+
     def test_a_comp_with_views_renders_one_output_per_view(self):
         from PIL import Image
         for name, col in (("eye_left.png", (255, 0, 0)), ("eye_right.png", (0, 255, 0))):

@@ -38,6 +38,8 @@ import { createPaintTool, PAINT_TOOL_CSS } from "./imageViewer_compPaintTool.js"
 import { createViewTools, VIEW_TOOLS_CSS } from "./imageViewer_compViewTools.js";
 import * as WUI from "./imageViewer_compWarpUI.js";
 const G = C.G, E = C.E;
+// What Ctrl+C took: one for the page, so nodes go from one comp (or group) into another. `n` counts the pastes.
+const clipboard = { frag: null, n: 0 };
 const parseLink = E.parseLink;
 
 const CSS = `
@@ -130,7 +132,9 @@ const CSS = `
 .cp-lrow .cp-lkind{font-size:11px;opacity:.6;width:14px;flex:none;text-align:center}
 .cp-lbg{position:absolute;top:6px;bottom:6px;border-radius:3px;background:#2e2e36;border:1px solid #3c3c46;box-sizing:border-box;pointer-events:none}
 .cp-swatch{width:14px;height:14px;border-radius:2px;flex:none;border:1px solid #0008}
-.cp-note{opacity:.6;padding:6px 2px}
+.cp-note{opacity:.6;padding:6px 2px}.cp-note.cp-loose{opacity:.85}.cp-note.cp-loose .mg-btn{margin-left:6px}
+.cp-lloose .cp-lname{font-style:italic;opacity:.7}.cp-lloose .mg-btn{margin-left:auto;padding:0 6px}
+.mg-prop .mg-btn.cp-open{flex:none}
 .cp-over{position:absolute;left:0;top:0;transform-origin:0 0;overflow:visible;pointer-events:none}
 .cp-over .cp-handle{fill:#0009;stroke:#3ad1ff;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all;cursor:move}
 .cp-over .cp-handle.small{stroke:#ffcf3a}
@@ -1374,6 +1378,9 @@ export function createCompEditor(host, opts = {}) {
         graph.focus({ preventScroll: true });
         closeMenus();
         const target = e.target;
+        // Alt + drag on a node drags a copy of it (of the selection) away; on empty graph it pans, as the middle button.
+        const altBox = e.button === 0 && e.altKey && target.closest ? target.closest(".cp-node, .cp-sticky, .cp-backdrop") : null;
+        if (altBox && node(altBox.dataset.id) && !(target.closest("textarea"))) return dragNodes(e, altBox.dataset.id, { dup: true });
         if (e.button === 1 || (e.button === 0 && e.altKey)) return panGraph(e);
         if (e.button !== 0) return;
         if (st.held === "y") return cutDrag(e);
@@ -1415,9 +1422,9 @@ export function createCompEditor(host, opts = {}) {
         graph.onpointermove = (ev) => { st.graph.x = ox + ev.clientX - sx; st.graph.y = oy + ev.clientY - sy; placeWorld(); };
         graph.onpointerup = () => { graph.onpointermove = null; };
     }
-    function dragNodes(e, id) {
+    function dragNodes(e, id, { dup = false } = {}) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
-        if (e.shiftKey || e.ctrlKey) {
+        if (!dup && (e.shiftKey || e.ctrlKey)) {
             // (A gesture before this one left its handlers: a marquee's let-go once emptied the selection here.)
             graph.onpointermove = null; graph.onpointerup = null;
             st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id];
@@ -1431,13 +1438,26 @@ export function createCompEditor(host, opts = {}) {
         // A backdrop carries what lies on it (and a backdrop on it what lies on that).
         const moving = new Set(st.sel.filter((sid) => node(sid)));
         for (const sid of [...moving]) if (node(sid).type === "backdrop") for (const x of C.backdropHolds(gc(), sid)) moving.add(x);
-        const start = new Map([...moving].map((sid) => [sid, [node(sid).x, node(sid).y]]));
+        let start = new Map([...moving].map((sid) => [sid, [node(sid).x, node(sid).y]]));
         let moved = false;
-        const [px0, py0] = start.get(id);
+        let [px0, py0] = start.get(id);
         graph.onpointermove = (ev) => {
             const [x, y] = gxy(ev);
             if (!moved && Math.hypot(x - sx, y - sy) < 3) return;
-            if (!moved) { st.hist.push(st.comp); moved = true; }
+            if (!moved) {
+                st.hist.push(st.comp); moved = true;
+                // Alt + drag: the copies are made at the first move and are what is dragged; the originals stay.
+                const frag = dup ? C.copyNodes(gc(), [...moving]) : null;
+                const k = frag ? frag.nodes.findIndex((n) => n.id === id) : -1;
+                if (k >= 0) {
+                    const made = C.pasteNodes(gc(), frag);
+                    id = made[k].id;
+                    st.sel = made.map((n) => n.id); st.batch.clear(); syncBatches();
+                    start = new Map(made.map((n) => [n.id, [n.x, n.y]]));
+                    [px0, py0] = start.get(id);
+                    dupMade = true;
+                }
+            }
             // Snapping: the pressed node lands on the grid and the others keep their places to it. Shift: freely.
             let dx = x - sx, dy = y - sy;
             if (st.grid.snap && !ev.shiftKey) { dx = C.snapTo(px0 + dx) - px0; dy = C.snapTo(py0 + dy) - py0; }
@@ -1449,11 +1469,12 @@ export function createCompEditor(host, opts = {}) {
             st.wireHot = hotWire ? `${hotWire.src}>${hotWire.dst}:${hotWire.port}` : null;
             renderGraph();
         };
-        let hotWire = null;
+        let hotWire = null, dupMade = false;
         graph.onpointerup = () => {
             graph.onpointermove = null;
             st.wireHot = null;
             if (moved && hotWire && C.spliceNode(gc(), id, hotWire)) { st.dirty = true; refresh(); return; }
+            if (dupMade) { st.dirty = true; refresh(); if (o.onSelect) o.onSelect(primary()); return; }
             if (moved) { st.dirty = true; renderBar(); renderGraph(); }
         };
     }
@@ -1616,7 +1637,6 @@ export function createCompEditor(host, opts = {}) {
             if (type === "group_input") extra.index = 1e6;   // the last port (the ports are renumbered after)
             const n = C.insertNode(gc(), type, at || (after && G.GRAPH_ONLY.has(after.type)) ? null : after && after.id, extra);
             if (st.grid.snap) { n.x = C.snapTo(n.x); n.y = C.snapTo(n.y); }
-            if (type === "read" && o.pickFile) o.pickFile((path) => mutate(() => { const r = node(n.id); if (r) r.file = path; }, { structure: false }));
             st.sel = [n.id];
         });
     }
@@ -1639,10 +1659,12 @@ export function createCompEditor(host, opts = {}) {
             if (!G.GRAPH_ONLY.has(n.type) && !["dot", "group_input", "group_output", "output"].includes(n.type)) acts.push([n.disable ? "Enable (D)" : "Disable (D)", () => toggleDisable()]);
             if (n.type === "sticky") acts.push(["Write…", () => editNote(id)]);
             else acts.push(["Rename…", () => renameNode(id)]);
+            if (!["output", "group_input", "group_output"].includes(n.type) || several) acts.push(["Duplicate (Ctrl+D)", duplicateSel], ["Copy (Ctrl+C)", copySel], ["Cut (Ctrl+X)", cutSel]);
             acts.push(["Delete (Del)", () => removeSel()]);
             tabMenu(where, { actions: acts });
         } else {
             const acts = [["Frame all (F)", frameAll]];
+            if (clipboard.frag) acts.push(["Paste here (Ctrl+V)", () => pasteClip({ at })], ["Paste with its inputs (Ctrl+Shift+V)", () => pasteClip({ at, outer: true })]);
             if (st.scope.length) acts.unshift(["Up one level (Ctrl+Backspace)", upLevel]);
             tabMenu(where, { place: at, actions: acts });
         }
@@ -1652,6 +1674,42 @@ export function createCompEditor(host, opts = {}) {
     /** Shows the node of that flat id (null: the Output). */
     function setViewFlat(id) { st.view = !id || id === st.comp.output ? null : id; refresh(["graph", "stage"]); }
     function toggleDisable() { const ids = st.sel.filter((id) => node(id) && !["output", "dot", "backdrop", "sticky", "group_input", "group_output"].includes(node(id).type)); if (ids.length) mutate(() => { const off = !ids.every((id) => node(id).disable); for (const id of ids) { if (off) node(id).disable = true; else delete node(id).disable; } }); }
+    // ── copies: Ctrl+D, Ctrl+C / Ctrl+X / Ctrl+V, Alt + drag ──
+    /** The selection to copy: a backdrop takes what lies on it along. */
+    function copyIds() {
+        const ids = new Set(st.sel.filter((id) => node(id)));
+        for (const id of [...ids]) if (node(id).type === "backdrop") for (const x of C.backdropHolds(gc(), id)) ids.add(x);
+        return [...ids];
+    }
+    function putCopies(frag, opts) {
+        let made = [];
+        mutate(() => { made = C.pasteNodes(gc(), frag, opts); st.sel = made.map((n) => n.id); st.batch.clear(); syncBatches(); });
+        if (made.length && o.onSelect) o.onSelect(primary());
+        return made;
+    }
+    function duplicateSel() {
+        const frag = C.copyNodes(gc(), copyIds());
+        if (!frag) { toast("Select the nodes to duplicate (an Output is not copied)", "warn"); return; }
+        putCopies(frag, { dx: C.GRID * 2, dy: C.GRID * 2 });
+    }
+    function copySel() {
+        const frag = C.copyNodes(gc(), copyIds());
+        if (!frag) { toast("Select the nodes to copy (an Output is not copied)", "warn"); return false; }
+        clipboard.frag = frag; clipboard.n = 0;
+        toast(`${frag.nodes.length} node${frag.nodes.length === 1 ? "" : "s"} copied`);
+        return true;
+    }
+    function cutSel() { if (copySel()) removeSel(); }
+    /** Paste: under the pointer while it is over the graph (`at`), else a step off where they were copied. */
+    function pasteClip({ outer = false, at = null } = {}) {
+        if (!clipboard.frag) { toast("Nothing copied yet", "warn"); return; }
+        const where = at || (st.gmouse ? st.gmouse : null);
+        clipboard.n++;
+        const step = C.GRID * 2 * clipboard.n;
+        putCopies(clipboard.frag, where ? { at: where, outer } : { dx: step, dy: step, outer });
+    }
+    graph.addEventListener("pointermove", (e) => { st.gmouse = gxy(e); });
+    graph.addEventListener("pointerleave", () => { st.gmouse = null; });
     function removeSel() { const ids = st.sel.filter((id) => node(id)); if (ids.length) mutate(() => { C.removeNodes(gc(), ids); st.sel = []; fixSel(); }); }
     function renameNode(id) {
         const bd = world.querySelector(`.cp-backdrop[data-id="${cssId(id)}"]`);
@@ -1791,6 +1849,10 @@ export function createCompEditor(host, opts = {}) {
         else if (ctrl && k.toLowerCase() === "s") save();
         else if (ctrl && k.toLowerCase() === "o" && o.open) o.open();
         else if (!ctrl && !e.altKey && (k.toLowerCase() === "a" || k.toLowerCase() === "y") && part === graph) st.held = k.toLowerCase();
+        else if (ctrl && !e.altKey && k.toLowerCase() === "d" && part === graph) duplicateSel();
+        else if (ctrl && !e.altKey && !e.shiftKey && k.toLowerCase() === "c" && part === graph) copySel();
+        else if (ctrl && !e.altKey && !e.shiftKey && k.toLowerCase() === "x" && part === graph) cutSel();
+        else if (ctrl && !e.altKey && k.toLowerCase() === "v" && part === graph) pasteClip({ outer: e.shiftKey });
         else if (ctrl && k.toLowerCase() === "g" && part === graph) { if (e.shiftKey) ungroupSel(); else groupSel(); }
         else if (ctrl && k === "Enter" && part === graph && primary() && primary().type === "group") openGroup(primary().id);
         else if (ctrl && k === "Backspace" && part === graph && st.scope.length) upLevel();
@@ -1834,12 +1896,30 @@ export function createCompEditor(host, opts = {}) {
                 .then((files) => { if (files && files.length) place(files, e); });
         });
     }
-    wireDrop(graph, (files, e) => mutate(() => {
+    /** Files dragged in from the desktop: copied in by the panel (`uploadFiles`), then placed like the rest. */
+    function wireFileDrop(target, place) {
+        const has = (e) => Array.from(e.dataTransfer?.types || []).includes("Files") && !Array.from(e.dataTransfer?.types || []).includes(DROP);
+        target.addEventListener("dragover", (e) => { if (o.uploadFiles && has(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+        target.addEventListener("drop", (e) => {
+            if (!o.uploadFiles || !has(e)) return;
+            e.preventDefault(); e.stopPropagation();
+            const list = Array.from(e.dataTransfer.files || []);
+            if (!list.length) return;
+            Promise.resolve(o.uploadFiles(list)).then((files) => { if (files && files.length) place(files, e); }).catch((err) => toast(String((err && err.message) || err), "warn"));
+        });
+    }
+    const dropReads = (files, e) => mutate(() => {
         const [x, y] = gxy(e);
-        st.sel = files.map((f, i) => C.addNode(gc(), C.makeNode(gc(), "read", { file: f, x: Math.round(x - C.NODE_W / 2 + i * 140), y: Math.round(y) })).id);
-    }));
-    wireDrop(layers, (files) => mutate(() => { for (const f of files) st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: f })).source.id]; }));
-    wireDrop(stage, (files) => mutate(() => { for (const f of files) st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: f })).source.id]; }));
+        const made = files.map((f, i) => C.addNode(gc(), C.makeNode(gc(), "read", { file: f, x: Math.round(x - C.NODE_W / 2 + i * 140), y: Math.round(y) })));
+        st.sel = made.map((n) => n.id);
+        // The first footage of a comp whose Output reads nothing is wired into it: there is a picture at once.
+        const out = !st.scope.length && C.nodeById(st.comp, st.comp.output);
+        if (out && !out.inputs[0] && !st.comp.nodes.some((n) => n.inputs && n.inputs.some(Boolean))) out.inputs[0] = made[0].id;
+    });
+    const dropLayers = (files) => mutate(() => { adoptLoose(); for (const f of files) st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: f })).source.id]; });
+    wireDrop(graph, dropReads); wireFileDrop(graph, dropReads);
+    wireDrop(layers, dropLayers); wireFileDrop(layers, dropLayers);
+    wireDrop(stage, dropLayers); wireFileDrop(stage, dropLayers);
 
     // ── properties (Motion's rows) ───────────────────────────────────────────
     const field = (label, input) => { const r = el(doc, "div", "mg-prop"); r.append(el(doc, "label", "", label), input); return r; };
@@ -2043,8 +2123,10 @@ export function createCompEditor(host, opts = {}) {
         } else if (d.kind === "file") {
             const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a picture, a film, or shot.####.exr";
             i.onchange = () => write(i.value.trim());
-            const b = btn("…", "Choose a file", () => o.pickFile && o.pickFile((path) => write(path)));
-            row.append(i, b);
+            const open = btn("Open", "Open a file with the system's file dialog (on the ComfyUI machine); elsewhere the viewer's file browser", () => (o.openFile || o.pickFile) && (o.openFile || o.pickFile)((path) => write(path), mixed ? "" : (cur || "")));
+            open.classList.add("cp-open");
+            const b = btn("…", "Choose a file in the viewer's file browser", () => o.pickFile && o.pickFile((path) => write(path)));
+            row.append(i, open, b);
         }
         if (d.key) {
             const key = el(doc, "span", "mg-key", animated ? (Mo.keyAt(n, p, st.frame) ? "◆" : "◇") : "");
@@ -2581,18 +2663,31 @@ export function createCompEditor(host, opts = {}) {
     const keyOf = (s) => { const n = topNode(s.id); return n && (n.tracks?.[s.prop] || []).find((k) => k.f === s.f); };
     function ltCloseMenu() { if (ltMenuEl) { ltMenuEl.remove(); ltMenuEl = null; } }
 
+    /** Where the Layers start (model.layerRoot): what the Output reads, else what is looked at / the largest loose tree. */
+    const ltRoot = () => C.layerRoot(st.comp, st.view && C.nodeById(st.comp, st.view) ? st.view : null);
+    const ltStack = () => { const r = ltRoot(); return r.loose ? C.layerStack(st.comp, r.id) : C.layerStack(st.comp); };
+    /** Before a layer edit: layers shown from a node the Output does not read yet are wired into the Output. */
+    function adoptLoose() {
+        const r = ltRoot();
+        if (!r.loose || !r.id) return false;
+        const out = C.nodeById(st.comp, st.comp.output) || C.addNode(st.comp, C.makeNode(st.comp, "output", { x: C.nodeById(st.comp, r.id).x, y: C.nodeById(st.comp, r.id).y + 140 }));
+        if (!st.comp.output) st.comp.output = out.id;
+        out.inputs[0] = r.id;
+        return true;
+    }
     function renderLayers() {
         if (!st.comp || ltDragging) return;
         ltCloseMenu();
-        const L = C.layerStack(st.comp);
+        const root = ltRoot();
+        const L = ltStack();
         const selIdx = L.findIndex((l) => l.merge && (st.sel.includes(l.merge) || l.chain.some((id) => st.sel.includes(id))));
         const ex = (st.lt.zoom).toFixed(st.lt.zoom < 10 ? 1 : 0);
         lbarEl.replaceChildren(
-            btn("+ Footage…", "A new layer on top: a picture, a film or a sequence", () => o.pickFile && o.pickFile((path) => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: path })).source.id]; }))),
-            btn("+ Solid", "A new layer on top: a colour", () => mutate(() => { st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "constant", { color: [1, 1, 1, 1], name: "Solid" })).source.id]; })),
-            btn("▲", "Move the selected layer up", () => { if (selIdx > 0) mutate(() => C.moveLayer(st.comp, selIdx, -1)); }),
-            btn("▼", "Move the selected layer down", () => { if (selIdx >= 0) mutate(() => C.moveLayer(st.comp, selIdx, 1)); }),
-            btn("🗑", "Delete the selected layer", () => { if (selIdx >= 0) mutate(() => { C.removeLayer(st.comp, selIdx); st.sel = []; }); }));
+            btn("+ Footage…", "A new layer on top: a picture, a film or a sequence", () => o.pickFile && o.pickFile((path) => mutate(() => { adoptLoose(); st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "read", { file: path })).source.id]; }))),
+            btn("+ Solid", "A new layer on top: a colour", () => mutate(() => { adoptLoose(); st.sel = [C.addLayer(st.comp, C.makeNode(st.comp, "constant", { color: [1, 1, 1, 1], name: "Solid" })).source.id]; })),
+            btn("▲", "Move the selected layer up", () => { if (selIdx > 0) mutate(() => { adoptLoose(); C.moveLayer(st.comp, selIdx, -1); }); }),
+            btn("▼", "Move the selected layer down", () => { if (selIdx >= 0) mutate(() => { adoptLoose(); C.moveLayer(st.comp, selIdx, 1); }); }),
+            btn("🗑", "Delete the selected layer", () => { if (selIdx >= 0) mutate(() => { adoptLoose(); C.removeLayer(st.comp, selIdx); st.sel = []; }); }));
         const zoom = el(doc, "span", "cp-lzoom");
         zoom.append(btn("−", "Zoom out (Ctrl + wheel)", () => ltZoom(st.lt.zoom / 1.5)), el(doc, "span", "cp-lzx", `${ex}×`),
             btn("+", "Zoom in (Ctrl + wheel)", () => ltZoom(st.lt.zoom * 1.5)), btn("Fit", "The whole comp in the panel", () => ltZoom(1)));
@@ -2625,7 +2720,13 @@ export function createCompEditor(host, opts = {}) {
             track.append(d);
             return d;
         };
-        if (!L.length) inner.append(el(doc, "div", "cp-note", "Nothing reaches the Output yet. Add footage, or wire a node into the Output in the Node graph."));
+        if (!L.length) inner.append(el(doc, "div", "cp-note", "The comp has no picture yet. Add footage here, or drop it onto the Node graph."));
+        else if (root.loose) {
+            const rn = topNode(root.id);
+            const note = el(doc, "div", "cp-note cp-loose", `Nothing is wired into the Output yet: these are the layers that lead to ${rn.name || C.sourceName(rn) || rn.id}. `);
+            note.append(btn("Wire into the Output", "The Output reads this node from now on (one undo step)", () => mutate(() => { adoptLoose(); })));
+            inner.append(note);
+        }
         L.forEach((l, i) => {
             const m = l.merge ? topNode(l.merge) : null;
             const src = l.source ? topNode(l.source) : null;
@@ -2687,6 +2788,20 @@ export function createCompEditor(host, opts = {}) {
                 }
             }
         });
+        // Reads that are in the graph but in no layer yet: a row each, with the footage they have and a way in.
+        for (const id of C.looseSources(st.comp, L)) {
+            const n = topNode(id);
+            const r = row("cp-lrow cp-lloose" + (st.sel.includes(id) ? " sel" : ""));
+            r.r.dataset.loose = id;
+            const add = btn("+ layer", "Not in the picture yet: put it on top as a layer (a Merge over what the Output reads)", (e) => { if (e && e.stopPropagation) e.stopPropagation(); mutate(() => { adoptLoose(); C.layerFrom(st.comp, id); st.sel = [id]; }); });
+            const sw = el(doc, "span", "cp-swatch"); sw.style.background = CAT_COLOR[C.NODE_TYPES[n.type].cat];
+            const nm = el(doc, "span", "cp-lname", n.name || C.sourceName(n)); nm.title = "In the Node graph, not wired into the comp yet";
+            r.lab.append(el(doc, "span", "cp-ltw", ""), sw, nm, add);
+            r.lab.onclick = () => select([id]);
+            r.tr.dataset.lt = "lane";
+            const foot = footOf(n);
+            if (foot) { const fb = el(doc, "div", "kl-foot"); fb.style.left = at(foot.in); fb.style.width = (foot.out - foot.in) * k + "px"; fb.title = "The footage"; r.tr.append(fb); }
+        }
         // the comp's end down every lane
         const end = el(doc, "div", "cp-lend"); end.style.left = LT_LABEL + F * k + "px"; inner.append(end);
         ltPh = el(doc, "div", "cp-lt-ph"); inner.append(ltPh);
@@ -2874,7 +2989,7 @@ export function createCompEditor(host, opts = {}) {
     /** The timeline's keys, while the Layers panel has the focus. True when the key was its. */
     function ltKey(e) {
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
-        const L = C.layerStack(st.comp);
+        const L = ltStack();
         const cur = L.find((l) => l.merge && (st.sel.includes(l.merge) || l.chain.some((id) => st.sel.includes(id))));
         if ((k === "Delete" || k === "Backspace") && st.lkeys.length) { ltDeleteKeys(); return true; }
         if ((k === "," || k === ".") && st.lkeys.length && !ctrl) {
@@ -3007,6 +3122,9 @@ export function createCompEditor(host, opts = {}) {
         setAiBusy(ids) { st.aiBusy = new Set(ids || []); refresh(["props"]); },
         frameAll,
         select: (ids) => select(ids),
+        selection: () => st.sel.slice(),
+        addNodeAt: (type, at) => addNodeAt(type, at),
+        duplicate: () => duplicateSel(), copy: () => copySel(), paste: (opts) => pasteClip(opts || {}),
         selected: () => primary(),
         view: (id) => setView(id),
         /** Several nodes' fields changed as ONE undo step: {id: {field: value | undefined}} (undefined deletes it). */

@@ -17,6 +17,7 @@
 import { api } from "../../scripts/api.js";
 import { createCompEditor } from "./imageViewer_compEditor.js";
 import { canvasContext, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
+import { uploadPicture } from "./imageViewer_atlasDrops.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
 import * as C from "./imageViewer_compModel.js";
 import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
@@ -575,6 +576,8 @@ export const CompPanelMixin = {
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),
             pathsOf: (items) => this.compPathsOf(items),
+            openFile: (cb, cur) => this._cpOpenFootage(rec, cb, cur),
+            uploadFiles: (files) => this._cpUploadFootage(files),
             save: (path, c) => this._cpSave(path, c),
             newComp: () => this.compNew(),
             open: () => this.compPickFile(),
@@ -910,6 +913,43 @@ export const CompPanelMixin = {
             rec.el.append(shade);
             setTimeout(() => sel.focus(), 0);
         });
+    },
+
+    /**
+     * A Read's "Open": the operating system's own Open File dialog, shown by the server on the ComfyUI machine
+     * (POST comp_open_dialog; only a page on that machine may ask). Anywhere else - another machine's browser, a
+     * server without a desktop, an older server - the viewer's own file browser opens instead.
+     */
+    async _cpOpenFootage(rec, cb, cur) {
+        if (this._cpOpening) return;
+        this._cpOpening = true;
+        let data = null, status = 0;
+        try {
+            // Where the dialog starts: the folder of the file the Read has (a relative one is beside the comp).
+            let start = String(cur || "").replace(/[\\/][^\\/]*$/, "");
+            if (!/^([A-Za-z]:[\\/]|[\\/])/.test(start)) start = rec.path ? String(rec.path).replace(/[\\/][^\\/]*$/, "") : "";
+            const res = await api.fetchApi("/imageviewer/comp_open_dialog", {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ start }),
+            });
+            status = res.status;
+            data = await res.json().catch(() => null);
+        } catch (_) { /* no answer: the viewer's own browser */ } finally { this._cpOpening = false; }
+        if (status === 409) { notice("info", "The Open dialog is up already", "Look for it on the ComfyUI machine's screen."); return; }
+        if (status !== 200 || !data) { this._cpPickFootage(cb); return; }
+        if (data.cancelled || !data.path) return;
+        if (data.allowed === false) notice("warn", "The viewer may not read that folder", "Add it under Settings \u203a ComfyUI Image Viewer \u203a Folders, then the Read shows its picture.");
+        cb(asSequencePattern(data.path, SEQ_FRAME.test(data.name || data.path)));
+    },
+
+    /** Files dropped from the desktop: copied into ComfyUI's input (timeline_upload: media only, never written over). */
+    async _cpUploadFootage(files) {
+        const out = [];
+        let failed = 0;
+        for (const f of files) {
+            try { const up = await uploadPicture(f); if (up && up.path) out.push(up.path); else failed++; } catch (_) { failed++; }
+        }
+        if (failed) notice("warn", "Some files were not taken", `${failed} of ${files.length}: only pictures, films and sound can be dropped.`);
+        return out;
     },
 
     _cpPickFootage(cb) {
