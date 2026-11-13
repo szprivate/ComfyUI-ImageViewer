@@ -305,12 +305,19 @@ export const PrevizChannelsMixin = {
             const t = shape(`${item.name}Shape`);
             const row = doc.createElement("div");
             row.className = "cb-row";
-            row.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Opacity" }));
+            const opTag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Opacity" });
+            row.append(opTag);
             const op = doc.createElement("input");
             op.className = "cb-val";
             op.type = "number"; op.min = "0"; op.max = "1"; op.step = "0.05";
             op.addEventListener("keydown", (e) => e.stopPropagation());
             op.onchange = () => this.previzSetPlane(null, { opacity: Number(op.value) });
+            this._cbScrub(opTag, {
+                step: 0.01,
+                read: () => S.planeSettings(this.previzSelectedItem() || item).opacity,
+                write: (v) => this.previzSetPlane(null, { opacity: Math.round(Math.min(1, Math.max(0, v)) * 100) / 100 }, { live: true }),
+                end: () => { this.previzEndDrag(); this.previzChanged(); },
+            });
             row.append(op);
             t.append(row);
             ui.rows.set("opacity", { row, input: op, kind: "plane", field: "opacity" });
@@ -640,12 +647,12 @@ export const PrevizChannelsMixin = {
         const move = (ev) => {
             const dx = ev.clientX - x0;
             if (!scrubbing) {
-                if (Math.abs(dx) < 3 || prop === null || prop === "resolution") return;
+                if (Math.abs(dx) < 3 || prop === null) return;
                 scrubbing = true;
                 // The dragged channel and every other selected one scrub together.
                 const sel = this._cbSel && this._cbSel.has(id) ? [...this._cbSel] : [id];
                 channels = sel.map((ch) => this._cbUI && this._cbUI.rows.get(ch))
-                    .filter((r) => r && r.kind === "number" && r.prop !== "resolution");
+                    .filter((r) => r && r.kind === "number");
                 from = channels.map((r) => new Map(this._cbItems().map((it) => [it.id, this._cbValue(it, r.prop, r.comp)])));
             }
             const scale = ev.shiftKey ? 10 : (ev.ctrlKey || ev.metaKey) ? 0.1 : 1;
@@ -669,6 +676,43 @@ export const PrevizChannelsMixin = {
         tag.addEventListener("pointermove", move);
         tag.addEventListener("pointerup", up);
         tag.addEventListener("pointercancel", up);
+    },
+
+    /**
+     * The name of a row that is not a channel (a light's, a world's or an image plane's
+     * settings) as a slider: dragged left / right it changes the number (Shift ×10,
+     * Ctrl ×0.1), one undo step for the whole drag. `read()` is the number at the
+     * press, `write(v)` sets it live, `end()` closes the drag.
+     */
+    _cbScrub(tag, { step, read, write, end }) {
+        tag.classList.add("cb-scrub");
+        tag.title = "Drag left/right to change (Shift ×10, Ctrl ×0.1)";
+        tag.addEventListener("pointerdown", (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            const x0 = e.clientX;
+            let from = null;
+            try { tag.setPointerCapture(e.pointerId); } catch (_) { /* a synthetic event has no pointer */ }
+            const move = (ev) => {
+                const dx = ev.clientX - x0;
+                if (from === null) {
+                    if (Math.abs(dx) < 3) return;
+                    from = read();
+                    if (from === null || !Number.isFinite(from)) { from = null; return; }
+                }
+                const scale = ev.shiftKey ? 10 : (ev.ctrlKey || ev.metaKey) ? 0.1 : 1;
+                write(from + dx * step * scale);
+            };
+            const up = () => {
+                tag.removeEventListener("pointermove", move);
+                tag.removeEventListener("pointerup", up);
+                tag.removeEventListener("pointercancel", up);
+                if (from !== null) end();
+            };
+            tag.addEventListener("pointermove", move);
+            tag.addEventListener("pointerup", up);
+            tag.addEventListener("pointercancel", up);
+        });
     },
 
     /** Maya's channel selection: click, Ctrl toggles, Shift extends a run. */
