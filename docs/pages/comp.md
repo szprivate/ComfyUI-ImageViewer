@@ -61,6 +61,8 @@ A layer's frames are the Merge's `in` and `out` in the file (`out` is the first 
 | Time | Retime, Vectors (optical flow) |
 | Channels | Shuffle, AddChannels, Remove |
 
+Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
+
 Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
 
 ## Colour

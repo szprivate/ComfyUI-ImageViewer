@@ -125,6 +125,17 @@ class NukeScript(unittest.TestCase):
         self.assertIn("Glow1", plan2["placeholder"])
         self.assertIn("Baked", N.readme(plan, "a.nk"))
 
+    def test_a_masked_node_or_a_mix_is_baked(self):
+        c = comp([{"id": "C", "type": "constant", "inputs": []},
+                  {"id": "M", "type": "constant", "inputs": []},
+                  {"id": "Blur1", "type": "blur", "inputs": ["C", "M"], "size": 2},
+                  {"id": "Blur2", "type": "blur", "inputs": ["Blur1", None], "size": 2, "mix": 0.5},
+                  {"id": "Blur3", "type": "blur", "inputs": ["Blur2", None], "size": 2},
+                  {"id": "Output1", "type": "output", "inputs": ["Blur3"]}])
+        _, plan = N.build(c, bake_dir="/b")
+        self.assertEqual(sorted(b["id"] for b in plan["bake"]), ["Blur1", "Blur2"])
+        self.assertIn("Blur3", plan["native"])
+
     def test_no_comp_node_type_breaks_the_writer(self):
         nodes = [{"id": f"N{i}", "type": t, "inputs": []} for i, t in enumerate(N.M.NODE_TYPES) if t != "output"]
         nodes.append({"id": "Output1", "type": "output", "inputs": [nodes[0]["id"]]})

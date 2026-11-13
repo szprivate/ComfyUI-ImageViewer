@@ -74,6 +74,28 @@ def channel_cases(sources):
     return c
 
 
+def mask_cases(sources):
+    """Every MASKABLE node's mask input and mix: a channel of the mask picture, inverted, an extra channel,
+    a smaller mask (laid bottom left), a keyed mix."""
+    c = []
+    N = node
+    c.append(({"comp": comp([read(1), read(2), N("grade", 1, ["Read1", "Read2"], gain=2.5, mix=0.7), out("grade1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("blur", 1, ["Read1", "Read2"], size=3, mask_channel="g", mask_invert="on"),
+                             out("blur1")])}, sources))
+    c.append(({"comp": comp([read(1), N("blur", 1, ["Read1", None], size=2, mix=0.35), out("blur1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
+                             N("glow", 1, ["Read1", "lumakeyer1"], mask_channel="m.a", mix=0.8), out("glow1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=12, height=9, resize="none"),
+                             N("erode", 1, ["Read1", "reformat1"], size=1.5), out("erode1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read1"], channels="z.a", value=0.5),
+                             N("shuffle", 1, ["addchannels1", "Read2"], r="b", b="r", mask_channel="r"), out("shuffle1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("copy", 1, ["Read1", "Read2", "Read2"], mask_channel="b"), out("copy1")])}, sources))
+    c.append(({"comp": comp([read(1), read(2), N("colorcorrect", 1, ["Read1", "Read2"], master_saturation=150, mix=0.6), out("colorcorrect1")])}, sources))
+    c.append(({"comp": comp([read(1), N("unpremult", 1, ["Read1", None], mix=0.5,
+                             tracks={"mix": [{"f": 0, "v": 0}, {"f": 9, "v": 1}]}), out("unpremult1")]), "frame": 4}, sources))
+    return c
+
+
 def cases():
     s1, s2, s3 = src(1), src(2), src(3, 11, 7)
     sources = {"Read1": s1, "Read2": s2}
@@ -261,6 +283,7 @@ def new_node_cases(sources):
     for op in ("add", "multiply", "power", "invert", "clamp", "min", "max", "abs", "threshold", "set"):
         c.append(one(node("channelmath", 1, ["Read1"], operation=op, value=0.4, channels="rgba" if op == "clamp" else "rgb", mix=0.8)))
     c.extend(channel_cases(sources))
+    c.extend(mask_cases(sources))
     return c
 
 
