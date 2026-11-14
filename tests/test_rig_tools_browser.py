@@ -829,6 +829,41 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertTrue(done, f"no answer to {aid}")
         return done[-1]
 
+    def test_a_turntable_follows_a_driving_car_unasked_and_scene_set_makes_a_sky(self):
+        """A turntable round a subject that moves follows it even when follow is not given (a turn about the middle of
+        a drive once left the car out of frame most of the time); follow false still turns about one place.
+        scene_set environment makes the world's sky (a big sphere as a dome does not show from inside)."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._ask(pg, "s1", "add_shape", {"type": "box", "name": "Car", "scale": [1.8, 1.4, 4.6]})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, -12], "ease": "linear"}, {"frame": 48, "value": [0, 0, 12], "ease": "linear"}]})
+            auto = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "distance": 5, "height": 1.5, "name": "Orbit"})
+            still = self._ask(pg, "t2", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": False, "name": "Fixed"})
+            env = self._ask(pg, "e1", "scene_set", {"environment": {"sky": {"top": "#3a6fb0", "horizon": "#f0c89a"},
+                                                                    "sun": {"elevation": 50}}})
+            env2 = self._ask(pg, "e2", "scene_set", {"environment": {"fog": {"density": 0.001}}})
+            got = pg.evaluate("""() => { const scene = window.__panel.previzScene();
+                const keys = (n) => (scene.items.find((i) => i.name === n).tracks.position || []).length;
+                const envs = scene.items.filter((i) => i.kind === 'environment');
+                return { orbit: keys('Orbit'), fixed: keys('Fixed'), envs: envs.length,
+                         top: envs[0] && envs[0].sky.top, sun: envs[0] && envs[0].sun.elevation, fog: envs[0] && envs[0].fog.density }; }""")
+        finally:
+            pg.close()
+        self.assertEqual(auto["state"], "done", auto)
+        self.assertTrue(auto["result"]["ranges"][0]["follow"], auto)
+        self.assertGreater(got["orbit"], 5, "the pivot is keyed along the drive")
+        self.assertFalse(still["result"]["ranges"][0]["follow"])
+        self.assertEqual(got["fixed"], 1)
+        self.assertEqual(env["state"], "done", env)
+        self.assertEqual(got["envs"], 1, "a second scene_set changes the one environment")
+        self.assertEqual(got["top"], "#3a6fb0")
+        self.assertEqual(got["sun"], 50)
+        self.assertEqual(got["fog"], 0.001)
+        self.assertEqual(env2["result"]["environment"]["sky"]["top"], "#3a6fb0", "merged, not replaced")
+        self.assertEqual(self.errors, [])
+
     def test_the_agent_builds_a_stand_in_car_and_turns_round_it_while_it_drives(self):
         """add_shape: a group with boxes and wheels under it; turntable follow: the camera keeps turning about the
         car while the car drives, at one car's distance."""

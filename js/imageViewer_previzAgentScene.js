@@ -12,6 +12,7 @@
 // Items are named by id or by name (case ignored).
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
+import * as W from "./imageViewer_worldData.js";
 import * as R from "./imageViewer_rigData.js";
 import * as Q from "./imageViewer_clipSeqData.js";
 import * as L from "./imageViewer_sceneLayers.js";
@@ -146,11 +147,29 @@ export const PrevizAgentSceneMixin = {
         this.previzSnapshot("shot settings");
         if (a.length !== undefined) { scene.length = Math.max(1, Math.round(Number(a.length) || 1)); scene.lengthSet = true; }
         if (a.fps !== undefined && Number(a.fps) > 0) scene.fps = Number(a.fps);
-        this.previzChanged();
+        let env = null;
+        if (a.environment && typeof a.environment === "object") {
+            // The world's sky, sun, fog, ambient and look (the Environment item's settings, merged in): a sky dome made
+            // of a big sphere does not show - its faces look outwards - so the black past a canyon's end stayed black.
+            env = scene.items.find((i) => i.kind === "environment");
+            if (!env) {
+                env = W.makeEnvironmentItem(this._worldId(scene, "env"));
+                scene.items.push(env);
+            }
+            const cur = W.environmentSettings(env);
+            for (const part of ["sky", "sun", "fog", "ambient", "render"]) {
+                const p = a.environment[part];
+                if (p && typeof p === "object") cur[part] = { ...cur[part], ...p };
+            }
+            Object.assign(env, W.environmentSettings(cur));
+        }
+        this.previzChanged(env ? { reload: true } : undefined);
         if (this.applyTimelineBounds) this.applyTimelineBounds();
         if (this.previzSyncTimelineFields) this.previzSyncTimelineFields();
         if (a.frame !== undefined) this.setFrame(Math.round(Number(a.frame) || 0));
-        return { length: scene.length, fps: scene.fps };
+        const out = { length: scene.length, fps: scene.fps };
+        if (env) out.environment = W.environmentSettings(env);
+        return out;
     },
 
     /** True only when the server says the file is not there (a 404, or "gone"); any other answer lets it through. */
@@ -433,7 +452,17 @@ export const PrevizAgentSceneMixin = {
             const opts = { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
                 height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh };
             let k;
-            if (a.follow) {
+            // A subject that moves over the range is followed unless follow is false: a turn about the middle of
+            // a drive left the car out of frame for most of it (the agent had not asked for follow).
+            let follow = a.follow === true || a.follow === "true" || a.follow === 1;
+            if (a.follow === undefined || a.follow === null) {
+                const ends = [rg.from, Math.round((rg.from + rg.to) / 2), rg.to].map((f) => this._asaSubjectBox(subjectIds, [f]));
+                if (ends.every(Boolean)) {
+                    const moved = Math.max(...ends.slice(1).map((b) => Math.hypot(...b.center.map((v, i) => v - ends[0].center[i]))));
+                    follow = moved > Math.max(0.05, 0.1 * ends[0].radius);
+                }
+            }
+            if (follow) {
                 // A moving subject (a car driving): measured on every few frames, the pivot keyed on each.
                 const step = Math.max(1, Math.round(Number(a.follow_step) || 4));
                 const frames = [];
