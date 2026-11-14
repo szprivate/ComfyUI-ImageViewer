@@ -109,6 +109,24 @@ export function turntableRange(subject, from, to, opts = {}) {
 }
 
 /**
+ * A turntable that FOLLOWS a moving subject: `spheres` = [{f, center, radius}] measured frame by
+ * frame (each frame's own box, not the whole path's). The distance fits the largest one; the pivot
+ * is keyed on every measured frame at that frame's centre (linear between), so the camera keeps
+ * turning about the subject while it moves.
+ */
+export function followTurntable(spheres, from, to, opts = {}) {
+    const list = (spheres || []).filter((s) => s && Array.isArray(s.center)).sort((a, b) => a.f - b.f);
+    if (!list.length) return null;
+    const radius = Math.max(...list.map((s) => num(s.radius, 0.05)));
+    const k = turntableRange({ center: list[0].center, radius }, from, to, opts);
+    const lh = num(opts.look_height, 0);
+    k.pivot.position = list.map((s, i) => ({ f: s.f, v: [s.center[0], s.center[1] + lh, s.center[2]].map(r4),
+        ease: i === list.length - 1 ? "hold" : "linear" }));
+    k.follow = true;
+    return k;
+}
+
+/**
  * The pivot's turn from `a` (at frame `from`) to `b` (at `to`) at an even speed.
  * A rotation key runs to the next the short way round (scene3d's rule), so the
  * keys are never more than 90 degrees apart: on frames where the straight line

@@ -828,6 +828,56 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertTrue(done, f"no answer to {aid}")
         return done[-1]
 
+    def test_the_agent_builds_a_stand_in_car_and_turns_round_it_while_it_drives(self):
+        """add_shape: a group with boxes and wheels under it; turntable follow: the camera keeps turning about the
+        car while the car drives, at one car's distance."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            car = self._ask(pg, "s1", "add_shape", {"type": "group", "name": "Car"})
+            body = self._ask(pg, "s2", "add_shape", {"type": "box", "name": "Body", "parent": "Car", "position": [0, 0.3, 0],
+                                                    "scale": [1.8, 0.7, 4.6], "color": "#cc1111"})
+            wheel = self._ask(pg, "s3", "add_shape", {"type": "cylinder", "name": "Wheel FL", "parent": "Car",
+                                                     "position": [0.9, 0, 1.4], "rotation": [0, 0, 90], "scale": [0.66, 0.25, 0.66]})
+            bad = self._ask(pg, "s4", "add_shape", {"type": "teapot"})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, 40], "ease": "linear"}, {"frame": 48, "value": [0, 0, -8], "ease": "linear"}]})
+            tt = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": True, "name": "Orbit"})
+            got = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene(), T = view.libs.THREE;
+                const cam = scene.items.find((i) => i.name === 'Orbit cam'), car = scene.items.find((i) => i.name === 'Car');
+                const body = scene.items.find((i) => i.name === 'Body');
+                const out = { color: body.color, parent: scene.items.find((i) => i.id === body.parent).name, frames: [] };
+                for (const f of [0, 12, 24, 36, 48]) { view.applyFrame(f);
+                    const e = view._entries.get(cam.id), c = view._entries.get(car.id);
+                    e.root.updateMatrixWorld(true); c.root.updateMatrixWorld(true);
+                    out.frames.push([f, e.camera.getWorldPosition(new T.Vector3()).toArray(), c.root.getWorldPosition(new T.Vector3()).toArray(),
+                        new T.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new T.Quaternion())).toArray()]); }
+                view.applyFrame(0); return out; }""")
+        finally:
+            pg.close()
+        self.assertEqual(car["state"], "done", car)
+        self.assertEqual(body["result"]["parent"], "Car")
+        self.assertEqual(wheel["state"], "done", wheel)
+        self.assertEqual(bad["state"], "error")
+        self.assertIn("type is one of", bad["error"])
+        self.assertEqual(got["color"], "#cc1111")
+        self.assertEqual(got["parent"], "Car")
+        self.assertEqual(tt["state"], "done", tt)
+        self.assertTrue(tt["result"]["ranges"][0]["follow"])
+        dist = tt["result"]["ranges"][0]["distance"]
+        self.assertLess(dist, 20, "one car's distance, not the whole road's")
+        angles = []
+        for f, cam, car_at, look in got["frames"]:
+            flat = math.hypot(cam[0] - car_at[0], cam[2] - car_at[2])
+            self.assertAlmostEqual(flat, dist, delta=0.6, msg=f"frame {f}: the camera stays round the car")
+            to = [car_at[0] - cam[0], 0, car_at[2] - cam[2]]
+            n = math.hypot(*to)
+            self.assertGreater((look[0] * to[0] + look[2] * to[2]) / n, 0.95, f"frame {f} looks at the car")
+            angles.append(math.degrees(math.atan2(cam[0] - car_at[0], cam[2] - car_at[2])))
+        turned = sum(((b - a + 180) % 360) - 180 for a, b in zip(angles, angles[1:]))
+        self.assertAlmostEqual(abs(turned), 360 * 48 / 49, delta=8, msg="a full turn over the range")
+        self.assertEqual(self.errors, [])
+
     def test_set_camera_moves_and_aims_the_camera(self):
         """set_camera takes position / look_at / rotation as add_camera does (it once answered ok and moved nothing);
         a camera whose position animates gets a key at the frame instead."""
