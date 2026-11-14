@@ -132,3 +132,15 @@ test("a following turntable keys the pivot on the moving subject and fits one fr
     assert.deepEqual(k.pivot.rotation, still.pivot.rotation);
     assert.equal(A.followTurntable([], 0, 10, {}), null);
 });
+
+test("add_model's path: absolute stays a path, relative is a ComfyUI file of output (or the folder it names)", () => {
+    assert.deepEqual(A.modelSource("W:\\agent\\models\\car.glb"), { path: "W:\\agent\\models\\car.glb" });
+    assert.deepEqual(A.modelSource("/mnt/out/car.glb"), { path: "/mnt/out/car.glb" });
+    assert.deepEqual(A.modelSource("output/agent/models/glc_x254_00001_.glb"),
+        { filename: "glc_x254_00001_.glb", subfolder: "agent/models", type: "output" });
+    assert.deepEqual(A.modelSource("input\\3d\\car.glb"), { filename: "car.glb", subfolder: "3d", type: "input" });
+    assert.deepEqual(A.modelSource("car.glb"), { filename: "car.glb", subfolder: "", type: "output" });
+    assert.deepEqual(A.modelSource("./agent/car.glb"), { filename: "car.glb", subfolder: "agent", type: "output" });
+    assert.equal(A.modelSource("../secret.glb"), null);
+    assert.equal(A.modelSource(""), null);
+});
