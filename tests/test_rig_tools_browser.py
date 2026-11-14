@@ -878,6 +878,38 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(abs(turned), 360 * 48 / 49, delta=8, msg="a full turn over the range")
         self.assertEqual(self.errors, [])
 
+    def test_the_agent_removes_hides_and_rekeys_without_a_stale_key_left(self):
+        """remove_item takes a group with what it holds; item_set hides an item; key_set replace clears the
+        channel's old keys between its first and last frame (a stray key once pulled a 360 orbit away)."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._ask(pg, "a1", "add_shape", {"type": "group", "name": "Proxy"})
+            self._ask(pg, "a2", "add_shape", {"type": "box", "name": "Proxy body", "parent": "Proxy"})
+            self._ask(pg, "a3", "add_shape", {"type": "box", "name": "Sign"})
+            gone = self._ask(pg, "r1", "remove_item", {"item": "Proxy"})
+            hid = self._ask(pg, "h1", "item_set", {"item": "Sign", "visible": False})
+            self._ask(pg, "c1", "add_camera", {"name": "Cam", "position": [0, 2, 10]})
+            self._ask(pg, "k1", "key_set", {"item": "Cam", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 2, 10]}, {"frame": 119, "value": [0, 6, -30]}]})
+            re = self._ask(pg, "k2", "key_set", {"item": "Cam", "prop": "position", "replace": True, "keys": [
+                {"frame": 0, "value": [0, 2, 10]}, {"frame": 60, "value": [10, 2, 0]}, {"frame": 120, "value": [0, 2, 10]}]})
+            got = pg.evaluate("""() => { const scene = window.__panel.previzScene();
+                const cam = scene.items.find((i) => i.name === 'Cam'), sign = scene.items.find((i) => i.name === 'Sign');
+                return { names: scene.items.map((i) => i.name), sign: sign.visible,
+                         frames: cam.tracks.position.map((k) => k.f) }; }""")
+        finally:
+            pg.close()
+        self.assertEqual(gone["state"], "done", gone)
+        self.assertEqual(sorted(gone["result"]["removed"]), ["Proxy", "Proxy body"])
+        self.assertNotIn("Proxy", got["names"])
+        self.assertNotIn("Proxy body", got["names"])
+        self.assertEqual(hid["result"]["visible"], False)
+        self.assertIs(got["sign"], False)
+        self.assertEqual(re["result"]["cleared"], 2)
+        self.assertEqual(got["frames"], [0, 60, 120])
+        self.assertEqual(self.errors, [])
+
     def test_set_camera_moves_and_aims_the_camera(self):
         """set_camera takes position / look_at / rotation as add_camera does (it once answered ok and moved nothing);
         a camera whose position animates gets a key at the frame instead."""
