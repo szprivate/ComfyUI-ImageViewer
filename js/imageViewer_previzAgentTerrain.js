@@ -11,6 +11,8 @@
 // erosion is the Terrain > Erode… box itself, so it runs on screen, then Apply.
 
 import * as S from "./imageViewer_scene3d.js";
+import * as Ag from "./imageViewer_agentSceneData.js";
+const modelSource = Ag.modelSource;
 import { SCATTER_TYPES, scatterSettings, terrainSettings } from "./imageViewer_worldData.js";
 import {
     SCULPT_TOOLS, decodeSculpt, encodeSculpt, sculptDab, sculptEmpty,
@@ -21,7 +23,7 @@ import { ERODE_DEFAULTS, MASK_KINDS, cleanErode } from "./imageViewer_terrainEro
 
 export const TERRAIN_AGENT_ACTIONS = [
     "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
-    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint",
+    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint", "ground",
 ];
 
 const TERRAIN_FIELDS = ["seed", "roughness", "size", "height", "segments", "rules"];
@@ -31,6 +33,57 @@ const SCATTER_ALIASES = { max_slope: "maxSlope" };
 
 const sleep = (win, ms) => new Promise((r) => (win || window).setTimeout(r, ms));
 const isNum = (v) => Number.isFinite(Number(v));
+
+// A layer's fields, and the other names an agent gives them (a texture sent as `texture` and
+// `scale` was dropped without a word, and the floor stayed a flat colour).
+const LAYER_FIELDS = ["name", "src", "color", "tile", "normal", "rough", "roughness", "normalScale", "baked"];
+const LAYER_ALIASES = {
+    texture: "src", image: "src", map: "src", albedo: "src", diffuse: "src", file: "src", path: "src",
+    scale: "tile", tiling: "tile", repeat: "tile", tile_size: "tile",
+    normal_map: "normal", roughness_map: "rough", rough_map: "rough", normal_scale: "normalScale", colour: "color",
+};
+
+/**
+ * The layers an agent gave, by place (0 ground, 1 rock, 2 cliff, 3 peak): a list in that order,
+ * where an entry may name its layer instead (`layer` or `name` matching). Field names through
+ * LAYER_ALIASES; any other key is refused, naming the ones there are.
+ */
+export function layersByPlace(given, names, fileSource = modelSource) {
+    const out = [];
+    given.forEach((g, i) => {
+        if (!g || typeof g !== "object") return;
+        const l = {};
+        let at = i;
+        for (const [k0, v] of Object.entries(g)) {
+            if (k0 === "layer") {
+                const j = typeof v === "number" ? v : names.indexOf(String(v).toLowerCase());
+                if (!(j >= 0 && j < names.length)) throw new Error(`no terrain layer ${v}: the layers are ${names.join(", ")}`);
+                at = j;
+                continue;
+            }
+            const k = LAYER_ALIASES[k0] || k0;
+            if (!LAYER_FIELDS.includes(k)) {
+                throw new Error(`a terrain layer has no "${k0}": its fields are ${LAYER_FIELDS.join(", ")} (src = the texture file, tile = metres one repeat covers)`);
+            }
+            // A file given as a path string (what an agent sends) is the {path} / ComfyUI-file object the
+            // terrain reads; a string was dropped as no file.
+            if (["src", "normal", "rough"].includes(k) && typeof v === "string") {
+                const f = v.trim() ? fileSource(v.trim()) : null;
+                if (v.trim() && !f) throw new Error(`cannot read ${v}: give the texture's absolute path, or one inside ComfyUI's output or input folder`);
+                l[k] = f;
+                continue;
+            }
+            l[k] = v;
+        }
+        if (g.layer === undefined && typeof g.name === "string" && names.includes(g.name.toLowerCase()) && !given.some((o, j) => j !== i && o && o.layer !== undefined)) {
+            at = names.indexOf(g.name.toLowerCase());
+            delete l.name;
+        }
+        if (at >= names.length) throw new Error(`a terrain has ${names.length} layers (${names.join(", ")})`);
+        out[at] = { ...(out[at] || {}), ...l };
+    });
+    return out;
+}
 
 export const PrevizAgentTerrainMixin = {
 
@@ -122,8 +175,9 @@ export const PrevizAgentTerrainMixin = {
         for (const k of TERRAIN_FIELDS) if (a[k] !== undefined) t[k] = a[k];
         if (Array.isArray(a.layers)) {
             const cur = terrainSettings(item).layers;
+            const given = layersByPlace(a.layers, cur.map((l) => l.name));
             t.layers = cur.map((l, i) => ({ ...((item.terrain && item.terrain.layers && item.terrain.layers[i]) || {}),
-                                           ...(a.layers[i] && typeof a.layers[i] === "object" ? a.layers[i] : {}) }));
+                                           ...(given[i] || {}) }));
         }
         item.terrain = t;
         for (const k of ["position", "rotation", "scale"]) if (Array.isArray(a[k]) && a[k].length === 3 && a[k].every(isNum)) item[k] = a[k].map(Number);
@@ -252,6 +306,56 @@ export const PrevizAgentTerrainMixin = {
                 return { x, z, y: y == null ? null : Math.round(y * 1000) / 1000, inside: y != null };
             }),
         };
+    },
+
+    /**
+     * Stand an item on the ground: its bottom on the terrain under its middle (the only terrain, or
+     * `terrain`; with none, y = 0). Static, it is moved; animated, every position key is (and with
+     * `step`, a key is put every `step` frames first, so a drive follows the floor between keys).
+     * Answers the frames and the heights. A top-level item, or one whose parents only move it.
+     */
+    async _asa_ground(scene, a) {
+        const it = this._asaItem(scene, a.item);
+        const terrains = scene.items.filter((i) => i.kind === "terrain");
+        const ter = a.terrain ? this._asaTerrain(scene, a.terrain) : terrains.length === 1 ? terrains[0] : null;
+        if (!a.terrain && terrains.length > 1) throw new Error("name the terrain to stand it on (there is more than one)");
+        const built = ter ? await this._asaBuilt(ter) : null;
+        if (!(await this._asaMeasure([it.id], [0]))) throw new Error(`${it.name} has nothing to measure (not loaded yet?)`);
+        const groundAt = (x, z) => {
+            if (!built) return 0;
+            const y = built.view._terrainHeightAt(built.entry, x, z);
+            if (y == null) throw new Error(`${it.name} is off ${ter.name} at x ${Math.round(x * 100) / 100}, z ${Math.round(z * 100) / 100}`);
+            return y;
+        };
+        this.previzSnapshot(`ground ${it.name}`);
+        const keyed = (S.baseTrack(it, "position") || []).length > 0;
+        const out = [];
+        const place = (f) => {
+            const box = this._asaSubjectBox([it.id], [f]);
+            const pos = S.currentValue(scene, it, "position", f);
+            const g = groundAt(box.center[0], box.center[2]);
+            const y = Ag.groundedY(pos[1], box.min[1], g);
+            out.push({ frame: f, y, ground: Math.round(g * 1000) / 1000 });
+            return [pos[0], y, pos[2]];
+        };
+        if (!keyed) {
+            it.position = place(Math.round(this.currentFrame || 0));
+        } else {
+            const step = Math.round(Number(a.step) || 0);
+            const keys = S.baseTrack(it, "position").slice();
+            const frames = new Set(keys.map((k) => k.f));
+            if (step > 0) {
+                for (let f = keys[0].f; f < keys[keys.length - 1].f; f += step) frames.add(f);
+            }
+            // Measured on the curve as it stands, then keyed: a key put first would move what is measured after it.
+            const want = [...frames].sort((x, y) => x - y).map((f) => [f, place(f)]);
+            for (const [f, v] of want) {
+                const k = keys.find((x) => x.f === f);
+                S.setKeyframe(it, "position", f, v, k ? k.ease : "linear");
+            }
+        }
+        this.previzChanged();
+        return { item: it.name, terrain: ter ? ter.name : null, keyed, frames: out.length, first: out[0], last: out[out.length - 1] };
     },
 
     /**

@@ -32,7 +32,7 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "export_usd",
     // The Terrain menu's (imageViewer_previzAgentTerrain.js, TERRAIN_AGENT_ACTIONS).
     "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
-    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint",
+    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint", "ground",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",
@@ -225,6 +225,8 @@ export const PrevizAgentSceneMixin = {
         const out = { model: item ? item.name : null, id: item ? item.id : null };
         if (item) out.scale = item.scale || [1, 1, 1];
         if (size !== null) out.size = size;
+        // ground: stood on the terrain (or y = 0) once it is sized, so a car's wheels are on the floor.
+        if (item && a.ground) out.ground = await this._asa_ground(scene, { item: item.id, terrain: a.terrain });
         return out;
     },
 
@@ -401,6 +403,13 @@ export const PrevizAgentSceneMixin = {
         }
     },
 
+    /** turntable's lag in frames: `lag` (frames) or `lag_seconds` at the scene's fps. */
+    _asaLagFrames(a) {
+        if (Number(a.lag) > 0) return Math.round(Number(a.lag));
+        if (Number(a.lag_seconds) > 0) return Math.round(Number(a.lag_seconds) * (Number(this.previzScene().fps) || 24));
+        return 0;
+    },
+
     /**
      * A turntable camera: one pivot + camera rig ("Turntable" / "Turntable cam"),
      * keyed with a full turn over each range - every clip of the sequencer
@@ -450,7 +459,8 @@ export const PrevizAgentSceneMixin = {
         const keyBase = (fn) => (this.previzWithLayer ? this.previzWithLayer(null, fn) : fn());
         for (const rg of ranges) {
             const opts = { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
-                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh };
+                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh,
+                lag: this._asaLagFrames(a) };
             let k;
             // A subject that moves over the range is followed unless follow is false: a turn about the middle of
             // a drive left the car out of frame for most of it (the agent had not asked for follow).
@@ -462,6 +472,7 @@ export const PrevizAgentSceneMixin = {
                     follow = moved > Math.max(0.05, 0.1 * ends[0].radius);
                 }
             }
+            if (opts.lag && a.follow !== false) follow = true;
             if (follow) {
                 // A moving subject (a car driving): measured on every few frames, the pivot keyed on each.
                 const step = Math.max(1, Math.round(Number(a.follow_step) || 4));
@@ -483,8 +494,19 @@ export const PrevizAgentSceneMixin = {
                         S.setTrack(it, prop, A.mergeKeys(list, keys));
                     }
                 }
+                // lag: the camera looks at the subject through its look-at target. A camera that already
+                // looks at its target (an earlier lagging range) gets the pivot as its target on this one,
+                // which is where it looks without one.
+                const aim = k.aim || (cam.aim && cam.aim.on ? k.pivot.position : null);
+                if (aim) {
+                    cam.aim = { ...(cam.aim || {}), on: true, target: aim[0].v.slice() };
+                    ["aim:x", "aim:y", "aim:z"].forEach((prop, j) => {
+                        const list = (S.baseTrack(cam, prop) || []).filter((x) => x.f < rg.from || x.f > rg.to);
+                        S.setTrack(cam, prop, A.mergeKeys(list, aim.map((x) => ({ f: x.f, v: x.v[j], ease: x.ease }))));
+                    });
+                }
             });
-            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center, follow: !!k.follow });
+            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center, follow: !!k.follow, lag: opts.lag || 0 });
         }
         if (a.active !== false) scene.activeCamera = cam.id;
         await this.previzChanged({ reload: true });

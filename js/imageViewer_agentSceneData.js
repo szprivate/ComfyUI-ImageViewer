@@ -120,10 +120,38 @@ export function followTurntable(spheres, from, to, opts = {}) {
     const radius = Math.max(...list.map((s) => num(s.radius, 0.05)));
     const k = turntableRange({ center: list[0].center, radius }, from, to, opts);
     const lh = num(opts.look_height, 0);
-    k.pivot.position = list.map((s, i) => ({ f: s.f, v: [s.center[0], s.center[1] + lh, s.center[2]].map(r4),
-        ease: i === list.length - 1 ? "hold" : "linear" }));
+    const up = (c) => [c[0], c[1] + lh, c[2]].map(r4);
+    const lag = Math.max(0, num(opts.lag, 0));
+    const ease = (i) => (i === list.length - 1 ? "hold" : "linear");
+    // lag: the orbit's centre runs `lag` frames behind the subject (held at its start until then), so
+    // the subject moves through the picture - a car drives past the camera instead of standing in the
+    // middle of it while the ground streams by. The camera keeps it in view by looking at it (its
+    // look-at target keyed on the subject's own centre).
+    k.pivot.position = list.map((s, i) => ({ f: s.f, v: up(lag ? centreAt(list, s.f - lag) : s.center), ease: ease(i) }));
+    if (lag) k.aim = list.map((s, i) => ({ f: s.f, v: up(s.center), ease: ease(i) }));
     k.follow = true;
     return k;
+}
+
+/** The centre of measured spheres at frame f, straight between them, held before the first and after the last. */
+export function centreAt(list, f) {
+    if (f <= list[0].f) return list[0].center;
+    for (let i = 1; i < list.length; i++) {
+        const a = list[i - 1], b = list[i];
+        if (f <= b.f) {
+            const t = b.f > a.f ? (f - a.f) / (b.f - a.f) : 1;
+            return a.center.map((v, j) => v + (b.center[j] - v) * t);
+        }
+    }
+    return list[list.length - 1].center;
+}
+
+/**
+ * The y an item's origin needs for its bottom to rest on `ground` (the ground's height under it):
+ * its origin's y less its box's bottom, kept, on top of the ground.
+ */
+export function groundedY(originY, bottomY, ground) {
+    return r4(num(ground, 0) + (num(originY, 0) - num(bottomY, 0)));
 }
 
 /**
