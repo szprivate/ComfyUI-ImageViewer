@@ -562,11 +562,38 @@ export const PrevizRigToolsMixin = {
         return (sel && models.find((m) => m.id === sel)) || (models.length === 1 ? models[0] : null);
     },
 
+    /** Bring the 3D space up for an agent's request when this page is the one in front: the 3D tab
+     *  that is open, else a new empty scene (spaceOpen("3d")). True once its 3D view is up. */
+    async _previzAgentBring3d() {
+        const doc = (this._viewerWindow && this._viewerWindow().document) || this.ownerDocument || document;
+        if (!doc || doc.visibilityState === "hidden" || !this.spaceOpen) return false;
+        if (this._previzAgentBringing) return this._previzAgentBringing;
+        this._previzAgentBringing = (async () => {
+            try {
+                await this.spaceOpen("3d");
+                for (let i = 0; i < 100 && !(this._modelMode && this.isPrevizTab && this.isPrevizTab()); i++) {
+                    await new Promise((r) => setTimeout(r, 100));
+                }
+                return !!(this._modelMode && this.isPrevizTab && this.isPrevizTab());
+            } catch (e) {
+                console.warn("imageViewer: the 3D space did not come up for the agent", e);
+                return false;
+            } finally {
+                setTimeout(() => { this._previzAgentBringing = null; }, 0);
+            }
+        })();
+        return this._previzAgentBringing;
+    },
+
     /** A request from rig_routes' /imageviewer/rig/agent: { id, action, args }. Reported to /rig/agent_done. */
     async previzRigAgentRun(req) {
         if (!req || !req.id) return;
         // One page answers: the one whose 3D scene is up (every open page gets the message).
-        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) return;
+        // A page on another tab that is in front brings its 3D space up first (the open 3D tab,
+        // else a new empty scene), so the agent never needs the user to switch tabs by hand.
+        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) {
+            if (!(await this._previzAgentBring3d())) return;
+        }
         const report = (body) => fetch(api.apiURL("/imageviewer/rig/agent_done"), {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: req.id, ...body }),
         }).catch(() => {});
