@@ -118,7 +118,7 @@ class AgentTerrainTests(unittest.TestCase):
         try:
             P = "window.__panel"
             # A texture under the names an agent gives it is the layer's src / tile; an unknown key is refused.
-            self._ask(pg, "terrain_add", name="Canyon", size=[80, 200], height=10, seed=3,
+            self._ask(pg, "terrain_add", name="Canyon", size=[80, 200], height=24, seed=3, roughness=0.6,
                       layers=[{"layer": "ground", "texture": "output/tex/sand.png", "scale": 4}])
             lay = pg.evaluate(f"""() => {P}.previzScene().items.find((i) => i.kind === 'terrain').terrain.layers[0]""")
             self.assertEqual(lay["src"], {"filename": "sand.png", "subfolder": "tex", "type": "output"})
@@ -134,12 +134,31 @@ class AgentTerrainTests(unittest.TestCase):
             g = self._ask(pg, "ground", item="Car", step=10)
             self.assertTrue(g["keyed"])
             self.assertEqual(g["frames"], 13)
-            ground = self._ask(pg, "terrain_height", points=[[0, -35], [0, 0], [0, 34]])["points"]
-            bottoms = pg.evaluate(f"""() => {{ const P = {P};
-                const it = P.previzScene().items.find((i) => i.name === 'Car');
-                return [0, 60, 120].map((f) => P._asaSubjectBox([it.id], [f]).min[1]); }}""")
-            for b, gp in zip(bottoms, ground):
-                self.assertAlmostEqual(b, gp["y"], delta=0.05)
+            self.assertTrue(g["tilt"])
+            # On hills: the box's whole underside (its four bottom corners and a grid between) sits on the
+            # ground at every frame - none below it, the lowest point touching - and it leans with the slope.
+            clear = pg.evaluate("""() => { const P = window.__panel, v = P._modelView(), { THREE } = v.libs;
+                const sc = P.previzScene(), body = sc.items.find((i) => i.name === 'Body');
+                const ter = sc.items.find((i) => i.kind === 'terrain'), te = v._entries.get(ter.id);
+                const out = [];
+                for (let f = 0; f <= 120; f += 5) {
+                    v.applyFrame(f);
+                    let mesh = null; v._entries.get(body.id).root.traverse((o) => { if (!mesh && o.isMesh) mesh = o; });
+                    mesh.updateMatrixWorld(true); mesh.geometry.computeBoundingBox();
+                    const b = mesh.geometry.boundingBox; let lo = Infinity, hi = -Infinity;
+                    for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
+                        const p = new THREE.Vector3(b.min.x + (b.max.x - b.min.x) * i / 4, b.min.y, b.min.z + (b.max.z - b.min.z) * j / 4)
+                            .applyMatrix4(mesh.matrixWorld);
+                        const d = p.y - v._terrainHeightAt(te, p.x, p.z); lo = Math.min(lo, d); hi = Math.max(hi, d);
+                    }
+                    const car = sc.items.find((i) => i.name === 'Car');
+                    out.push({ f, lo, hi, rx: P.previzScene() && Math.abs(v._entries.get(car.id).root.getWorldQuaternion(new THREE.Quaternion()).x) });
+                }
+                return out; }""")
+            for c in clear:
+                self.assertGreater(c["lo"], -0.03, c)      # nothing in the ground (between keys too)
+            self.assertLess(min(c["lo"] for c in clear), 0.1)
+            self.assertGreater(max(c["rx"] for c in clear), 0.01)   # it pitched with the hills
             # Trailing 24 frames: the orbit's centre is where the car was a second before, the camera aims at the car.
             tt = self._ask(pg, "turntable", target="Car", **{"from": 0}, to=120, degrees=60, lag=24, distance=8)
             self.assertEqual(tt["ranges"][0]["lag"], 24)
