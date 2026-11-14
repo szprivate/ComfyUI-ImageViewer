@@ -21,7 +21,7 @@ import { canvasContext } from "./imageViewer_exportUI.js";
 
 /** Every action this mixin answers (none needs a character). */
 export const SCENE_AGENT_ACTIONS = new Set([
-    "scene_info", "scene_set", "add_model", "add_camera", "set_camera", "turntable", "render", "playblast",
+    "scene_info", "scene_set", "add_model", "add_shape", "add_camera", "set_camera", "turntable", "render", "playblast",
     "key_set", "key_delete", "key_list",
     "layer_set", "layer_remove", "layer_merge_down",
     "display_layer_add", "display_layer_set", "display_layer_list",
@@ -169,6 +169,36 @@ export const PrevizAgentSceneMixin = {
         return { model: item ? item.name : null, id: item ? item.id : null };
     },
 
+    /**
+     * A blocking shape (box, sphere, plane, cylinder, cone, torus) or an empty group, as Create makes
+     * them: a solid stands on its base (translate y is where its bottom is), its scale is its size in
+     * metres, a cylinder's axis is Y (turn it 90 degrees about Z for a wheel). `parent` hangs it under
+     * an item (a group), its numbers then in the parent's space. Several shapes under one group and the
+     * group keyed is how a stand-in (a car, a prop) is made.
+     */
+    _asa_add_shape(scene, a) {
+        const type = String(a.type || a.shape || "box").toLowerCase();
+        const types = ["group", ...S.PRIMITIVES.map((p) => p.type)];
+        if (!types.includes(type)) throw new Error(`type is one of ${types.join(", ")}`);
+        const vec = (v, what) => {
+            if (!Array.isArray(v) || v.length !== 3 || v.some((x) => !Number.isFinite(Number(x)))) throw new Error(`${what} is [x, y, z] (Y up)`);
+            return v.map(Number);
+        };
+        this.previzSnapshot(`add ${type}`);
+        const item = type === "group" ? S.makeGroupItem(a.name || "Group") : S.makePrimitiveItem(type, a.name);
+        item.name = S.uniqueName(scene, a.name || item.name);
+        for (const k of ["position", "rotation", "scale"]) if (a[k] !== undefined && a[k] !== null) item[k] = vec(a[k], k);
+        if (a.color !== undefined && type !== "group") {
+            const c = String(a.color).trim();
+            if (!/^#[0-9a-f]{6}$/i.test(c)) throw new Error("color is #rrggbb");
+            item.color = c.toLowerCase();
+        }
+        if (a.parent) item.parent = this._asaItem(scene, a.parent, "parent").id;
+        scene.items.push(item);
+        this.previzChanged({ reload: true });
+        return { item: item.name, id: item.id, type, parent: item.parent ? scene.items.find((i) => i.id === item.parent).name : null };
+    },
+
     // ── Cameras ───────────────────────────────────────────────────────────
 
     /** Rotation (degrees, XYZ) for a camera at `p` looking at `t` (Y up; a camera looks down -Z). */
@@ -305,10 +335,22 @@ export const PrevizAgentSceneMixin = {
         const out = [];
         const keyBase = (fn) => (this.previzWithLayer ? this.previzWithLayer(null, fn) : fn());
         for (const rg of ranges) {
-            const sub = this._asaSubjectBox(subjectIds, A.sampleFrames(rg.from, rg.to, 9));
-            if (!sub) throw new Error("the target has nothing to measure (not loaded yet?)");
-            const k = A.turntableRange(sub, rg.from, rg.to, { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
-                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh });
+            const opts = { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
+                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh };
+            let k;
+            if (a.follow) {
+                // A moving subject (a car driving): measured on every few frames, the pivot keyed on each.
+                const step = Math.max(1, Math.round(Number(a.follow_step) || 4));
+                const frames = [];
+                for (let f = rg.from; f < rg.to; f += step) frames.push(f);
+                frames.push(rg.to);
+                const spheres = frames.map((f) => ({ f, ...(this._asaSubjectBox(subjectIds, [f]) || {}) }));
+                k = A.followTurntable(spheres, rg.from, rg.to, opts);
+            } else {
+                const sub = this._asaSubjectBox(subjectIds, A.sampleFrames(rg.from, rg.to, 9));
+                k = sub ? A.turntableRange(sub, rg.from, rg.to, opts) : null;
+            }
+            if (!k) throw new Error("the target has nothing to measure (not loaded yet?)");
             keyBase(() => {
                 for (const [it, set] of [[pivot, k.pivot], [cam, k.cam]]) {
                     for (const [prop, keys] of Object.entries(set)) {
@@ -318,7 +360,7 @@ export const PrevizAgentSceneMixin = {
                     }
                 }
             });
-            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center });
+            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center, follow: !!k.follow });
         }
         if (a.active !== false) scene.activeCamera = cam.id;
         await this.previzChanged({ reload: true });

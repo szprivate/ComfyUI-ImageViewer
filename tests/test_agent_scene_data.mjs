@@ -116,3 +116,19 @@ test("describeScene names cameras, models and clips, and counts controls", () =>
     assert.equal(d.clips.tracks[0].clips[1].name, "Hero walk");
     assert.deepEqual(d.anim_layers, [{ id: "L1", name: "Fix", mode: "additive", weight: 0.5, mute: false, solo: false, lock: false }]);
 });
+
+test("a following turntable keys the pivot on the moving subject and fits one frame's size", () => {
+    // A car 4.6 m long driving 55 m along -Z over 120 frames.
+    const spheres = [0, 40, 80, 120].map((f) => ({ f, center: [0, 0.8, 80 - (55 * f) / 120], radius: 2.5 }));
+    const k = A.followTurntable(spheres, 0, 120, { degrees: 360, fov: 35, aspect: 16 / 9 });
+    assert.equal(k.follow, true);
+    assert.deepEqual(k.pivot.position.map((x) => x.f), [0, 40, 80, 120]);
+    near(k.pivot.position[3].v, [0, 0.8, 25]);
+    assert.equal(k.pivot.position[0].ease, "linear");
+    assert.equal(k.pivot.position[3].ease, "hold");
+    // The distance is that of a still subject of one frame's size, not of the whole path.
+    const still = A.turntableRange({ center: [0, 0.8, 80], radius: 2.5 }, 0, 120, { degrees: 360, fov: 35, aspect: 16 / 9 });
+    near(k.distance, still.distance);
+    assert.deepEqual(k.pivot.rotation, still.pivot.rotation);
+    assert.equal(A.followTurntable([], 0, 10, {}), null);
+});
