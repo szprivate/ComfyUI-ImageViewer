@@ -898,6 +898,11 @@ class RigToolsBrowserTests(unittest.TestCase):
             p20, _ = pg.evaluate(look, ["Road", 20])
             p0, _ = pg.evaluate(look, ["Road", 0])
             bad = self._ask(pg, "a5", "set_camera", {"camera": "Road", "position": [1, 2]})
+            # An orbit keyed with set_camera alone: every call keys the place AND the aim.
+            self._ask(pg, "o0", "add_camera", {"name": "Orbit", "position": [8, 1.6, 0], "look_at": [0, 1, 0]})
+            for i, (fr, pos) in enumerate([(0, [8, 1.6, 0]), (10, [0, 1.6, 8]), (20, [-8, 1.6, 0])]):
+                self._ask(pg, f"o{i + 1}", "set_camera", {"camera": "Orbit", "frame": fr, "position": pos, "look_at": [0, 1, 0]})
+            orbit = [pg.evaluate(look, ["Orbit", fr]) for fr in (0, 10, 20)]
         finally:
             pg.close()
         self.assertEqual(add["state"], "done", add)
@@ -915,6 +920,10 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertAlmostEqual(p0[2], -50, delta=1e-4, msg="the key at frame 0 stays")
         self.assertEqual(bad["state"], "error")
         self.assertIn("[x, y, z]", bad["error"])
+        for p_, d_ in orbit:
+            to = [0 - p_[0], 1 - p_[1], 0 - p_[2]]
+            n = math.hypot(*to)
+            self.assertGreater(sum(d_[i] * to[i] / n for i in range(3)), 0.999, (p_, d_, "each key looks at the centre"))
         self.assertEqual(self.errors, [])
 
     def test_the_agent_makes_clips_and_renders_a_turntable_of_each(self):
