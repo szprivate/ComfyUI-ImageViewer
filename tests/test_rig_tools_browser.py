@@ -829,6 +829,25 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertTrue(done, f"no answer to {aid}")
         return done[-1]
 
+    def test_an_agent_request_brings_the_3d_space_up_from_another_tab(self):
+        """animate_scene's request reached no page while the viewer was on another tab (show_in_viewer had switched
+        it), and the agent could not switch back. The page in front brings the open 3D tab up, else a new scene."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            first = pg.evaluate("() => window.__panel.activeTab")
+            pg.evaluate("""() => { const P = window.__panel; const k = 'folder_history';
+                if (!P.allTabs[k]) { P.allTabs[k] = []; P.tabOrder.push(k); P.tabLabels[k] = 'Viewer'; }
+                P.switchTab(k); }""")
+            self.assertFalse(pg.evaluate("() => window.__panel.isPrevizTab()"))
+            back = self._ask(pg, "b1", "scene_info", {})
+            tab = pg.evaluate("() => window.__panel.activeTab")
+        finally:
+            pg.close()
+        self.assertEqual(back["state"], "done", back)
+        self.assertEqual(tab, first, "the open 3D tab came back, no new one")
+        self.assertEqual(self.errors, [])
+
     def test_a_turntable_follows_a_driving_car_unasked_and_scene_set_makes_a_sky(self):
         """A turntable round a subject that moves follows it even when follow is not given (a turn about the middle of
         a drive once left the car out of frame most of the time); follow false still turns about one place.
@@ -1070,7 +1089,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             placed = self._ask(pg, "c1", "clip_place", {"source": src, "at": 30})
             sped = self._ask(pg, "c2", "clip_set", {"clip": placed["result"]["clip"], "name": "Fast walk", "speed": 2})
             listed = self._ask(pg, "c3", "clip_list")
-            tt = self._ask(pg, "t1", "turntable", {"clips": "all", "degrees": 360})
+            tt = self._ask(pg, "t1", "turntable", {"clips": "all", "degrees": 360, "follow": False})
             orbit = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
                 const cam = scene.items.find((i) => i.kind === 'camera' && i.name === 'Turntable cam');
                 const e = view._entries.get(cam.id); const out = [];
