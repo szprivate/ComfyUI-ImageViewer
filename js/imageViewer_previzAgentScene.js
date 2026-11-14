@@ -208,11 +208,33 @@ export const PrevizAgentSceneMixin = {
         const cam = this._asaItem(scene, a.camera || a.item, "camera");
         if (cam.kind !== "camera") throw new Error(`${cam.name} is not a camera`);
         this.previzSnapshot(`camera ${cam.name}`);
-        if (Number(a.fov) > 0) S.setStaticValue(cam, "fov", Number(a.fov));
-        if (Array.isArray(a.resolution) && a.resolution.length === 2) cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v))));
+        // Place and aim it as add_camera does. A channel that animates gets a key at the frame
+        // (`frame`, else the current one) so the change shows; one that does not is set.
+        const f = a.frame === undefined || a.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(a.frame));
+        const vec = (v, what) => {
+            if (!Array.isArray(v) || v.length !== 3 || v.some((x) => !Number.isFinite(Number(x)))) throw new Error(`${what} is [x, y, z] (Y up)`);
+            return v.map(Number);
+        };
+        const put = (prop, v) => {
+            if (S.baseTrack(cam, prop).length || S.track(cam, prop).length) S.keyPose(scene, cam, prop, f, v);
+            else S.setStaticValue(cam, prop, v);
+        };
+        const changed = [];
+        let position = null;
+        if (a.position !== undefined && a.position !== null) { position = vec(a.position, "position"); put("position", position); changed.push("position"); }
+        if (a.look_at !== undefined && a.look_at !== null) {
+            const from = position || S.currentValue(scene, cam, "position", f);
+            put("rotation", this._asaLookAt(from, vec(a.look_at, "look_at"))); changed.push("rotation");
+        } else if (a.rotation !== undefined && a.rotation !== null) { put("rotation", vec(a.rotation, "rotation")); changed.push("rotation"); }
+        if (Number(a.fov) > 0) { S.setStaticValue(cam, "fov", Number(a.fov)); changed.push("fov"); }
+        if (Array.isArray(a.resolution) && a.resolution.length === 2) { cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v)))); changed.push("resolution"); }
         if (a.active !== false) scene.activeCamera = cam.id;
         this.previzChanged({ reload: true });
-        return { camera: cam.name, active: scene.activeCamera === cam.id };
+        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed };
+        const known = new Set(["camera", "item", "position", "look_at", "rotation", "fov", "resolution", "active", "frame"]);
+        const ignored = Object.keys(a).filter((k) => !known.has(k));
+        if (ignored.length) out.ignored = ignored;
+        return out;
     },
 
     /** The subject's box over frames (meshes and, for a character, its bones - which carry the animation). */

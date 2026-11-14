@@ -828,6 +828,45 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertTrue(done, f"no answer to {aid}")
         return done[-1]
 
+    def test_set_camera_moves_and_aims_the_camera(self):
+        """set_camera takes position / look_at / rotation as add_camera does (it once answered ok and moved nothing);
+        a camera whose position animates gets a key at the frame instead."""
+        pg = self.page()
+        look = """([name, f]) => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
+            const c = scene.items.find((i) => i.name === name); const e = view._entries.get(c.id); view.applyFrame(f);
+            e.root.updateMatrixWorld(true); const T = view.libs.THREE;
+            const p = e.camera.getWorldPosition(new T.Vector3()).toArray();
+            const d = new T.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new T.Quaternion())).toArray();
+            view.applyFrame(0); return [p, d]; }"""
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            add = self._ask(pg, "a1", "add_camera", {"name": "Road", "position": [0, -50, 0], "look_at": [0, 0, 10]})
+            moved = self._ask(pg, "a2", "set_camera", {"camera": "Road", "position": [0, 5.8, -50], "look_at": [-30, 4, 100], "fov": 40})
+            p, d = pg.evaluate(look, ["Road", 0])
+            key0 = self._ask(pg, "a3", "key_set", {"item": "Road", "prop": "position", "frame": 0, "value": [0, 5.8, -50]})
+            keyed = self._ask(pg, "a4", "set_camera", {"camera": "Road", "position": [0, 5.8, -30], "frame": 20, "zoom": 2})
+            p20, _ = pg.evaluate(look, ["Road", 20])
+            p0, _ = pg.evaluate(look, ["Road", 0])
+            bad = self._ask(pg, "a5", "set_camera", {"camera": "Road", "position": [1, 2]})
+        finally:
+            pg.close()
+        self.assertEqual(add["state"], "done", add)
+        self.assertEqual(moved["state"], "done", moved)
+        self.assertEqual(moved["result"]["changed"], ["position", "rotation", "fov"])
+        for got, want in zip(p, [0, 5.8, -50]):
+            self.assertAlmostEqual(got, want, delta=1e-4)
+        to = [-30, 4 - 5.8, 150]
+        n = math.hypot(*to)
+        self.assertGreater(sum(d[i] * to[i] / n for i in range(3)), 0.9999, (d, "it looks at look_at"))
+        self.assertEqual(key0["state"], "done", key0)
+        self.assertEqual(keyed["state"], "done", keyed)
+        self.assertEqual(keyed["result"]["ignored"], ["zoom"])
+        self.assertAlmostEqual(p20[2], -30, delta=1e-4)
+        self.assertAlmostEqual(p0[2], -50, delta=1e-4, msg="the key at frame 0 stays")
+        self.assertEqual(bad["state"], "error")
+        self.assertIn("[x, y, z]", bad["error"])
+        self.assertEqual(self.errors, [])
+
     def test_the_agent_makes_clips_and_renders_a_turntable_of_each(self):
         """animate_scene's road: AI takes as clips, a clip placed, one turntable rig keyed per clip, a render per clip,
         keys, layers, display layers, set-driven keys, IK/FK, USD and the scene in viewerState."""
