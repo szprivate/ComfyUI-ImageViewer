@@ -21,7 +21,7 @@ import { canvasContext } from "./imageViewer_exportUI.js";
 
 /** Every action this mixin answers (none needs a character). */
 export const SCENE_AGENT_ACTIONS = new Set([
-    "scene_info", "scene_set", "add_model", "add_shape", "add_camera", "set_camera", "turntable", "render", "playblast",
+    "scene_info", "scene_set", "add_model", "add_shape", "remove_item", "item_set", "add_camera", "set_camera", "turntable", "render", "playblast",
     "key_set", "key_delete", "key_list",
     "layer_set", "layer_remove", "layer_merge_down",
     "display_layer_add", "display_layer_set", "display_layer_list",
@@ -197,6 +197,36 @@ export const PrevizAgentSceneMixin = {
         scene.items.push(item);
         this.previzChanged({ reload: true });
         return { item: item.name, id: item.id, type, parent: item.parent ? scene.items.find((i) => i.id === item.parent).name : null };
+    },
+
+    /**
+     * Delete items (`item` or `items`), as Delete in the Outliner: a group takes what it holds with it,
+     * constraints lose the targets that went. One undo step. A referenced item is refused (it goes with
+     * its reference).
+     */
+    _asa_remove_item(scene, a) {
+        const names = Array.isArray(a.items) ? a.items : [a.item];
+        const items = names.map((w) => this._asaItem(scene, w));
+        const refs = items.filter((it) => it.ref).map((it) => it.name);
+        if (refs.length) throw new Error(`${refs.join(", ")} belong to a reference: remove the reference instead`);
+        const gone = new Set();
+        for (const it of items) {
+            gone.add(it.name);
+            for (const c of S.descendantsOf(scene, it.id)) gone.add(c.name);
+        }
+        this.previzDelete(items.map((it) => it.id));
+        return { removed: [...gone] };
+    },
+
+    /** Show or hide an item (the Outliner's eye) and / or rename it. One undo step. */
+    _asa_item_set(scene, a) {
+        const it = this._asaItem(scene, a.item);
+        if (a.visible === undefined && a.name === undefined) throw new Error("give visible and / or name");
+        this.previzSnapshot(`set ${it.name}`);
+        if (a.visible !== undefined) it.visible = !!a.visible;
+        if (a.name !== undefined && String(a.name).trim() && String(a.name).trim() !== it.name) it.name = S.uniqueName(scene, String(a.name).trim());
+        this.previzChanged({ reload: true });
+        return { item: it.name, id: it.id, visible: it.visible !== false };
     },
 
     // ── Cameras ───────────────────────────────────────────────────────────
@@ -449,8 +479,17 @@ export const PrevizAgentSceneMixin = {
         const keys = Array.isArray(a.keys) ? a.keys : [{ frame: a.frame, value: a.value, ease: a.ease }];
         const prop = this._asaProp(it, a.prop);
         this.previzSnapshot(`key ${it.name}.${prop}`);
-        let n = 0;
+        let n = 0, cleared = 0;
         this._asaOnLayer(scene, a.layer, () => {
+            // replace: the channel's keys from the first new frame to the last go first, so an old
+            // key between them (a pass laid over another) cannot pull the curve away.
+            if (a.replace) {
+                const fs = keys.map((k) => (k.frame === undefined || k.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(k.frame))));
+                const lo = Math.min(...fs), hi = Math.max(...fs);
+                for (const k of S.track(it, prop).slice()) {
+                    if (k.f >= lo && k.f <= hi) { S.removeKeyframe(it, k.f, prop); cleared++; }
+                }
+            }
             for (const k of keys) {
                 const f = k.frame === undefined || k.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(k.frame));
                 let v = k.value;
@@ -473,7 +512,7 @@ export const PrevizAgentSceneMixin = {
             }
         });
         this.previzChanged();
-        return { item: it.name, prop, keys: n };
+        return a.replace ? { item: it.name, prop, keys: n, cleared } : { item: it.name, prop, keys: n };
     },
 
     _asa_key_delete(scene, a) {
