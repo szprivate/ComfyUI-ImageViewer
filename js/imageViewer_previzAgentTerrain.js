@@ -80,6 +80,8 @@ export function layersByPlace(given, names, fileSource = modelSource) {
             delete l.name;
         }
         if (at >= names.length) throw new Error(`a terrain has ${names.length} layers (${names.join(", ")})`);
+        // The shader multiplies a layer's texture by its colour: a texture given without one shows as it is.
+        if (l.src && l.color === undefined) l.color = "#ffffff";
         out[at] = { ...(out[at] || {}), ...l };
     });
     return out;

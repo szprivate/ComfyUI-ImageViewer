@@ -123,6 +123,7 @@ class AgentTerrainTests(unittest.TestCase):
             lay = pg.evaluate(f"""() => {P}.previzScene().items.find((i) => i.kind === 'terrain').terrain.layers[0]""")
             self.assertEqual(lay["src"], {"filename": "sand.png", "subfolder": "tex", "type": "output"})
             self.assertEqual(lay["tile"], 4)
+            self.assertEqual(lay["color"], "#ffffff")
             bad = pg.evaluate(ASK, ["terrain_set", {"layers": [{"texure": "x.png"}]}])
             self.assertIn('no "texure"', bad.get("error", ""))
             # A 4 m box whose origin is its middle, keyed driving 69 m at y 0 over 120 frames.
