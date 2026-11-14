@@ -113,6 +113,58 @@ class AgentTerrainTests(unittest.TestCase):
             pg.wait_for_timeout(400)
             pg.screenshot(path=os.path.join(SHOTS, name))
 
+    def test_a_drive_on_the_ground_textures_checked_and_a_turntable_that_trails(self):
+        pg = self._page()
+        try:
+            P = "window.__panel"
+            # A texture under the names an agent gives it is the layer's src / tile; an unknown key is refused.
+            self._ask(pg, "terrain_add", name="Canyon", size=[80, 200], height=10, seed=3,
+                      layers=[{"layer": "ground", "texture": "output/tex/sand.png", "scale": 4}])
+            lay = pg.evaluate(f"""() => {P}.previzScene().items.find((i) => i.kind === 'terrain').terrain.layers[0]""")
+            self.assertEqual(lay["src"], {"filename": "sand.png", "subfolder": "tex", "type": "output"})
+            self.assertEqual(lay["tile"], 4)
+            bad = pg.evaluate(ASK, ["terrain_set", {"layers": [{"texure": "x.png"}]}])
+            self.assertIn('no "texure"', bad.get("error", ""))
+            # A 4 m box whose origin is its middle, keyed driving 69 m at y 0 over 120 frames.
+            self._ask(pg, "add_shape", type="group", name="Car")
+            self._ask(pg, "add_shape", type="box", name="Body", parent="Car", position=[0, -1, 0], scale=[2, 2, 4])
+            self._ask(pg, "key_set", item="Car", prop="position", keys=[
+                {"frame": 0, "value": [0, 0, -35], "ease": "linear"}, {"frame": 120, "value": [0, 0, 34], "ease": "linear"}])
+            g = self._ask(pg, "ground", item="Car", step=10)
+            self.assertTrue(g["keyed"])
+            self.assertEqual(g["frames"], 13)
+            ground = self._ask(pg, "terrain_height", points=[[0, -35], [0, 0], [0, 34]])["points"]
+            bottoms = pg.evaluate(f"""() => {{ const P = {P};
+                const it = P.previzScene().items.find((i) => i.name === 'Car');
+                return [0, 60, 120].map((f) => P._asaSubjectBox([it.id], [f]).min[1]); }}""")
+            for b, gp in zip(bottoms, ground):
+                self.assertAlmostEqual(b, gp["y"], delta=0.05)
+            # Trailing 24 frames: the orbit's centre is where the car was a second before, the camera aims at the car.
+            tt = self._ask(pg, "turntable", target="Car", **{"from": 0}, to=120, degrees=60, lag=24, distance=8)
+            self.assertEqual(tt["ranges"][0]["lag"], 24)
+            got = pg.evaluate("""() => { const P = window.__panel, sc = P.previzScene();
+                const cam = sc.items.find((i) => i.name === 'Turntable cam');
+                const piv = sc.items.find((i) => i.name === 'Turntable');
+                const car = sc.items.find((i) => i.name === 'Car');
+                const v = P._modelView(); v.applyFrame(96);
+                const { THREE } = v.libs; const cp = new THREE.Vector3(), fw = new THREE.Vector3();
+                const box = P._asaSubjectBox([car.id], [96]);
+                v.applyFrame(96);
+                const obj = v._entries.get(cam.id).root; obj.updateMatrixWorld(true);
+                let c = null; obj.traverse((o) => { if (!c && o.isCamera) c = o; });
+                (c || obj).getWorldPosition(cp); (c || obj).getWorldDirection(fw);
+                const to = new THREE.Vector3(...box.center).sub(cp).normalize();
+                return { aim: !!(cam.aim && cam.aim.on), cam: !!c, dot: fw.dot(to),
+                         pz: v._entries.get(piv.id).root.getWorldPosition(new THREE.Vector3()).z, carZ: box.center[2] }; }""")
+            self.assertTrue(got["aim"])
+            self.assertTrue(got["cam"])
+            self.assertGreater(got["dot"], 0.99)
+            self.assertLess(got["pz"], got["carZ"] - 10)
+            self._shot(pg, "drive-trailing.png")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_the_agent_builds_a_valley_sculpts_scatters_and_erodes_it(self):
         pg = self._page()
         try:

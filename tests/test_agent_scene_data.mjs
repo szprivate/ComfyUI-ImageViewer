@@ -133,6 +133,31 @@ test("a following turntable keys the pivot on the moving subject and fits one fr
     assert.equal(A.followTurntable([], 0, 10, {}), null);
 });
 
+test("a lagging turntable trails the subject and looks at it", () => {
+    const spheres = [0, 40, 80, 120].map((f) => ({ f, center: [0, 0.8, 80 - (55 * f) / 120], radius: 2.5 }));
+    const k = A.followTurntable(spheres, 0, 120, { degrees: 90, lag: 40 });
+    // The centre is where the car was 40 frames before (held at its start for the first 40).
+    near(k.pivot.position[0].v, [0, 0.8, 80]);
+    near(k.pivot.position[1].v, [0, 0.8, 80]);
+    near(k.pivot.position[3].v, [0, 0.8, 43.3333]);
+    // The camera looks at the car itself.
+    assert.deepEqual(k.aim.map((x) => x.f), [0, 40, 80, 120]);
+    near(k.aim[3].v, [0, 0.8, 25]);
+    assert.equal(k.aim[3].ease, "hold");
+    // Without lag there is no look-at.
+    assert.equal(A.followTurntable(spheres, 0, 120, {}).aim, undefined);
+    near(A.centreAt(spheres, 20), [0, 0.8, 80 - 55 * 20 / 120]);
+    near(A.centreAt(spheres, -5), [0, 0.8, 80]);
+    near(A.centreAt(spheres, 500), [0, 0.8, 25]);
+});
+
+test("an item stands on the ground: its origin above the ground by as much as it is above its bottom", () => {
+    // A car whose origin is at its middle, 0.8 above its wheels, put on ground at 2.5.
+    assert.equal(A.groundedY(0, -0.8, 2.5), 3.3);
+    // Its origin at its wheels: the origin goes on the ground.
+    assert.equal(A.groundedY(1, 1, 0), 0);
+});
+
 test("add_model's path: absolute stays a path, relative is a ComfyUI file of output (or the folder it names)", () => {
     assert.deepEqual(A.modelSource("W:\\agent\\models\\car.glb"), { path: "W:\\agent\\models\\car.glb" });
     assert.deepEqual(A.modelSource("/mnt/out/car.glb"), { path: "/mnt/out/car.glb" });
