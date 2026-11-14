@@ -3,7 +3,7 @@
 // Sequencer, cameras and turntables, renders and playblasts of the scene on
 // screen, keys on any channel, animation-layer and display-layer settings,
 // IK/FK, spaces, set-driven keys, custom attributes, a model brought in, and a
-// USD stage of the shot. agentY-core's animate_scene sends them through the
+// USD stage of the shot, and the Terrain menu (imageViewer_previzAgentTerrain.js). agentY-core's animate_scene sends them through the
 // viewer's POST /imageviewer/rig/agent (rig_routes.AGENT_ACTIONS), the same road
 // as animate_character; previzRigAgentRun hands every action named in
 // SCENE_AGENT_ACTIONS to previzSceneAgent here.
@@ -29,6 +29,9 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "clip_track_add", "clip_track_set",
     "ikfk_switch", "ikfk_match", "space_set", "attr_add", "sdk_key", "sdk_remove",
     "export_usd",
+    // The Terrain menu's (imageViewer_previzAgentTerrain.js, TERRAIN_AGENT_ACTIONS).
+    "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
+    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",
