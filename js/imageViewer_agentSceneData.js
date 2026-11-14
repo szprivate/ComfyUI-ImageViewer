@@ -221,3 +221,23 @@ export function describeScene(scene, { activeCamera = null, max = 60 } = {}) {
         clips: seq, anim_layers: layers, active_layer: scene.activeLayer || null, display_layers: dl,
     };
 }
+
+/**
+ * Where add_model's `path` points. An absolute path (C:\..., \\share\..., /...) is a file on the
+ * machine. Anything else is a ComfyUI file: "output/agent/models/car.glb" (or input/, temp/) names its
+ * folder, a bare relative path is read from the output folder, where every node saves. A relative path
+ * once went into the scene as it was, which no route could find: the model never loaded and the
+ * turntable after it had "nothing to measure".
+ */
+export function modelSource(path) {
+    const p = String(path || "").trim();
+    if (!p) return null;
+    if (/^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]/.test(p)) return { path: p };
+    const parts = p.replace(/\\/g, "/").split("/").filter((s) => s && s !== ".");
+    if (parts.includes("..")) return null;
+    let type = "output";
+    if (parts.length > 1 && /^(output|input|temp)$/i.test(parts[0])) type = parts.shift().toLowerCase();
+    const filename = parts.pop();
+    if (!filename) return null;
+    return { filename, subfolder: parts.join("/"), type };
+}

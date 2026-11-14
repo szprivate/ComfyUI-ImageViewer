@@ -13,6 +13,7 @@ import email.parser
 import email.policy
 import json
 import math
+import re
 import os
 import shutil
 import socket
@@ -924,6 +925,13 @@ class RigToolsBrowserTests(unittest.TestCase):
                     scene.items.push(it);
                     setTimeout(() => P.previzChanged({ reload: true }), 1500);
                     return 1; }; }""")
+            # ComfyUI's /view: statue.glb is in the output folder, nothing else is.
+            pg.evaluate("""() => { const was = window.__fetchApi;
+                window.__fetchApi = async (p, o) => { if (!p.startsWith('/view?')) return was(p, o);
+                    const q = new URLSearchParams(p.split('?')[1]);
+                    const there = q.get('filename') === 'statue.glb' && q.get('type') === 'output';
+                    return { ok: there, status: there ? 200 : 404, json: async () => ({}) }; }; }""")
+            gone = self._ask(pg, "m0", "add_model", {"path": "output/agent/models/nope.glb", "name": "Nope"})
             added = self._ask(pg, "m1", "add_model", {"path": "statue.glb", "name": "Car", "size": 4.7})
             self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
                 {"frame": 0, "value": [0, 0, -10], "ease": "linear"}, {"frame": 48, "value": [0, 0, 10], "ease": "linear"}]})
@@ -934,6 +942,9 @@ class RigToolsBrowserTests(unittest.TestCase):
                 const s = new T.Box3().setFromObject(e.root).getSize(new T.Vector3()); return Math.max(s.x, s.y, s.z); }""")
         finally:
             pg.close()
+        self.assertEqual(gone["state"], "error", gone)
+        self.assertIn("no such file", gone["error"])
+        self.assertIn("output folder", gone["error"])
         self.assertEqual(added["state"], "done", added)
         self.assertEqual(added["result"]["size"], 4.7)
         self.assertAlmostEqual(long, 4.7, delta=0.05)

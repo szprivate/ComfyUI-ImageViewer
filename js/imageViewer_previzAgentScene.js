@@ -153,11 +153,34 @@ export const PrevizAgentSceneMixin = {
         return { length: scene.length, fps: scene.fps };
     },
 
+    /** True only when the server says the file is not there (a 404, or "gone"); any other answer lets it through. */
+    async _asaFileGone(where) {
+        try {
+            if (where.path) {
+                const r = await api.fetchApi("/imageviewer/probe_paths", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ paths: [{ path: where.path, external: true }] }),
+                });
+                if (!r.ok) return false;
+                const got = await r.json();
+                return ((got && got.unreachable) || []).some((u) => u && u.reason === "gone");
+            }
+            const q = new URLSearchParams({ filename: where.filename, subfolder: where.subfolder || "", type: where.type || "output" });
+            const r = await api.fetchApi(`/view?${q}`, { method: "HEAD" });
+            return r.status === 404;
+        } catch (_) { return false; }
+    },
+
     async _asa_add_model(scene, a) {
         const path = String(a.path || "").trim();
         if (!path) throw new Error("add_model needs path: the model file (.glb, .fbx, .obj, .usd, .abc, ...)");
+        const where = A.modelSource(path);
+        if (!where) throw new Error(`add_model cannot read ${path}: give the file's absolute path, or one inside ComfyUI's output folder (output/...)`);
+        if (await this._asaFileGone(where)) {
+            throw new Error(`no such file: ${path}` + (where.path ? "" : ` (a relative path is read from ComfyUI's ${where.type} folder; give the absolute path if it is elsewhere)`));
+        }
         const before = new Set(scene.items.map((i) => i.id));
-        const n = await this.previzAddModels([{ path, name: a.name || path.split(/[\\/]/).pop() }]);
+        const n = await this.previzAddModels([{ ...where, name: a.name || path.split(/[\\/]/).pop() }]);
         if (!n) throw new Error(`could not add ${path}`);
         const item = scene.items.find((i) => !before.has(i.id) && i.kind === "model");
         if (item && a.name) item.name = S.uniqueName(scene, a.name, item.id);
