@@ -311,16 +311,19 @@ export const PrevizAgentTerrainMixin = {
     },
 
     /**
-     * Stand an item on the ground: its bottom on the terrain under its middle (the only terrain, or
-     * `terrain`; with none, y = 0). Static, it is moved; animated, every position key is (and with
-     * `step`, a key is put every `step` frames first, so a drive follows the floor between keys).
-     * Answers the frames and the heights. A top-level item, or one whose parents only move it.
+     * Stand an item on the ground: its bottom on the terrain under it (the only terrain, or
+     * `terrain`; with none, y = 0) and, with tilt (the default), turned to the slope - its long and
+     * short sides along the ground under its four ends - then lifted until no point of its underside
+     * (a 5 x 5 grid) is below the ground, so a car on a hill neither floats nor cuts into it. Static,
+     * it is moved; animated, every position (and rotation) key is, and with `step` a key is put every
+     * `step` frames first, so a drive follows the hills between its keys. A top-level item.
      */
     async _asa_ground(scene, a) {
         const it = this._asaItem(scene, a.item);
         const terrains = scene.items.filter((i) => i.kind === "terrain");
         const ter = a.terrain ? this._asaTerrain(scene, a.terrain) : terrains.length === 1 ? terrains[0] : null;
         if (!a.terrain && terrains.length > 1) throw new Error("name the terrain to stand it on (there is more than one)");
+        if (it.parent) throw new Error(`${it.name} hangs under another item: ground the item at the top`);
         const built = ter ? await this._asaBuilt(ter) : null;
         if (!(await this._asaMeasure([it.id], [0]))) throw new Error(`${it.name} has nothing to measure (not loaded yet?)`);
         const groundAt = (x, z) => {
@@ -329,35 +332,133 @@ export const PrevizAgentTerrainMixin = {
             if (y == null) throw new Error(`${it.name} is off ${ter.name} at x ${Math.round(x * 100) / 100}, z ${Math.round(z * 100) / 100}`);
             return y;
         };
+        const tilt = a.tilt !== false;
+        const lift = Number.isFinite(Number(a.clearance)) ? Number(a.clearance) : 0.01;
+        const local = this._asaLocalBox(scene, it);
+        if (!local) throw new Error(`${it.name} has nothing to measure (not loaded yet?)`);
         this.previzSnapshot(`ground ${it.name}`);
         const keyed = (S.baseTrack(it, "position") || []).length > 0;
         const out = [];
         const place = (f) => {
-            const box = this._asaSubjectBox([it.id], [f]);
             const pos = S.currentValue(scene, it, "position", f);
-            const g = groundAt(box.center[0], box.center[2]);
-            const y = Ag.groundedY(pos[1], box.min[1], g);
-            out.push({ frame: f, y, ground: Math.round(g * 1000) / 1000 });
-            return [pos[0], y, pos[2]];
+            const rot = S.currentValue(scene, it, "rotation", f);
+            const r = this._asaGroundPose(it, pos, rot, local, groundAt, tilt, lift);
+            out.push({ frame: f, y: r.position[1], pitch: r.pitch, roll: r.roll });
+            return r;
         };
+        const round = (v) => v.map((x) => Math.round(x * 1e4) / 1e4);
         if (!keyed) {
-            it.position = place(Math.round(this.currentFrame || 0));
+            const r = place(Math.round(this.currentFrame || 0));
+            it.position = round(r.position);
+            if (tilt && !(S.baseTrack(it, "rotation") || []).length) it.rotation = round(r.rotation);
+            else if (tilt) S.setKeyframe(it, "rotation", Math.round(this.currentFrame || 0), round(r.rotation));
         } else {
             const step = Math.round(Number(a.step) || 0);
             const keys = S.baseTrack(it, "position").slice();
+            const rkeys = (S.baseTrack(it, "rotation") || []).slice();
             const frames = new Set(keys.map((k) => k.f));
+            if (tilt) for (const k of rkeys) frames.add(k.f);
             if (step > 0) {
                 for (let f = keys[0].f; f < keys[keys.length - 1].f; f += step) frames.add(f);
             }
-            // Measured on the curve as it stands, then keyed: a key put first would move what is measured after it.
+            // Measured on the curves as they stand, then keyed: a key put first would move what is measured after it.
             const want = [...frames].sort((x, y) => x - y).map((f) => [f, place(f)]);
-            for (const [f, v] of want) {
+            for (const [f, r] of want) {
                 const k = keys.find((x) => x.f === f);
-                S.setKeyframe(it, "position", f, v, k ? k.ease : "linear");
+                S.setKeyframe(it, "position", f, round(r.position), k ? k.ease : "linear");
+                if (tilt) {
+                    const rk = rkeys.find((x) => x.f === f);
+                    S.setKeyframe(it, "rotation", f, round(r.rotation), rk ? rk.ease : "linear");
+                }
             }
         }
         this.previzChanged();
-        return { item: it.name, terrain: ter ? ter.name : null, keyed, frames: out.length, first: out[0], last: out[out.length - 1] };
+        const pitches = out.map((o) => Math.abs(o.pitch)), rolls = out.map((o) => Math.abs(o.roll));
+        return { item: it.name, terrain: ter ? ter.name : null, keyed, tilt, frames: out.length, first: out[0], last: out[out.length - 1],
+                 most_pitch: Math.max(...pitches), most_roll: Math.max(...rolls) };
+    },
+
+    /**
+     * The item's box in its own space (the frame's channels taken off the drawn meshes): what lies
+     * under it, wherever it stands. Null before it has loaded.
+     */
+    _asaLocalBox(scene, it) {
+        const view = this._modelView();
+        const { THREE } = view.libs;
+        const e = view._entries.get(it.id);
+        if (!e || !e.root) return null;
+        const f = view.sceneFrame || 0;
+        view.applyFrame(f);
+        e.root.updateMatrixWorld(true);
+        const inv = this._asaItemMatrix(THREE, it, S.currentValue(scene, it, "position", f), S.currentValue(scene, it, "rotation", f)).invert();
+        const box = new THREE.Box3(), b = new THREE.Box3(), m = new THREE.Matrix4();
+        e.root.traverse((o) => {
+            if (!o.isMesh || !o.geometry || o.visible === false) return;
+            if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+            b.copy(o.geometry.boundingBox).applyMatrix4(m.multiplyMatrices(inv, o.matrixWorld));
+            box.union(b);
+        });
+        return box.isEmpty() ? null : box;
+    },
+
+    /** The item's own matrix for a position and rotation (degrees, XYZ), with its pivot and scale. */
+    _asaItemMatrix(THREE, it, pos, rot, quat = null) {
+        const pv = Array.isArray(it.pivot) ? it.pivot.map(Number) : [0, 0, 0];
+        const sc = Array.isArray(it.scale) ? it.scale.map(Number) : [1, 1, 1];
+        const q = quat || new THREE.Quaternion().setFromEuler(new THREE.Euler(...rot.map((d) => (Number(d) || 0) * Math.PI / 180), "XYZ"));
+        const m = new THREE.Matrix4().compose(new THREE.Vector3(pos[0] + pv[0], pos[1] + pv[1], pos[2] + pv[2]), q, new THREE.Vector3(...sc));
+        return m.multiply(new THREE.Matrix4().makeTranslation(-pv[0], -pv[1], -pv[2]));
+    },
+
+    /**
+     * Where the item stands at one frame: turned to the ground under its ends (keeping its heading
+     * and any turn of its own), then lifted so its whole underside clears the ground.
+     */
+    _asaGroundPose(it, pos, rot, local, groundAt, tilt, lift) {
+        const { THREE } = this._modelView().libs;
+        const D = Math.PI / 180;
+        const q0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0] * D, rot[1] * D, rot[2] * D, "XYZ"));
+        let q = q0.clone();
+        let pitch = 0, roll = 0;
+        if (tilt) {
+            const M = this._asaItemMatrix(THREE, it, pos, rot, q0);
+            const c = local.getCenter(new THREE.Vector3());
+            const at = (x, z) => new THREE.Vector3(x, local.min.y, z).applyMatrix4(M);
+            const ends = { xp: at(local.max.x, c.z), xm: at(local.min.x, c.z), zp: at(c.x, local.max.z), zm: at(c.x, local.min.z) };
+            const flat = (v) => new THREE.Vector3(v.x, 0, v.z);
+            const onGround = (v) => new THREE.Vector3(v.x, groundAt(v.x, v.z), v.z);
+            const ax = onGround(ends.xp).sub(onGround(ends.xm)), az = onGround(ends.zp).sub(onGround(ends.zm));
+            const fx = flat(ends.xp).sub(flat(ends.xm)), fz = flat(ends.zp).sub(flat(ends.zm));
+            if (ax.lengthSq() > 1e-8 && az.lengthSq() > 1e-8 && fx.lengthSq() > 1e-8 && fz.lengthSq() > 1e-8) {
+                // The basis the ground gives (x along the item's x ends, up square to both) against the flat one.
+                const basis = (x, z) => {
+                    x = x.clone().normalize();
+                    const y = new THREE.Vector3().crossVectors(z, x).normalize();
+                    const zz = new THREE.Vector3().crossVectors(x, y);
+                    return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, zz));
+                };
+                const qTilt = basis(ax, az).multiply(basis(fx, fz).invert());
+                q = qTilt.multiply(q0);
+                pitch = Math.atan2(az.y, Math.hypot(az.x, az.z)) / D;
+                roll = Math.atan2(ax.y, Math.hypot(ax.x, ax.z)) / D;
+            }
+        }
+        // Lowest clearance of the underside (a 5 x 5 grid) once turned; then up or down by that much.
+        const M = this._asaItemMatrix(THREE, it, pos, null, q);
+        let worst = Infinity;
+        for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
+            const p = new THREE.Vector3(local.min.x + (local.max.x - local.min.x) * i / 4, local.min.y,
+                                        local.min.z + (local.max.z - local.min.z) * j / 4).applyMatrix4(M);
+            worst = Math.min(worst, p.y - groundAt(p.x, p.z));
+        }
+        const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
+        // Euler angles nearest the old ones (no 360 jumps between keys).
+        const near = (v, old) => v + 360 * Math.round((old - v) / 360);
+        return {
+            position: [pos[0], pos[1] - worst + lift, pos[2]],
+            rotation: [near(e.x / D, rot[0]), near(e.y / D, rot[1]), near(e.z / D, rot[2])],
+            pitch: Math.round(pitch * 10) / 10, roll: Math.round(roll * 10) / 10,
+        };
     },
 
     /**
