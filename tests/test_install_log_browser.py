@@ -91,7 +91,18 @@ class InstallLogBrowserTests(unittest.TestCase):
             except Exception:
                 time.sleep(0.1)
         cls.pw = sync_playwright().start()
-        cls.browser = cls.pw.chromium.launch()
+        cls.browser = None
+        for channel in ("msedge", "chrome", None):
+            try:
+                cls.browser = (cls.pw.chromium.launch(channel=channel, headless=True) if channel
+                               else cls.pw.chromium.launch(headless=True))
+                break
+            except Exception:
+                continue
+        if cls.browser is None:
+            cls.pw.stop()
+            cls.server.terminate()
+            raise unittest.SkipTest("no browser for playwright")
 
     @classmethod
     def tearDownClass(cls):

@@ -108,7 +108,13 @@ class PathTraceTests(unittest.TestCase):
             # Moving the camera starts the picture again from the first samples.
             before = pg.evaluate("() => window.__panel._modelView().ptSamples()")
             pg.evaluate("""() => { const v = window.__panel._modelView(); v.camera.position.x += 2; v.controls.update(); v.requestRender(); }""")
-            pg.wait_for_timeout(400)
+            # Watch every frame for the restart: on a fast GPU a fixed wait lets the count climb past
+            # `before` again before it is read.
+            try:
+                pg.wait_for_function(f"() => window.__panel._modelView().ptSamples() < {before}",
+                                     polling="raf", timeout=10000)
+            except Exception:
+                pass
             after = pg.evaluate("() => window.__panel._modelView().ptSamples()")
             # Back to Original: no badge, raster again.
             pg.evaluate("() => window.__panel._modelView().setMaterialMode('original')")
