@@ -493,7 +493,9 @@ AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_f
                  "display_layer_add", "display_layer_set", "display_layer_list",
                  "clip_list", "clip_from_keys", "clip_place", "clip_set", "clip_split", "clip_remove", "clip_match", "clip_bake",
                  "clip_track_add", "clip_track_set",
-                 "ikfk_switch", "ikfk_match", "space_set", "attr_add", "sdk_key", "sdk_remove", "export_usd")
+                 "ikfk_switch", "ikfk_match", "space_set", "attr_add", "sdk_key", "sdk_remove", "export_usd",
+                 "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
+                 "terrain_erode", "scatter_add", "scatter_set", "scatter_paint")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
