@@ -910,6 +910,37 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertEqual(got["frames"], [0, 60, 120])
         self.assertEqual(self.errors, [])
 
+    def test_add_model_sizes_it_and_a_turntable_waits_for_it_to_load(self):
+        """add_model size = its longest side in metres (an agent once read "4.7 m" as a scale and made a 9 m car);
+        a turntable right after add_model waits for the model instead of "nothing to measure"."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            # A slow load: the model's item lands at once, its file a moment later (as a 15 MB GLB does).
+            pg.evaluate("""async () => { const P = window.__panel;
+                const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+                P.previzAddModels = async (items) => { const scene = P.previzScene();
+                    const it = S.makeModelItem({ url: '/media/statue.glb', filename: 'statue.glb' }, 'Car');
+                    scene.items.push(it);
+                    setTimeout(() => P.previzChanged({ reload: true }), 1500);
+                    return 1; }; }""")
+            added = self._ask(pg, "m1", "add_model", {"path": "statue.glb", "name": "Car", "size": 4.7})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, -10], "ease": "linear"}, {"frame": 48, "value": [0, 0, 10], "ease": "linear"}]})
+            tt = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": True, "distance": 5})
+            long = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), T = view.libs.THREE;
+                const it = P.previzScene().items.find((i) => i.name === 'Car'); view.applyFrame(0);
+                const e = view._entries.get(it.id); e.root.updateMatrixWorld(true);
+                const s = new T.Box3().setFromObject(e.root).getSize(new T.Vector3()); return Math.max(s.x, s.y, s.z); }""")
+        finally:
+            pg.close()
+        self.assertEqual(added["state"], "done", added)
+        self.assertEqual(added["result"]["size"], 4.7)
+        self.assertAlmostEqual(long, 4.7, delta=0.05)
+        self.assertEqual(tt["state"], "done", tt)
+        self.assertTrue(tt["result"]["ranges"][0]["follow"])
+        self.assertEqual(self.errors, [])
+
     def test_set_camera_moves_and_aims_the_camera(self):
         """set_camera takes position / look_at / rotation as add_camera does (it once answered ok and moved nothing);
         a camera whose position animates gets a key at the frame instead."""

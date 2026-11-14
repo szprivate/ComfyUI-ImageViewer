@@ -166,7 +166,24 @@ export const PrevizAgentSceneMixin = {
             this.previzChanged();
         }
         try { if (this._modelView().whenLoaded) await this._modelView().whenLoaded(30000); } catch (_) { /* answered without */ }
-        return { model: item ? item.name : null, id: item ? item.id : null };
+        // size: the model's longest side in metres (a car "4.7 m long"), whatever units the file is in.
+        // Scale is a factor of the file's own size, which an agent once took for metres (a 9 m car).
+        let size = null;
+        if (item && Number(a.size) > 0) {
+            const box = await this._asaMeasure([item.id], [0]);
+            if (!box) throw new Error(`${item.name} has not loaded, so it could not be sized: set scale yourself`);
+            const long = Math.max(...box.max.map((v, i) => v - box.min[i]));
+            if (long > 1e-6) {
+                const k = Number(a.size) / long;
+                item.scale = (Array.isArray(item.scale) ? item.scale : [1, 1, 1]).map((v) => Number(v) * k);
+                this.previzChanged();
+                size = Number(a.size);
+            }
+        }
+        const out = { model: item ? item.name : null, id: item ? item.id : null };
+        if (item) out.scale = item.scale || [1, 1, 1];
+        if (size !== null) out.size = size;
+        return out;
     },
 
     /**
@@ -326,6 +343,23 @@ export const PrevizAgentSceneMixin = {
     },
 
     /**
+     * The subject's box as _asaSubjectBox has it, waiting for it to arrive: a model added a moment
+     * before is often still loading (a turntable called right after add_model once found nothing,
+     * and the agent rendered an empty set). Null after `timeoutMs`.
+     */
+    async _asaMeasure(ids, frames, timeoutMs = 60000) {
+        const view = this._modelView();
+        const t0 = Date.now();
+        for (;;) {
+            const box = this._asaSubjectBox(ids, frames);
+            if (box) return box;
+            if (Date.now() - t0 > timeoutMs) return null;
+            try { if (view.whenLoaded) await view.whenLoaded(Math.max(500, timeoutMs - (Date.now() - t0))); } catch (_) { /* measured again */ }
+            await new Promise((r) => setTimeout(r, 250));
+        }
+    },
+
+    /**
      * A turntable camera: one pivot + camera rig ("Turntable" / "Turntable cam"),
      * keyed with a full turn over each range - every clip of the sequencer
      * (`clips`: "all" or names), or from..to. Answers the camera and the ranges.
@@ -347,6 +381,10 @@ export const PrevizAgentSceneMixin = {
             const to = a.to == null ? this._asaEnd(scene) : Math.round(Number(a.to));
             if (!(to >= from)) throw new Error("to must not come before from");
             ranges = [{ from, to, clip: null }];
+        }
+        // Measured before anything is made, so a subject that never arrives leaves no rig behind.
+        if (!(await this._asaMeasure(subjectIds, [ranges[0].from]))) {
+            throw new Error("the target has nothing to measure: its model did not load within a minute (check add_model's path)");
         }
         const name = String(a.name || "Turntable").trim() || "Turntable";
         const camName = `${name} cam`;
