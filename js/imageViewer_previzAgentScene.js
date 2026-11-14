@@ -245,8 +245,12 @@ export const PrevizAgentSceneMixin = {
             if (!Array.isArray(v) || v.length !== 3 || v.some((x) => !Number.isFinite(Number(x)))) throw new Error(`${what} is [x, y, z] (Y up)`);
             return v.map(Number);
         };
+        // Keyed when `frame` is given or the camera's place or aim animates already: position and aim
+        // are keyed TOGETHER (an orbit keyed by its positions alone kept one aim for every frame).
+        const animated = ["position", "rotation"].some((p) => S.baseTrack(cam, p).length || S.track(cam, p).length);
+        const keying = (a.frame !== undefined && a.frame !== null) || animated;
         const put = (prop, v) => {
-            if (S.baseTrack(cam, prop).length || S.track(cam, prop).length) S.keyPose(scene, cam, prop, f, v);
+            if (keying) S.keyPose(scene, cam, prop, f, v);
             else S.setStaticValue(cam, prop, v);
         };
         const changed = [];
@@ -260,7 +264,7 @@ export const PrevizAgentSceneMixin = {
         if (Array.isArray(a.resolution) && a.resolution.length === 2) { cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v)))); changed.push("resolution"); }
         if (a.active !== false) scene.activeCamera = cam.id;
         this.previzChanged({ reload: true });
-        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed };
+        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed, keyed: keying ? f : null };
         const known = new Set(["camera", "item", "position", "look_at", "rotation", "fov", "resolution", "active", "frame"]);
         const ignored = Object.keys(a).filter((k) => !known.has(k));
         if (ignored.length) out.ignored = ignored;
