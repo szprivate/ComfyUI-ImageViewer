@@ -8,8 +8,10 @@
                                         FBX's motion itself, with FBXLoader); may_serve-guarded
     GET  /imageviewer/rig/tools         -> {unirig: {ready, why}, skintokens: {ready, why}, kimodo: {ready, why, model},
                                             install: {root, hf_token: bool, running: job id | null}}
-    POST /imageviewer/rig/install       {root?, only?: unirig|skintokens|kimodo|posetrack, hf_token?} -> {job}: runs
-                                        scripts/rig/install_rig_tools.py (an Install button in the page);
+    POST /imageviewer/rig/install       {root?, only?: unirig|skintokens|kimodo|posetrack, hf_token?} ->
+                                        {command, powershell?, root, only}: the line that runs
+                                        scripts/rig/install_rig_tools.py, for the user to run in a terminal
+                                        (the viewer never runs it: no runtime pip from a node pack);
                                         a token is written where huggingface_hub reads it, never answered
     POST /imageviewer/rig/autorig       {src, name?, context?, seed?, engine?: unirig|skintokens, keep_skeleton?}
                                         -> {job}: UniRig (scripts/rig/unirig_run.py) or SkinTokens
@@ -51,7 +53,9 @@ IMAGE_VIEWER_SKINTOKENS_PYTHON / _DIR and IMAGE_VIEWER_KIMODO_PYTHON environment
      "kimodo": {"python": "D:/AI/rigtools/kimodo/.venv/Scripts/python.exe",
                 "model": "Kimodo-SOMA-RP-v1.2", "text_encoder_device": "cpu"}}
 
-scripts/rig/install_rig_tools.py sets both up and writes that file.
+scripts/rig/install_rig_tools.py sets them up and writes that file. The viewer
+never runs it: POST rig/install only answers the command line to run on the
+ComfyUI machine (the registry's standards forbid pip installs at run time).
 Kimodo is kept loaded between requests (one worker process, fed a request per
 line), since loading it takes most of a minute.
 """
@@ -180,6 +184,25 @@ def abc_to_obj(src, dst):
     with open(dst, "w", encoding="utf-8") as fh:
         fh.write("".join(f"v {x:.6f} {y:.6f} {z:.6f}\n" for x, y, z in verts))
         fh.write("".join(f"f {a + 1} {b + 1} {c + 1}\n" for a, b, c in faces))
+
+
+def install_command(root, only=None, python=None, script=None, windows=None):
+    """The installer as a command for the user to run in a terminal on this machine.
+
+    The viewer does not run it: the Comfy registry's standards forbid a node pack installing
+    packages through a subprocess at runtime, and the installer makes environments and runs pip.
+    -> {command, powershell?, root, only}: `command` for cmd.exe / a POSIX shell, `powershell`
+    (Windows) the same with PowerShell's call operator."""
+    python = python or sys.executable
+    script = script or INSTALLER
+    windows = (os.name == "nt") if windows is None else windows
+    args = [python, "-u", script, "--root", root] + (["--only", only] if only else [])
+    if windows:
+        line = subprocess.list2cmdline(args)
+        quoted = " ".join("'" + a.replace("'", "''") + "'" if (" " in a or not a) else a for a in args)
+        return {"command": line, "powershell": "& " + quoted, "root": root, "only": only or None}
+    import shlex
+    return {"command": shlex.join(args), "root": root, "only": only or None}
 
 
 def default_root(folder_paths):
@@ -654,18 +677,14 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     # ── the tools ────────────────────────────────────────────────────────────
 
-    def installing():
-        return next((j for j in jobs.values() if j.kind == "install" and j.state == "running"), None)
-
     async def tools(request):
         out = tool_status()
         gone, _m = body_pose_needs()
         out["sam3dbody"] = {"ready": not gone, "missing": gone,
                             "why": "" if not gone else ("update ComfyUI (no SAM 3D Body nodes)" if any(m["kind"] == "node" for m in gone)
                                                          else f"SAM 3D Body's weights are not in models/{body_pose.MODEL['folder']}")}
-        run = installing()
-        out["install"] = {"root": default_root(folder_paths), "hf_token": has_hf_token(),
-                          "running": run.id if run else None}
+        out["install"] = {"root": default_root(folder_paths), "hf_token": has_hf_token(), "running": None,
+                          "python": sys.executable, "script": INSTALLER, "windows": os.name == "nt"}
         return web.json_response(out)
 
     async def install(request):
@@ -673,9 +692,6 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         if not ok:
             return err(why, 403)
         body = await body_of(request)
-        run = installing()
-        if run:
-            return web.json_response(run.view())
         root = str(body.get("root") or default_root(folder_paths)).strip().strip('"')
         root = os.path.abspath(os.path.expanduser(root))
         if not os.path.isabs(root) or os.path.dirname(root) == root:
@@ -690,47 +706,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
                 save_hf_token(body["hf_token"])
             except ValueError as e:
                 return err(e)
-        script = INSTALLER
-        cmd = [sys.executable, "-u", script, "--root", root]
-        if only:
-            cmd += ["--only", only]
-        steps = INSTALL_STEPS[only] if only else sum(v for k, v in INSTALL_STEPS.items() if k != "kimodo-text")
-        job = new_job("install")
-
-        def stop():
-            job.cancelled = True
-            _kill_tree(job.proc)
-
-        job.ilog = install_log.new("Installing " + (only or "the rig tools") + " into " + root, "install", stop=stop, log_id=job.id)
-        job.ilog.say("$ " + " ".join(cmd))
-
-        def work():
-            env = dict(os.environ, PYTHONUNBUFFERED="1")
-            extra = {"start_new_session": True} if os.name != "nt" else {}
-            flags = _no_window()
-            if os.name == "nt":
-                flags["creationflags"] = flags.get("creationflags", 0) | subprocess.CREATE_NEW_PROCESS_GROUP
-            job.proc = subprocess.Popen(cmd, cwd=os.path.dirname(script), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                        text=True, bufsize=1, env=env, encoding="utf-8", errors="replace",
-                                        **extra, **flags)
-            ran = 0
-            job.share = 0.0
-            for line in job.proc.stdout:
-                job.say(line)
-                if line.startswith("$ "):
-                    ran += 1
-                    job.share = min(0.97, ran / max(1, steps))
-            code = job.proc.wait()
-            job.proc.stdout.close()
-            if job.cancelled:
-                raise RuntimeError("cancelled")
-            if code != 0:
-                raise RuntimeError("The install stopped: " + " | ".join(l for l in job.log[-5:] if l.strip()))
-            job.share = 1.0
-            return tool_status()
-
-        spawn(job, work)
-        return web.json_response(job.view())
+        return web.json_response(install_command(root, only))
 
     async def autorig(request):
         body = await body_of(request)
