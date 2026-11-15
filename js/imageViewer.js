@@ -42,6 +42,7 @@ import { ParamCurvesMixin } from "./imageViewer_paramCurves.js";
 import { ViewTabsMixin } from "./imageViewer_viewTabs.js";
 import { CodePanelMixin } from "./imageViewer_codePanel.js";
 import { DepsPanelMixin } from "./imageViewer_depsPanel.js";
+import { FarmMixin } from "./imageViewer_farm.js";
 import { MgPanelMixin } from "./imageViewer_mgPanel.js";
 import { CompPanelMixin } from "./imageViewer_compPanel.js";
 import { CompRotoMixin } from "./imageViewer_compRoto.js";
@@ -1657,6 +1658,7 @@ Object.assign(
     ViewTabsMixin,
     CodePanelMixin,
     DepsPanelMixin,
+    FarmMixin,
     MgPanelMixin,
     CompPanelMixin,
     CompRotoMixin,
@@ -1781,6 +1783,12 @@ function _applyViewerOnlyMode(panel) {
 // 
 // ComfyUI extension registration
 // 
+/** "Render on farm…" (the canvas menu, the command): the viewer up, its Farm tab, the render dialog. */
+function _renderOnFarm() {
+    _setViewerPanelToggle(true, { syncDisplay: true });
+    if (globalViewerPanel && globalViewerPanel.farmRenderDialog) globalViewerPanel.farmRenderDialog();
+}
+
 try {
 app.registerExtension({
     name: "ComfyUI.ImageViewer",
@@ -1809,13 +1817,25 @@ app.registerExtension({
         // Settings → Keybinding for rebinding. They act on the visible panel, so
         // a combo assigned there also works with the cursor off the viewer.
         ...viewerCommands(_activeViewerPanel),
+        {
+            id:    "ImageViewer.renderOnFarm",
+            label: "ComfyUI Image Viewer: Render this workflow on the farm",
+            function: () => _renderOnFarm(),
+        },
+        {
+            id:    "ImageViewer.openFarm",
+            label: "ComfyUI Image Viewer: Open the Farm",
+            function: () => { _setViewerPanelToggle(true, { syncDisplay: true }); if (globalViewerPanel) globalViewerPanel.farmOpen(); },
+        },
     ],
     keybindings: viewerKeybindings(),
+    // The Farm (imageViewer_farm.js): this canvas's workflow rendered on the farm's GPU machines.
+    getCanvasMenuItems: () => [null, { content: "Render on farm\u2026", callback: () => _renderOnFarm() }],
     // Comp's node graph in ComfyUI's own bottom panel, beside the canvas (imageViewer_compComfyTab.js).
     bottomPanelTabs: compBottomTabs(() => globalViewerPanel, () => _setViewerPanelToggle(true, { syncDisplay: true })),
     menuCommands: [
         { path: ["Extensions", "ComfyUI Image Viewer"],
-          commands: ["ImageViewer.toggleViewer", "ImageViewer.sendSelectionToViewer"] },
+          commands: ["ImageViewer.toggleViewer", "ImageViewer.sendSelectionToViewer", "ImageViewer.openFarm", "ImageViewer.renderOnFarm"] },
     ],
     actionBarButtons: [
         {

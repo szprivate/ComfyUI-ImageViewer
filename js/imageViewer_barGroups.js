@@ -11,6 +11,7 @@
 //   Comp       Open Comp… · Node Graph · Properties · Layers
 //   Paint      Open Paint… · Layers · Properties · History
 //   Timeline   Open Edit… · Edit · Effects · Inspector · Source · Mixer (all but Edit on a cut's tab)
+//   Farm       Open Farm… · Render this workflow… · Add machines… · Setup
 //
 // Each space's group starts with its "Open …" item (spaceOpen): the tab of that
 // kind that is open, else the last file of that kind opened or saved, else an
@@ -34,9 +35,10 @@ const ICONS = {
     comp: spaceIconSvg("comp"),
     paint: spaceIconSvg("paint"),
     timeline: spaceIconSvg("edit"),
+    farm: spaceIconSvg("farm"),
 };
 // The space each icon stands for, for its accent colour (SPACE_COLORS).
-const ICON_SPACE = { box: "3d", motion: "motion", comp: "comp", paint: "paint", timeline: "edit" };
+const ICON_SPACE = { box: "3d", motion: "motion", comp: "comp", paint: "paint", timeline: "edit", farm: "farm" };
 // ComfyUI's own mark, as its frontend ships it (white on black, as it is drawn).
 const COMFY_LOGO = "/assets/images/comfy-logo-mono.svg";
 
@@ -95,6 +97,13 @@ const GROUPS = [
         { label: "Effects", panel: "editEffects", needs: "cut", run: (p) => p.editTlPanelToggle("editEffects") },
         { label: "Inspector", panel: "editInspector", needs: "cut", run: (p) => p.editTlPanelToggle("editInspector") },
         { label: "Mixer", panel: "editMixer", needs: "cut", run: (p) => p.editTlPanelToggle("editMixer") },
+    ] },
+    // The Farm (imageViewer_farm.js): rented GPU machines rendering this canvas's workflow, in a tab of its own.
+    { id: "farm", title: "Farm", icon: "farm", items: [
+        { label: "Open Farm\u2026", run: (p) => p.farmOpen(), checked: (p) => !!(p.isViewTab && p.vtKindOf() === "farm") },
+        { label: "Render this workflow\u2026", run: (p) => p.farmRenderDialog() },
+        { label: "Add machines\u2026", run: (p) => { const r = p.farmOpen(); if (r.ui) p._farmAddDlg(r); } },
+        { label: "Setup", run: (p) => p.farmOpen("setup") },
     ] },
 ];
 

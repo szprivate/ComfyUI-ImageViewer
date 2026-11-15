@@ -3650,6 +3650,12 @@ try:
                                  send=lambda ev, data: PromptServer.instance.send_sync(ev, data))
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Comp routes not registered: {e}")
+        # The Farm space: rented GPU machines rendering workflows, relayed to agentY's /agentY/pool (farm_routes.py).
+        try:
+            from . import farm_routes
+            farm_routes.register(_safe_add, web=web, path_access=path_access)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Farm routes not registered: {e}")
         # VFX on a clip of the History: LTX-2.5's IC-LoRA workflows (clip_vfx_routes.py; clip_vfx).
         try:
             from . import clip_vfx_routes
