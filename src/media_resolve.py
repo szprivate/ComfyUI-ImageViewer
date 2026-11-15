@@ -971,7 +971,7 @@ def extract_frame(video_path, index, beside=True, folder=None):
 def _video_thumb(path):
     """Temp PNG poster for a video (an <img> in the history strip can't show the
     clip itself), cached per source file. The picture written beside the clip comes
-    first (no decoder needed), then a decoded frame, then ffmpeg (video_poster).
+    first (no decoder needed), then a decoded frame, then PyAV (video_poster).
     None when nothing can make one."""
     try:
         dst = _cache_path(path, "poster")

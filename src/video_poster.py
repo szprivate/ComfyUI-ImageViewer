@@ -7,15 +7,14 @@ An <img> cannot show a clip, so every video tile needs a PNG. It comes from, in 
    which is the point: a Mac without imageio-ffmpeg or OpenCV used to get no tile for a Remotion
    render and the strip showed a broken image;
 2. a frame decoded by the caller (imageio, then OpenCV);
-3. the ``ffmpeg`` program, when one is on the PATH (Homebrew, a system package).
+3. PyAV, which ComfyUI itself depends on, in this process: no program is started (a route may
+   not start one - the ComfyUI registry's rule, and the viewer's).
 
 No ComfyUI in here, so it can be tested on its own.
 """
 from __future__ import annotations
 
 import os
-import shutil
-import subprocess
 
 POSTER_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 MAX_SIDE = 512
@@ -63,19 +62,22 @@ def from_array(arr, dst, max_side=MAX_SIDE):
         return None
 
 
-def from_ffmpeg(video, dst, max_side=MAX_SIDE, timeout=25):
-    exe = shutil.which("ffmpeg")
-    if not exe:
-        return None
+def from_av(video, dst, max_side=MAX_SIDE):
+    """The first frame PyAV decodes, or None (no PyAV, not a film it reads)."""
     try:
-        os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
-        scale = f"scale='min({max_side},iw)':-2"
-        subprocess.run([exe, "-v", "error", "-y", "-i", str(video), "-frames:v", "1", "-vf", scale, str(dst)],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                       timeout=timeout, check=True)
-        return dst if os.path.isfile(dst) and os.path.getsize(dst) > 0 else None
+        import av
     except Exception:
         return None
+    try:
+        with av.open(str(video)) as box:
+            stream = next((s for s in box.streams if s.type == "video"), None)
+            if stream is None:
+                return None
+            for frame in box.decode(stream):
+                return _save_small(frame.to_image(), dst, max_side)
+    except Exception:
+        return None
+    return None
 
 
 def make(video, dst, decode=None, max_side=MAX_SIDE):
@@ -94,4 +96,4 @@ def make(video, dst, decode=None, max_side=MAX_SIDE):
             made = from_array(arr, dst, max_side)
             if made:
                 return made
-    return from_ffmpeg(video, dst, max_side)
+    return from_av(video, dst, max_side)

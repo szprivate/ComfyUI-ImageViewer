@@ -1984,6 +1984,7 @@ export const HistoryMixin = {
             if (this.isMotionTab && this.isMotionTab(key)) return "motion";
             if (this.isCompTab && this.isCompTab(key)) return "comp";
             if (this.isPrevizTab && this.isPrevizTab(key)) return "3d";
+            if (key === "farm:") return "farm";
         } catch (_) { /* a tab half made: no icon */ }
         return "";
     },
