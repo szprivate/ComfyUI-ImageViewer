@@ -22,7 +22,30 @@ except ImportError:  # pragma: no cover
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 SHOTS = os.environ.get("FARM_SHOTS", "")
 
-STUB = """() => {
+
+def _preview(seed, noise):
+    """A half-denoised looking picture (canyon walls, a blue car-shaped blob) as a JPEG data URL."""
+    import base64
+    import io
+    import numpy as np
+    from PIL import Image, ImageFilter
+    rng = np.random.default_rng(seed)
+    w, hgt = 320, 180
+    y, x = np.mgrid[0:hgt, 0:w].astype(np.float32)
+    wall = np.clip(np.abs(x - w / 2) / (w / 2), 0, 1) ** 0.6
+    img = np.zeros((hgt, w, 3), np.float32)
+    img[..., 0] = 120 + 110 * wall + 20 * np.sin(y / 9)
+    img[..., 1] = 60 + 70 * wall
+    img[..., 2] = 40 + 40 * wall + 80 * (1 - y / hgt) * (1 - wall)
+    car = ((x - w * 0.52) / 70) ** 2 + ((y - hgt * 0.68) / 22) ** 2 < 1
+    img[car] = [40, 80, 170]
+    img += rng.normal(0, noise, img.shape)
+    pic = Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.2))
+    buf = io.BytesIO()
+    pic.save(buf, "JPEG", quality=80)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+
+STUB = """(pv) => {
   const real = window.__fetchApi;
   const now = Date.now() / 1000;
   const tasks = (n, done, running, failed) => Array.from({length: n}, (_, i) => ({i, seed: 1000 + i,
@@ -35,10 +58,12 @@ STUB = """() => {
       {id: 'm1', name: 'vast-1', provider: 'vast', gpu: 'RTX 5090', gpu_seen: 'NVIDIA GeForce RTX 5090', state: 'ready',
        task: {job: 'j1', i: 6}, state_note: 'GLC canyon turntable #7', usd_per_hour: 0.47, uptime_s: 2860, cost_usd: 0.37,
        done: 4, failed: 0, region: 'Germany, DE', url: 'http://1.2.3.4:40123', created: now - 3000,
+       live: {started: true, node: '3', class_type: 'KSampler', value: 12, max: 30, nodes_done: 5, nodes_total: 11, preview: pv[0]},
        parity: {ok: true, missing_nodes: [], missing_models: []}},
       {id: 'm2', name: 'vast-2', provider: 'vast', gpu: 'RTX 5090', gpu_seen: 'NVIDIA GeForce RTX 5090', state: 'ready',
        task: {job: 'j1', i: 7}, state_note: 'GLC canyon turntable #8', usd_per_hour: 0.51, uptime_s: 2790, cost_usd: 0.40,
-       done: 3, failed: 1, region: 'Sweden, SE', url: 'http://5.6.7.8:40007', created: now - 2900, parity: null},
+       done: 3, failed: 1, region: 'Sweden, SE', url: 'http://5.6.7.8:40007', created: now - 2900, parity: null,
+       live: {started: true, node: '3', class_type: 'KSampler', value: 26, max: 30, nodes_done: 5, nodes_total: 11, preview: pv[1]}},
       {id: 'm3', name: 'runpod-1', provider: 'runpod', gpu: 'RTX PRO 6000', state: 'starting', usd_per_hour: 0.83,
        uptime_s: 95, cost_usd: 0.02, done: 0, failed: 0, region: 'EU data centres', url: '', created: now - 100,
        parity: {ok: false, missing_nodes: ['SZ_GetPath'], missing_models: ['diffusion_models/z_image_turbo_bf16.safetensors']}},
@@ -133,7 +158,7 @@ class FarmBrowserTests(unittest.TestCase):
         pg.on("pageerror", lambda e: self.errors.append(str(e)))
         pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
         pg.wait_for_function("window.__ready===true", timeout=20000)
-        pg.evaluate(STUB)
+        pg.evaluate(STUB, [_preview(1, 70), _preview(2, 22)])
         pg.evaluate("""async () => {
             const { app } = await import('/scripts/app.js');
             app.graphToPrompt = async () => ({ output: {
@@ -165,6 +190,10 @@ class FarmBrowserTests(unittest.TestCase):
         self.assertEqual(cards[3]["acts"], ["Open ComfyUI", "Check workflow", "Remove"])
         spend = pg.evaluate("() => window.__panel.viewport.querySelector('.fm-spend-text').textContent")
         self.assertEqual(spend, "Today $3.12 of $20.00 · $1.81/h running")
+        live = pg.evaluate("""() => { const c = window.__panel.viewport.querySelector('.fm-card[data-id="m1"] .fm-live');
+            return {text: c.querySelector('.fm-live-text').textContent, img: !!c.querySelector('img.fm-live-img'),
+                    w: c.querySelector('.fm-live-fill').style.width}; }""")
+        self.assertEqual(live, {"text": "KSampler · step 12 of 30 · node 6 of 11", "img": True, "w": "49%"})
         tab = pg.evaluate("() => { const t = window.__panel.container.querySelector('.tab[data-tab=\"farm:\"]'); return t && t.dataset.space; }")
         self.assertEqual(tab, "farm")
         self.assertTrue(pg.evaluate("() => !!window.__panel.container.querySelector('#bar-group-farm')"))
@@ -182,6 +211,8 @@ class FarmBrowserTests(unittest.TestCase):
         self.assertEqual(chips.count("st-done"), 7)
         self.assertEqual(chips.count("st-running"), 2)
         self.assertEqual(chips.count("st-failed"), 1)
+        caps = pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-job[data-id=\"j1\"] .fm-livecap')].map((c) => c.textContent)")
+        self.assertEqual(caps, ["#7 · vast-1", "#8 · vast-2"])
         self.shot(pg, "farm-queue.png")
         pg.evaluate("() => window.__panel.viewport.querySelector('.fm-render').click()")
         pg.wait_for_selector("comfyui-image-viewer-panel .fm-render-dlg", state="attached")

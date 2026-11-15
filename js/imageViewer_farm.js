@@ -46,6 +46,23 @@ export function spendLevel(spend) {
     return { share, warn: share >= 0.8, over: cap > 0 && today >= cap };
 }
 
+/** How far a render is, 0..1: the nodes done of all, the running node counted by its steps. */
+export function farmLiveShare(live) {
+    const total = Math.max(1, Number(live.nodes_total) || 1);
+    const step = live.max ? Math.min(1, (Number(live.value) || 0) / live.max) : 0;
+    return Math.min(1, ((Number(live.nodes_done) || 0) + (live.node ? step : 0)) / total);
+}
+
+/** "KSampler · step 12 of 30 · node 3 of 9". */
+export function farmLiveText(live) {
+    if (!live.started) return "Waiting to start";
+    const parts = [];
+    if (live.class_type || live.node) parts.push(live.class_type || `node ${live.node}`);
+    if (live.max) parts.push(`step ${live.value} of ${live.max}`);
+    parts.push(`node ${Math.min((live.nodes_done || 0) + (live.node ? 1 : 0), live.nodes_total || 0)} of ${live.nodes_total || 0}`);
+    return parts.join(" · ");
+}
+
 export const FarmMixin = {
 
     // ── the tab kind ─────────────────────────────────────────────────────────
@@ -252,7 +269,9 @@ export const FarmMixin = {
         fact("Cost", m.provider === "url" && !m.cost_usd ? "—" : money(m.cost_usd));
         fact("Renders", `${m.done || 0}` + (m.failed ? ` · ${m.failed} failed` : ""));
         if (m.region) fact("Where", m.region);
-        card.append(head, gpu, stateLine, facts);
+        card.append(head, gpu, stateLine);
+        if (m.live) card.append(this._farmLive(rec, m.live));
+        card.append(facts);
         if (m.parity) {
             const p = m.parity;
             const badge = h("div", `fm-parity ${p.ok ? "ok" : "bad"}`,
@@ -299,6 +318,29 @@ export const FarmMixin = {
         return card;
     },
 
+    /** The render a machine runs, as its feed tells it: the newest preview, the node and its steps, nodes done. */
+    _farmLive(rec, live, small = false) {
+        const h = rec.ui.h;
+        const box = h("div", `fm-live${small ? " small" : ""}`);
+        if (live.preview) {
+            const img = h("img", "fm-live-img");
+            img.src = live.preview;
+            img.alt = "preview";
+            img.draggable = false;
+            box.append(img);
+        } else if (!small) box.append(h("div", "fm-live-img none", live.started ? "No preview from this machine" : "Waiting to start…"));
+        if (!live.started) return box;
+        const share = farmLiveShare(live);
+        const bar = h("div", "fm-live-bar");
+        const fill = h("div", "fm-live-fill");
+        fill.style.width = `${Math.round(share * 100)}%`;
+        bar.append(fill);
+        box.append(bar);
+        if (!small) box.append(h("div", "fm-live-text", farmLiveText(live)));
+        box.title = farmLiveText(live);
+        return box;
+    },
+
     _farmQueue(rec) {
         const ui = rec.ui, h = ui.h, d = rec.data;
         ui.queue.textContent = "";
@@ -338,7 +380,19 @@ export const FarmMixin = {
             if (j.state === "running" || j.state === "queued") act("Cancel", "", { action: "cancel", id: j.id });
             if ((j.counts && (j.counts.failed || j.counts.cancelled))) act("Retry", "", { action: "retry", id: j.id });
             if (j.state !== "running" && j.state !== "queued") act("Remove", "fm-quiet", { action: "remove_job", id: j.id });
-            row.append(top, prog, chips, acts);
+            row.append(top, prog, chips);
+            const running = (d.machines || []).filter((m) => m.task && m.task.job === j.id && m.live)
+                .sort((a, b) => a.task.i - b.task.i);
+            if (running.length) {
+                const strip = h("div", "fm-livestrip");
+                for (const m of running) {
+                    const cell = h("div", "fm-livecell");
+                    cell.append(this._farmLive(rec, m.live, true), h("div", "fm-livecap", `#${m.task.i + 1} · ${m.name}`));
+                    strip.append(cell);
+                }
+                row.append(strip);
+            }
+            row.append(acts);
             const err = (j.tasks || []).find((t) => t.state === "failed" && t.error);
             if (err) row.append(h("div", "fm-card-err", `Render ${err.i + 1}: ${err.error}`));
             ui.queue.append(row);
