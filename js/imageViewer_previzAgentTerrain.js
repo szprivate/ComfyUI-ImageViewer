@@ -332,50 +332,113 @@ export const PrevizAgentTerrainMixin = {
             if (y == null) throw new Error(`${it.name} is off ${ter.name} at x ${Math.round(x * 100) / 100}, z ${Math.round(z * 100) / 100}`);
             return y;
         };
+        const { THREE } = this._modelView().libs;
         const tilt = a.tilt !== false;
         const lift = Number.isFinite(Number(a.clearance)) ? Number(a.clearance) : 0.01;
+        // smooth: the tilt averaged over that many frames either side (bumps and steps in the ground
+        // smaller than the window do not shake it); max_tilt: no more than that many degrees off level.
+        const smooth = Math.max(0, Math.round(Number(a.smooth) || 0));
+        const maxTilt = Number.isFinite(Number(a.max_tilt)) && Number(a.max_tilt) >= 0 ? Number(a.max_tilt) : null;
         const local = this._asaLocalBox(scene, it);
         if (!local) throw new Error(`${it.name} has nothing to measure (not loaded yet?)`);
         this.previzSnapshot(`ground ${it.name}`);
         const keyed = (S.baseTrack(it, "position") || []).length > 0;
-        const out = [];
-        const place = (f) => {
-            const pos = S.currentValue(scene, it, "position", f);
-            const rot = S.currentValue(scene, it, "rotation", f);
-            const r = this._asaGroundPose(it, pos, rot, local, groundAt, tilt, lift);
-            out.push({ frame: f, y: r.position[1], pitch: r.pitch, roll: r.roll });
-            return r;
-        };
         const round = (v) => v.map((x) => Math.round(x * 1e4) / 1e4);
+        const D = Math.PI / 180;
+        const quatOf = (rot) => new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0] * D, rot[1] * D, rot[2] * D, "XYZ"));
+        let frames;
+        if (!keyed) frames = [Math.round(this.currentFrame || 0)];
+        else {
+            const step = Math.round(Number(a.step) || 0);
+            const keys = S.baseTrack(it, "position");
+            const set = new Set(keys.map((k) => k.f));
+            if (tilt) for (const k of S.baseTrack(it, "rotation") || []) set.add(k.f);
+            if (step > 0) for (let f = keys[0].f; f < keys[keys.length - 1].f; f += step) set.add(f);
+            frames = [...set].sort((x, y) => x - y);
+        }
+        // Measured on the curves as they stand, then keyed: a key put first would move what is measured after it.
+        const base = frames.map((f) => {
+            const pos = S.currentValue(scene, it, "position", f), rot = S.currentValue(scene, it, "rotation", f);
+            // Level first (only its heading kept, unless keep_turn): a second ground - after the terrain
+            // changed - then starts from the car standing level, not from the lean the first one gave it.
+            const q0 = tilt && !a.keep_turn ? this._asaHeadingOnly(quatOf(rot)) : quatOf(rot);
+            const lv = tilt && !a.keep_turn ? this._asaNearEuler(q0, rot) : rot;
+            return { f, pos, rot, q0, qt: tilt ? this._asaGroundTilt(it, pos, lv, local, groundAt) : new THREE.Quaternion() };
+        });
+        if (tilt && smooth > 0 && base.length > 1) {
+            // Averaged by time, not by key: every frame of the window, the tilt there read off the nearest measured frames.
+            const tiltAt = (f) => {
+                let i = 0;
+                while (i < base.length - 1 && base[i + 1].f <= f) i++;
+                if (i >= base.length - 1 || f <= base[0].f) return base[f <= base[0].f ? 0 : base.length - 1].qt;
+                const t = (f - base[i].f) / (base[i + 1].f - base[i].f);
+                return base[i].qt.clone().slerp(base[i + 1].qt, t);
+            };
+            const sm = base.map((b) => {
+                const acc = new THREE.Vector4();
+                for (let d = -smooth; d <= smooth; d++) {
+                    const q = tiltAt(b.f + d);
+                    const sgn = q.w < 0 ? -1 : 1;
+                    acc.x += q.x * sgn; acc.y += q.y * sgn; acc.z += q.z * sgn; acc.w += q.w * sgn;
+                }
+                return new THREE.Quaternion(acc.x, acc.y, acc.z, acc.w).normalize();
+            });
+            base.forEach((b, i) => { b.qt = sm[i]; });
+        }
+        if (maxTilt != null) for (const b of base) {
+            const ang = 2 * Math.acos(Math.min(1, Math.abs(b.qt.w))) / D;
+            if (ang > maxTilt && ang > 1e-6) b.qt = new THREE.Quaternion().slerp(b.qt, maxTilt / ang);
+        }
+        // Euler angles chosen frame by frame nearest the last ones: of the two XYZ triples of a turn, the
+        // one that keeps the curves continuous, so a car heading near +-90 degrees does not spin between keys.
+        let prev = null;
+        const want = base.map((b) => {
+            const q = b.qt.clone().multiply(b.q0);
+            const y = this._asaGroundLift(it, b.pos, q, local, groundAt, lift);
+            const rot = this._asaNearEuler(q, prev || b.rot);
+            prev = rot;
+            return { f: b.f, position: [b.pos[0], y, b.pos[2]], rotation: rot };
+        });
         if (!keyed) {
-            const r = place(Math.round(this.currentFrame || 0));
+            const r = want[0];
             it.position = round(r.position);
             if (tilt && !(S.baseTrack(it, "rotation") || []).length) it.rotation = round(r.rotation);
-            else if (tilt) S.setKeyframe(it, "rotation", Math.round(this.currentFrame || 0), round(r.rotation));
+            else if (tilt) S.setKeyframe(it, "rotation", r.f, round(r.rotation));
         } else {
-            const step = Math.round(Number(a.step) || 0);
-            const keys = S.baseTrack(it, "position").slice();
-            const rkeys = (S.baseTrack(it, "rotation") || []).slice();
-            const frames = new Set(keys.map((k) => k.f));
-            if (tilt) for (const k of rkeys) frames.add(k.f);
-            if (step > 0) {
-                for (let f = keys[0].f; f < keys[keys.length - 1].f; f += step) frames.add(f);
-            }
-            // Measured on the curves as they stand, then keyed: a key put first would move what is measured after it.
-            const want = [...frames].sort((x, y) => x - y).map((f) => [f, place(f)]);
-            for (const [f, r] of want) {
-                const k = keys.find((x) => x.f === f);
-                S.setKeyframe(it, "position", f, round(r.position), k ? k.ease : "linear");
+            const keys = S.baseTrack(it, "position").slice(), rkeys = (S.baseTrack(it, "rotation") || []).slice();
+            for (const r of want) {
+                const k = keys.find((x) => x.f === r.f);
+                S.setKeyframe(it, "position", r.f, round(r.position), k ? k.ease : "linear");
                 if (tilt) {
-                    const rk = rkeys.find((x) => x.f === f);
-                    S.setKeyframe(it, "rotation", f, round(r.rotation), rk ? rk.ease : "linear");
+                    const rk = rkeys.find((x) => x.f === r.f);
+                    S.setKeyframe(it, "rotation", r.f, round(r.rotation), rk ? rk.ease : "linear");
                 }
             }
         }
         this.previzChanged();
-        const pitches = out.map((o) => Math.abs(o.pitch)), rolls = out.map((o) => Math.abs(o.roll));
-        return { item: it.name, terrain: ter ? ter.name : null, keyed, tilt, frames: out.length, first: out[0], last: out[out.length - 1],
-                 most_pitch: Math.max(...pitches), most_roll: Math.max(...rolls) };
+        // Read back from the keys as they now play, every frame (between keys too): what the car really does.
+        const f0 = frames[0], f1 = frames[frames.length - 1];
+        let mostPitch = 0, mostRoll = 0, mostTilt = 0, mostDip = Infinity, worstAt = f0;
+        const lean = (q) => {
+            const xa = new THREE.Vector3(1, 0, 0).applyQuaternion(q), za = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+            const ya = new THREE.Vector3(0, 1, 0).applyQuaternion(q);
+            return { pitch: Math.asin(Math.max(-1, Math.min(1, za.y))) / D, roll: Math.asin(Math.max(-1, Math.min(1, xa.y))) / D,
+                     tilt: Math.acos(Math.max(-1, Math.min(1, ya.y))) / D };
+        };
+        for (let f = f0; f <= f1; f++) {
+            const pos = S.currentValue(scene, it, "position", f), rot = S.currentValue(scene, it, "rotation", f);
+            const l = lean(quatOf(rot));
+            mostPitch = Math.max(mostPitch, Math.abs(l.pitch)); mostRoll = Math.max(mostRoll, Math.abs(l.roll));
+            if (l.tilt > mostTilt) { mostTilt = l.tilt; worstAt = f; }
+            mostDip = Math.min(mostDip, this._asaGroundLift(it, pos, quatOf(rot), local, groundAt, 0, true));
+        }
+        const r1 = (v) => Math.round(v * 10) / 10;
+        const out = { item: it.name, terrain: ter ? ter.name : null, keyed, tilt, smooth, max_tilt: maxTilt, frames: want.length,
+                      first: { frame: want[0].f, y: Math.round(want[0].position[1] * 100) / 100 }, last: { frame: want[want.length - 1].f, y: Math.round(want[want.length - 1].position[1] * 100) / 100 },
+                      most_pitch: r1(mostPitch), most_roll: r1(mostRoll), most_tilt: r1(mostTilt), most_tilt_at: worstAt,
+                      lowest_clearance: Math.round(mostDip * 1000) / 1000 };
+        if (mostTilt > 25) out.warning = `it leans ${r1(mostTilt)} degrees at frame ${worstAt}: the ground is rough there - smooth it, or ground again with smooth (e.g. 6) or max_tilt`;
+        return out;
     },
 
     /**
@@ -410,40 +473,36 @@ export const PrevizAgentTerrainMixin = {
         return m.multiply(new THREE.Matrix4().makeTranslation(-pv[0], -pv[1], -pv[2]));
     },
 
-    /**
-     * Where the item stands at one frame: turned to the ground under its ends (keeping its heading
-     * and any turn of its own), then lifted so its whole underside clears the ground.
-     */
-    _asaGroundPose(it, pos, rot, local, groundAt, tilt, lift) {
+    /** The turn that lays the item's ends onto the ground under them (identity where the ground gives none). */
+    _asaGroundTilt(it, pos, rot, local, groundAt) {
         const { THREE } = this._modelView().libs;
         const D = Math.PI / 180;
         const q0 = new THREE.Quaternion().setFromEuler(new THREE.Euler(rot[0] * D, rot[1] * D, rot[2] * D, "XYZ"));
-        let q = q0.clone();
-        let pitch = 0, roll = 0;
-        if (tilt) {
-            const M = this._asaItemMatrix(THREE, it, pos, rot, q0);
-            const c = local.getCenter(new THREE.Vector3());
-            const at = (x, z) => new THREE.Vector3(x, local.min.y, z).applyMatrix4(M);
-            const ends = { xp: at(local.max.x, c.z), xm: at(local.min.x, c.z), zp: at(c.x, local.max.z), zm: at(c.x, local.min.z) };
-            const flat = (v) => new THREE.Vector3(v.x, 0, v.z);
-            const onGround = (v) => new THREE.Vector3(v.x, groundAt(v.x, v.z), v.z);
-            const ax = onGround(ends.xp).sub(onGround(ends.xm)), az = onGround(ends.zp).sub(onGround(ends.zm));
-            const fx = flat(ends.xp).sub(flat(ends.xm)), fz = flat(ends.zp).sub(flat(ends.zm));
-            if (ax.lengthSq() > 1e-8 && az.lengthSq() > 1e-8 && fx.lengthSq() > 1e-8 && fz.lengthSq() > 1e-8) {
-                // The basis the ground gives (x along the item's x ends, up square to both) against the flat one.
-                const basis = (x, z) => {
-                    x = x.clone().normalize();
-                    const y = new THREE.Vector3().crossVectors(z, x).normalize();
-                    const zz = new THREE.Vector3().crossVectors(x, y);
-                    return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, zz));
-                };
-                const qTilt = basis(ax, az).multiply(basis(fx, fz).invert());
-                q = qTilt.multiply(q0);
-                pitch = Math.atan2(az.y, Math.hypot(az.x, az.z)) / D;
-                roll = Math.atan2(ax.y, Math.hypot(ax.x, ax.z)) / D;
-            }
-        }
-        // Lowest clearance of the underside (a 5 x 5 grid) once turned; then up or down by that much.
+        const M = this._asaItemMatrix(THREE, it, pos, rot, q0);
+        const c = local.getCenter(new THREE.Vector3());
+        const at = (x, z) => new THREE.Vector3(x, local.min.y, z).applyMatrix4(M);
+        const ends = { xp: at(local.max.x, c.z), xm: at(local.min.x, c.z), zp: at(c.x, local.max.z), zm: at(c.x, local.min.z) };
+        const flat = (v) => new THREE.Vector3(v.x, 0, v.z);
+        const onGround = (v) => new THREE.Vector3(v.x, groundAt(v.x, v.z), v.z);
+        const ax = onGround(ends.xp).sub(onGround(ends.xm)), az = onGround(ends.zp).sub(onGround(ends.zm));
+        const fx = flat(ends.xp).sub(flat(ends.xm)), fz = flat(ends.zp).sub(flat(ends.zm));
+        if (!(ax.lengthSq() > 1e-8 && az.lengthSq() > 1e-8 && fx.lengthSq() > 1e-8 && fz.lengthSq() > 1e-8)) return new THREE.Quaternion();
+        // The basis the ground gives (x along the item's x ends, up square to both) against the flat one.
+        const basis = (x, z) => {
+            x = x.clone().normalize();
+            const y = new THREE.Vector3().crossVectors(z, x).normalize();
+            const zz = new THREE.Vector3().crossVectors(x, y);
+            return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, zz));
+        };
+        return basis(ax, az).multiply(basis(fx, fz).invert());
+    },
+
+    /**
+     * The height that puts the item's whole underside (a 5 x 5 grid) `lift` above the ground, turned
+     * by q; with `clearance` true the lowest clearance itself (negative = in the ground).
+     */
+    _asaGroundLift(it, pos, q, local, groundAt, lift, clearance = false) {
+        const { THREE } = this._modelView().libs;
         const M = this._asaItemMatrix(THREE, it, pos, null, q);
         let worst = Infinity;
         for (let i = 0; i <= 4; i++) for (let j = 0; j <= 4; j++) {
@@ -451,14 +510,29 @@ export const PrevizAgentTerrainMixin = {
                                         local.min.z + (local.max.z - local.min.z) * j / 4).applyMatrix4(M);
             worst = Math.min(worst, p.y - groundAt(p.x, p.z));
         }
+        return clearance ? worst : pos[1] - worst + lift;
+    },
+
+    /** q with only its turn about Y left: the way its nose (+Z, else +X) points, level. */
+    _asaHeadingOnly(q) {
+        const { THREE } = this._modelView().libs;
+        const z = new THREE.Vector3(0, 0, 1).applyQuaternion(q);
+        let yaw;
+        if (Math.hypot(z.x, z.z) > 1e-3) yaw = Math.atan2(z.x, z.z);
+        else { const x = new THREE.Vector3(1, 0, 0).applyQuaternion(q); yaw = Math.atan2(-x.z, x.x); }
+        return new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    },
+
+    /** XYZ Euler degrees of q nearest `ref`: both triples of the turn, each wrapped to it, the closer one. */
+    _asaNearEuler(q, ref) {
+        const { THREE } = this._modelView().libs;
+        const D = Math.PI / 180;
         const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
-        // Euler angles nearest the old ones (no 360 jumps between keys).
+        const a = [e.x / D, e.y / D, e.z / D], b = [a[0] + 180, 180 - a[1], a[2] + 180];
         const near = (v, old) => v + 360 * Math.round((old - v) / 360);
-        return {
-            position: [pos[0], pos[1] - worst + lift, pos[2]],
-            rotation: [near(e.x / D, rot[0]), near(e.y / D, rot[1]), near(e.z / D, rot[2])],
-            pitch: Math.round(pitch * 10) / 10, roll: Math.round(roll * 10) / 10,
-        };
+        const wa = a.map((v, i) => near(v, ref[i])), wb = b.map((v, i) => near(v, ref[i]));
+        const dist = (w) => w.reduce((s, v, i) => s + Math.abs(v - ref[i]), 0);
+        return dist(wb) < dist(wa) ? wb : wa;
     },
 
     /**

@@ -185,6 +185,54 @@ class AgentTerrainTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_a_car_heading_sideways_on_rough_ground_does_not_tumble_and_smooth_steadies_it(self):
+        pg = self._page()
+        try:
+            # Rough ground, a car turned 90 degrees (XYZ Euler near its lock) driving along x.
+            self._ask(pg, "terrain_add", name="Rough", size=[200, 80], height=14, seed=11, roughness=0.9)
+            self._ask(pg, "add_shape", type="group", name="Car", rotation=[0, 90, 0])
+            self._ask(pg, "add_shape", type="box", name="Body", parent="Car", position=[0, -1, 0], scale=[2, 2, 4])
+            self._ask(pg, "key_set", item="Car", prop="position", keys=[
+                {"frame": 0, "value": [-60, 0, 0], "ease": "linear"}, {"frame": 120, "value": [60, 0, 0], "ease": "linear"}])
+            READ = """() => { const P = window.__panel, v = P._modelView(), { THREE } = v.libs;
+                const car = P.previzScene().items.find((i) => i.name === 'Car'); const out = [];
+                for (let f = 0; f <= 120; f++) { v.applyFrame(f);
+                    out.push(v._entries.get(car.id).root.getWorldQuaternion(new THREE.Quaternion()).toArray()); }
+                return out; }"""
+            import math
+            def angle(a, b):
+                return 2 * math.degrees(math.acos(min(1, abs(sum(x * y for x, y in zip(a, b))))))
+            def slerp_mid(a, b):
+                if sum(x * y for x, y in zip(a, b)) < 0:
+                    b = [-x for x in b]
+                m = [(x + y) / 2 for x, y in zip(a, b)]
+                n = math.sqrt(sum(x * x for x in m))
+                return [x / n for x in m]
+            def spin(qs):   # how far a frame between two keys is from the turn halfway between them
+                return max(angle(qs[f], slerp_mid(qs[f - 1], qs[f + 1])) for f in range(1, 120, 2))
+            def jumps(qs):
+                return max(angle(a, b) for a, b in zip(qs, qs[1:]))
+            raw = self._ask(pg, "ground", item="Car", step=2)
+            q_raw = pg.evaluate(READ)
+            self.assertLess(raw["most_tilt"], 45, raw)          # read back from the keys: no tumble
+            self.assertLess(spin(q_raw), 3)                     # no spin between keys
+            self.assertIn("lowest_clearance", raw)
+            self.assertIn("warning", raw)                       # rough: it says so
+            sm = self._ask(pg, "ground", item="Car", step=2, smooth=6, max_tilt=8)
+            q_sm = pg.evaluate(READ)
+            self.assertLessEqual(sm["most_tilt"], 8.5, sm)
+            self.assertLess(jumps(q_sm), jumps(q_raw))
+            self.assertLess(spin(q_sm), 3)
+            self.assertNotIn("warning", sm)
+            # Grounded again (as after a terrain change), it starts level: the lean does not add up.
+            again = self._ask(pg, "ground", item="Car", step=2, smooth=6, max_tilt=8)
+            self.assertAlmostEqual(again["most_tilt"], sm["most_tilt"], delta=0.5)
+            self.assertLess(max(angle(a, b) for a, b in zip(pg.evaluate(READ), q_sm)), 1)
+            self.assertEqual(sm["smooth"], 6)
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_the_agent_builds_a_valley_sculpts_scatters_and_erodes_it(self):
         pg = self._page()
         try:
