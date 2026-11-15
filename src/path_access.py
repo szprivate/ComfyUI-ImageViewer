@@ -446,6 +446,24 @@ def may_edit(request):
     return True, ""
 
 
+INSTALL_REMOTE_ENV = "IMAGE_VIEWER_INSTALL_REMOTE"
+
+
+def may_install(request):
+    """(allowed, reason) for a request that installs software on this machine
+    (the 3D space's rig tools). Only from the ComfyUI machine itself, as the
+    folder list (`may_edit`): with ComfyUI run with --listen, another machine
+    that can open its page must not be able to set up environments and run
+    pip here. IMAGE_VIEWER_INSTALL_REMOTE=1 allows it from others."""
+    ok, why = same_origin(request)
+    if not ok:
+        return ok, why
+    if not _is_local(request) and not _truthy(INSTALL_REMOTE_ENV):
+        return False, ("Installing is done from the ComfyUI machine itself "
+                       f"(set {INSTALL_REMOTE_ENV}=1 there to allow it from others).")
+    return True, ""
+
+
 def _status(path):
     if not path:
         return "invalid"

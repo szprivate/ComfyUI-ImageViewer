@@ -669,6 +669,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         return web.json_response(out)
 
     async def install(request):
+        ok, why = path_access.may_install(request)
+        if not ok:
+            return err(why, 403)
         body = await body_of(request)
         run = installing()
         if run:

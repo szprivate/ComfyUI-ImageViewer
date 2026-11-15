@@ -482,6 +482,24 @@ class RigRoutes(unittest.TestCase):
             await asyncio.sleep(0.05)
         return job
 
+    def test_install_only_from_the_comfyui_machine(self):
+        """Installing runs pip on this machine: another machine that can open the page may not ask for it."""
+        pa = sys.modules[self.pkg + ".path_access"]
+        old = (pa._is_local, os.environ.pop(pa.INSTALL_REMOTE_ENV, None), self.routes.INSTALLER)
+        pa._is_local = lambda request: False
+        self.routes.INSTALLER = os.path.join(self.tmp, "must_not_run.py")
+        try:
+            async def go(c):
+                r = await c.post("/imageviewer/rig/install", json={"root": os.path.join(self.tmp, "remote")})
+                return r.status, await r.json()
+            status, out = self.run_c(go)
+        finally:
+            pa._is_local, self.routes.INSTALLER = old[0], old[2]
+            if old[1] is not None:
+                os.environ[pa.INSTALL_REMOTE_ENV] = old[1]
+        self.assertEqual(status, 403, out)
+        self.assertIn(pa.INSTALL_REMOTE_ENV, out["error"])
+
     def test_install_runs_the_installer_and_keeps_the_token(self):
         fake = os.path.join(self.tmp, "fake_install.py")
         with open(fake, "w") as fh:
