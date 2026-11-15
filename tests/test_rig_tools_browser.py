@@ -227,13 +227,15 @@ class RigToolsBrowserTests(unittest.TestCase):
                 "skintokens": {"ready": ready and getattr(self, "skin_ready", False), "why": "SkinTokens is not set up"},
                 "kimodo": {"ready": ready, "why": "" if ready else "Kimodo is not set up", "model": "Kimodo-SOMA-RP-v1.2"},
                 "posetrack": {"ready": ready, "why": "" if ready else "Motion from video is not set up"},
-                "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None}}))
+                "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None,
+                            "python": "C:/Comfy/python.exe", "script": "C:/Comfy/custom_nodes/viewer/scripts/rig/install_rig_tools.py",
+                            "windows": True}}))
 
         def install(route, request):
             self.requests.append(("install", json.loads(request.post_data or "{}")))
-            state["install_polls"] = 0
             route.fulfill(status=200, content_type="application/json",
-                          body=json.dumps({"job": "inst", "kind": "install", "state": "running", "log": [], "share": 0}))
+                          body=json.dumps({"command": "python -u install_rig_tools.py --root D:/AI/rigtools",
+                                           "root": "D:/AI/rigtools", "only": None}))
 
         def start(kind):
             def handler(route, request):
@@ -252,15 +254,6 @@ class RigToolsBrowserTests(unittest.TestCase):
             return handler
 
         def job(route, request):
-            if "job=inst" in request.url:
-                state["install_polls"] += 1
-                if state["install_polls"] < 3:
-                    body = {"job": "inst", "state": "running", "log": ["$ pip install torch"], "share": 0.4}
-                else:
-                    self.installed = True
-                    body = {"job": "inst", "state": "done", "log": ["== written"], "share": 1.0}
-                route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
-                return
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps({"job": "x", "state": "done", "log": ["done"], "result": state["result"]}))
 
@@ -473,17 +466,23 @@ class RigToolsBrowserTests(unittest.TestCase):
         box.wait_for(state="detached", timeout=30000)
 
     def test_install_from_the_auto_rig_dialog(self):
-        """Not set up: Auto-rig… offers the install, which runs and then opens the Auto-rig dialog."""
+        """Not set up: Auto-rig… shows the install command to run; Check again opens Auto-rig once it is set up.
+        The viewer never runs the installer itself (the registry's standards forbid pip at run time)."""
         self.installed = False
         pg = self.page()
         try:
             pg.evaluate(OPEN, ["statue.glb", "Statue"])
             self._menu(pg, "Auto-rig")
-            box = pg.locator('.rd-box[aria-label="Install AI rigging / motion models"]')
+            box = pg.locator('.rd-box[aria-label="Set up AI rigging / motion models"]')
             box.wait_for(state="visible", timeout=10000)
             text = box.inner_text()
+            command = box.locator(".rig-install-cmd").first.input_value()
             self.assertEqual(box.locator('input[type="password"]').count(), 1)
             box.locator('input[type="password"]').fill("hf_" + "b" * 30)
+            box.locator("button.rd-go").click()
+            box.locator(".rd-message", has_text="Not set up yet").wait_for(state="visible", timeout=10000)
+            still = box.count()
+            self.installed = True
             box.locator("button.rd-go").click()
             rig = pg.locator('.rd-box[aria-label="Auto-rig"]')
             rig.wait_for(state="visible", timeout=20000)
@@ -492,6 +491,9 @@ class RigToolsBrowserTests(unittest.TestCase):
             pg.close()
             self.installed = True
         self.assertIn("not set up on this machine", text)
+        self.assertIn("install_rig_tools.py", command)
+        self.assertIn("--root D:/AI/rigtools", command)
+        self.assertEqual(still, 1)                            # not ready yet: the dialog stays
         body = [b for k, b in self.requests if k == "install"][0]
         self.assertEqual(body["root"], "D:/AI/rigtools")                # the server's suggestion
         self.assertEqual(body["hf_token"], "hf_" + "b" * 30)

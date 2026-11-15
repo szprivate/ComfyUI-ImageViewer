@@ -31,7 +31,7 @@ What a Send node shows is written to ComfyUI's temp folder as `ImageViewer_*` fi
 
 ## Install log
 
-Anything the viewer installs or downloads opens the install log, a small window that shows the output as it happens: the rig tools' installer (pip, git and the model downloads it runs), the model files Paint and Comp AI nodes fetch, and SAM 3D Body's weights. One window serves all of them. It follows the newest line until you scroll up, can copy the log or the log file's path, and its Stop button ends the install. Closing the window leaves the install running; **Rig ▸ Install log…** brings it back, with a list of the earlier ones since ComfyUI started.
+Any model download the viewer makes opens the install log, a small window that shows the output as it happens: the model files Paint and Comp AI nodes fetch, and SAM 3D Body's weights. One window serves all of them. It follows the newest line until you scroll up, can copy the log or the log file's path, and its Stop button ends the download. Closing the window leaves the download running; **Rig ▸ Install log…** brings it back, with a list of the earlier ones since ComfyUI started.
 
 A model a node pack downloads by itself on its first run is not in it: that shows in ComfyUI's console.
 
