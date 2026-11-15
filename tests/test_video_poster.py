@@ -51,6 +51,31 @@ class PosterTests(unittest.TestCase):
         # no poster, a decoder that finds nothing and (on a CI box) no usable ffmpeg for a non-film
         self.assertIsNone(vp.make(self.mp4, self.dst, decode=lambda v, i: None))
 
+    def test_pyav_reads_the_first_frame_when_nothing_else_does(self):
+        try:
+            import av
+            import numpy as np
+        except ImportError:
+            self.skipTest("PyAV not installed")
+        film = os.path.join(self.d, "made.mp4")
+        with av.open(film, "w") as box:
+            st = box.add_stream("mpeg4", rate=24)
+            st.width, st.height, st.pix_fmt = 64, 48, "yuv420p"
+            for _ in range(3):
+                fr = av.VideoFrame.from_ndarray(np.full((48, 64, 3), 120, dtype="uint8"), format="rgb24")
+                for pkt in st.encode(fr):
+                    box.mux(pkt)
+            for pkt in st.encode():
+                box.mux(pkt)
+        out = vp.make(film, self.dst, decode=lambda v, i: None)
+        self.assertEqual(out, self.dst)
+        with Image.open(self.dst) as im:
+            self.assertEqual(im.size, (64, 48))
+
+    def test_no_program_is_started(self):
+        src = open(os.path.join(os.path.dirname(__file__), "..", "src", "video_poster.py"), encoding="utf-8").read()
+        self.assertNotIn("subprocess", src)
+
 
 if __name__ == "__main__":
     unittest.main()
