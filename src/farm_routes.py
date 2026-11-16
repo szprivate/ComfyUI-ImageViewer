@@ -35,7 +35,7 @@ def clean_request(body) -> dict:
     return out
 
 
-def register(add, *, web, path_access, prefix="/imageviewer"):
+def register(add, *, web, path_access):
     from . import atlas_render
 
     def off(fn, *a, **k):
@@ -73,5 +73,7 @@ def register(add, *, web, path_access, prefix="/imageviewer"):
             return web.json_response({"ok": False, "error": msg}, status=e.status)
         return web.json_response(out)
 
-    add("GET", f"{prefix}/farm", get_state)
-    add("POST", f"{prefix}/farm", post_action)
+    # the page calls these through api.fetchApi, which asks for /api/imageviewer/farm
+    for prefix in ("/imageviewer", "/api/imageviewer"):
+        add("GET", f"{prefix}/farm", get_state)
+        add("POST", f"{prefix}/farm", post_action)
