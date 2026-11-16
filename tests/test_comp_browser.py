@@ -1901,6 +1901,74 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
         self.assertEqual(self.errors, [])
 
+    def test_an_agent_runs_an_ai_node_through_the_page_and_the_comp_is_saved(self):
+        """edit_comp's run_ai: comp_routes sends imageviewer.comp.agent, the page runs the node as its Run button does,
+        asks nothing, saves the comp with the results and reports to /comp_agent_done (promo run 2026-11-15: the
+        agent could not run AI Depth / AI Matte at all)."""
+        table = os.path.join(self.tmp, "comp_flows_agent")
+        os.makedirs(table, exist_ok=True)
+        graph = {
+            "2": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
+            "3": {"class_type": "SomeMatte", "inputs": {"image": ["2", 0]}},
+            "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
+        }
+        with open(os.path.join(table, "t_matte.json"), "w", encoding="utf-8") as fh:
+            json.dump(graph, fh)
+        with open(os.path.join(table, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": {"matte": {"action": "background", "workflows": ["t_matte"]}},
+                       "entries": [{"id": "t_matte", "label": "Test matte", "file": "t_matte.json", "format": "api",
+                                    "actions": ["background"], "size": {"mp": None, "mult": 8, "max": 2048}, "nodes": []}]}, fh)
+        G = importlib.import_module(self.pkg + ".paint_generate")
+        old_dir = G.COMP_DIR
+        G.COMP_DIR = table
+        self.addCleanup(setattr, G, "COMP_DIR", old_dir)
+        pg = self.page()
+        path = self.new_comp(pg)
+        pg.evaluate(f"""(file) => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const r = e.addNode('read', {{ file }}); const a = e.addNode('ai_matte'); a.name = 'CarMatte'; a.inputs = [r.id];
+            out.inputs = [a.id]; e.refresh(); }}""", self.png)
+        pg.evaluate(f"() => {self.ED}.save()")
+        pg.wait_for_function(f"() => !{self.ED}.isDirty()", timeout=10000)
+        pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
+            return { prompt_id: 'P' + window.__queued.length }; };
+            window.__reports = []; const f = window.__fetchApi;
+            window.__fetchApi = (p, o) => { if (p.startsWith('/imageviewer/comp_agent_done')) {
+                window.__reports.push(JSON.parse(o.body)); return Promise.resolve(new Response('{"ok": true}')); }
+                return p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o); }; }""")
+        # Another tab is up: the request brings the comp's tab back.
+        pg.evaluate("() => __panel.switchTab(Object.keys(__panel.allTabs).find((k) => !k.startsWith('comp:')) || __panel.activeTab)")
+        pg.evaluate("(path) => { window.__run = __panel.compAgentRun({ id: 'A1', action: 'ai_run', args: { path, node: 'CarMatte', first: 1, last: 2 } }); }", path)
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=20000)
+        g = pg.evaluate("() => window.__queued[0]")
+        from PIL import Image
+        os.makedirs(os.path.join(self.dirs["output"], "gen"), exist_ok=True)
+        outs = {}
+        for k, v in g.items():
+            if v["class_type"] == "SaveImage":
+                f = int(v["inputs"]["filename_prefix"].rsplit(".", 1)[1])
+                Image.fromarray(np.full((90, 160, 3), 255, np.uint8), "RGB").save(os.path.join(self.dirs["output"], "gen", f"a{f}.png"))
+                outs[k] = f"a{f}.png"
+        self.assertEqual(len(outs), 2)                                       # frames 1 and 2 only
+        pg.evaluate("""(outs) => { for (const [node, name] of Object.entries(outs))
+                __api.dispatch('executed', { prompt_id: 'P1', node, output: { images: [{ filename: name, subfolder: 'gen', type: 'output' }] } });
+            __api.dispatch('execution_success', { prompt_id: 'P1' }); }""", outs)
+        pg.evaluate("() => window.__run")
+        reps = pg.evaluate("() => window.__reports")
+        self.assertEqual(reps[0]["state"], "running")
+        self.assertEqual(reps[-1]["state"], "done", reps[-1])
+        self.assertEqual(reps[-1]["result"]["done"], 2)
+        self.assertTrue(reps[-1]["result"]["saved"])
+        with open(path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        node = next(n for n in saved["nodes"] if n.get("name") == "CarMatte")
+        self.assertEqual(sorted(node["results"]["frames"]), ["1", "2"])
+        self.assertFalse(pg.evaluate(f"() => {self.ED}.isDirty()"))
+        # Not an AI node: an error, nothing queued.
+        pg.evaluate("(path) => __panel.compAgentRun({ id: 'A2', action: 'ai_run', args: { path, node: 'Output1' } })", path)
+        self.assertEqual(pg.evaluate("() => window.__reports.at(-1).state"), "error")
+        self.assertEqual(pg.evaluate("() => window.__queued.length"), 1)
+        self.assertEqual(self.errors, [])
+
     def test_an_ai_node_asks_before_it_downloads_the_model_it_needs(self):
         """A model file that is not here: the run asks first (the files, their sizes, where they go); "Not now"
         runs nothing, "Download" fetches them and then runs."""
