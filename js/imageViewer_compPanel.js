@@ -853,18 +853,18 @@ export const CompPanelMixin = {
      * models loaded once; the answers come back as a PNG sequence beside the comp and become the node's results
      * (one undo step a job).
      */
-    async _cpAiRun(rec, id, frames) {
+    async _cpAiRun(rec, id, frames, { agent = false } = {}) {
         const ed = rec.editor;
-        if (!ed) return;
-        if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return; }
+        if (!ed) return { done: 0, error: "the comp is not open" };
+        if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return { done: 0, error: "the comp is not saved" }; }
         const runs = this._cpAiRuns || (this._cpAiRuns = new Map());
-        if (runs.has(id)) return;
+        if (runs.has(id)) return { done: 0, error: "the node is running already" };
         const n0 = ed.node(id);
         let a;
-        try { a = await this._cpAiList(n0); } catch (e) { notice("error", "The workflows are not here", String(e.message || e)); return; }
-        if (!a) return;
+        try { a = await this._cpAiList(n0); } catch (e) { notice("error", "The workflows are not here", String(e.message || e)); return { done: 0, error: `no workflows: ${e.message || e}` }; }
+        if (!a) return { done: 0, error: `${id} is not an AI node` };
         const wid = n0.workflow && a.workflows.some((w) => w.id === n0.workflow) ? n0.workflow : a.choice;
-        if (!wid) { notice("warn", "No workflow for this node here", "This ComfyUI has none of the node packs its workflows need."); return; }
+        if (!wid) { notice("warn", "No workflow for this node here", "This ComfyUI has none of the node packs its workflows need."); return { done: 0, error: "this ComfyUI has none of the node packs the node's workflows need" }; }
         const item = a.workflows.find((w) => w.id === wid);
         const label = `${n0.name || n0.id}`;
         const all = [...new Set(frames)].sort((x, y) => x - y);
@@ -879,9 +879,16 @@ export const CompPanelMixin = {
         tell(`0 / ${all.length}`);
         let done = 0, failed = null, skipped = [];
         try {
+            // An agent's run asks no one: missing model files are its answer, to download and run again.
+            const gone = agent && item ? (item.missing || []).filter((m) => m.kind !== "node") : [];
+            if (gone.length) {
+                failed = new Error(`the model files it needs are not on this machine: ${gone.map((m) => `${m.what} (${m.folder})`).join(", ")}`);
+                failed.missing = gone;
+                return { done: 0, error: failed.message, missing: gone };
+            }
             if (item && !(await this._cpModelsReady(rec, item, (t) => tell(t), run))) {
                 notice("info", `${label}: not run`, "The model files it needs are not on this machine.");
-                return;
+                return { done: 0, error: "the model files it needs are not on this machine" };
             }
             const graph = item ? await this._paintPrompt(item, () => {}) : null;
             const tune = (item && item.tune && item.tune.length && this._paintTune(wid)) || null;
@@ -926,7 +933,59 @@ export const CompPanelMixin = {
             if (rec.editor) ed.setAiBusy(busy(), Object.assign({}, shared));
         }
         if (skipped.length) notice("warn", `${label}: ${skipped.length} frame(s) left out`, skipped.slice(0, 3).map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
-        if (!failed && done) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`} (${chunks.length === 1 ? "one job" : `${chunks.length} jobs`})`, "Save the comp to keep them.");
+        if (!failed && done && !agent) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`} (${chunks.length === 1 ? "one job" : `${chunks.length} jobs`})`, "Save the comp to keep them.");
+        return { done, of: all.length, jobs: chunks.length, workflow: wid, skipped,
+                 error: failed ? String(failed.message || failed) : (run.stopped ? "stopped" : null) };
+    },
+
+    /**
+     * An agent's request (comp_routes' POST /imageviewer/comp_agent, edit_comp's run_ai): run a comp's AI node over
+     * its frames as the node's Run button does, save the comp and report to /imageviewer/comp_agent_done. The
+     * comp is opened in its tab when it is not; nothing is asked (missing model files are the answer).
+     */
+    async compAgentRun(detail) {
+        const { id, args = {} } = detail || {};
+        const report = (body) => api.fetchApi("/imageviewer/comp_agent_done", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, ...body }),
+        }).catch(() => {});
+        try {
+            const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+            const find = () => Object.values(this._cpState().tabs).find((r) => norm(r.path) === norm(args.path));
+            let rec = find();
+            if (!rec || !this.allTabs[COMP_PREFIX + rec.path]) {
+                if (!(await this.compOpenFile(args.path))) throw new Error("the comp could not be opened");
+                rec = find();
+            } else if (this.activeTab !== COMP_PREFIX + rec.path) this.switchTab(COMP_PREFIX + rec.path);
+            const win = this._viewerWindow ? this._viewerWindow() : window;
+            for (let t = 0; rec && !rec.editor && t < 200; t++) await new Promise((r) => win.setTimeout(r, 100));
+            if (!rec || !rec.editor) throw new Error("the comp's tab did not come up");
+            const ed = rec.editor;
+            if (ed.isDirty && ed.isDirty()) throw new Error("the comp is open with changes not saved: save or close its tab first");
+            const nodes = (ed.comp().nodes || []);
+            const want = String(args.node || "");
+            const hit = nodes.filter((n) => n.id === want);
+            const named = hit.length ? hit : nodes.filter((n) => n.name === want);
+            if (named.length !== 1) throw new Error(named.length ? `${named.length} nodes are named ${want}: use the id` : `no node ${want}`);
+            const node = named[0];
+            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_inpaint, ai_upscale)`);
+            const fmt = ed.comp().format || {};
+            const count = Math.max(1, Math.round(fmt.frames || 1));
+            const first = Number.isInteger(args.first) ? Math.min(args.first, count - 1) : 0;
+            const last = Number.isInteger(args.last) ? Math.min(args.last, count - 1) : count - 1;
+            if (last < first) throw new Error("last is before first");
+            const frames = [];
+            for (let f = first; f <= last; f++) frames.push(f);
+            report({ state: "running", progress: `0 / ${frames.length}` });
+            const res = await this._cpAiRun(rec, node.id, frames, { agent: true });
+            if (res.done && rec.editor) {
+                await this._cpSave(rec.path, rec.editor.comp());
+                rec.editor.markSaved();
+            }
+            if (res.error && !res.done) report({ state: "error", error: res.error, result: { node: node.id, ...res } });
+            else report({ state: "done", result: { node: node.id, saved: !!res.done, ...res } });
+        } catch (e) {
+            report({ state: "error", error: String(e && e.message || e) });
+        }
     },
 
     /**

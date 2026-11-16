@@ -1932,6 +1932,15 @@ app.registerExtension({
             } catch (err) { console.warn("imageViewer: motion scene not opened", err); }
         });
 
+        // An agent's request for a comp (comp_routes.py /comp_agent): run an AI node, save, report back.
+        api.addEventListener("imageviewer.comp.agent", (e) => {
+            try {
+                const bridge = window.imageViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                globalViewerPanel?.compAgentRun?.(e.detail);
+            } catch (err) { console.warn("imageViewer: comp request not run", err); }
+        });
+
         // An agent opened a comp (POST /imageviewer/push with a .comp.json).
         api.addEventListener("imageviewer.comp.open", (e) => {
             try {
