@@ -7,6 +7,7 @@ and on the ComfyUI canvas; leaving the tab gives the viewport back.
 """
 import asyncio
 import importlib
+import json
 import os
 import shutil
 import socket
@@ -1811,13 +1812,26 @@ class CompBrowserTests(unittest.TestCase):
                 if hasattr(fp, k):
                     delattr(fp, k)
         self.addCleanup(undo)
-        G.set_custom("background", {
+        graph = {
             "1": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "base.safetensors"}},
             "2": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
             "3": {"class_type": "SomeMatte", "inputs": {"image": ["2", 0], "model": ["1", 0], "seed": 5}},
             "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
-        }, "test matte")
-        G.set_choice("background", "custom")
+        }
+        # The Comp's own table for this test: the matte node lists two workflows, the first its default.
+        table = os.path.join(self.tmp, "comp_flows")
+        os.makedirs(table, exist_ok=True)
+        entries = []
+        for wid, label in (("t_matte", "Test matte"), ("t_matte2", "Second matte")):
+            with open(os.path.join(table, wid + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(graph, fh)
+            entries.append({"id": wid, "label": label, "file": wid + ".json", "format": "api", "actions": ["background"],
+                            "size": {"mp": None, "mult": 8, "max": 2048}, "nodes": []})
+        with open(os.path.join(table, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": {"matte": {"action": "background", "workflows": ["t_matte", "t_matte2"]}}, "entries": entries}, fh)
+        old_dir = G.COMP_DIR
+        G.COMP_DIR = table
+        self.addCleanup(setattr, G, "COMP_DIR", old_dir)
         pg = self.page()
         pg.evaluate("""() => { const f = window.__fetchApi;
             window.__fetchApi = (p, o) => (p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o)); }""")
@@ -1828,8 +1842,12 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {self.ED}.save()")
         pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
             return { prompt_id: 'P' + window.__queued.length }; }; }""")
-        # The pickers: Paint's choice plus the workflows, and the loader's files from the model folder.
+        # The pickers: the node's own short list (its default first, no Paint choice), and the loader's files.
         pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-model')", timeout=10000)
+        wf = pg.evaluate("() => Array.from(__panel.shadowRoot.querySelector('.cp-ai-wf').options).map((o) => [o.value, o.textContent])")
+        self.assertEqual([v for v, _t in wf], ["", "t_matte2"])
+        self.assertIn("Test matte", wf[0][1])
+        self.assertFalse(any("Paint" in t for _v, t in wf), wf)
         opts = pg.evaluate("() => Array.from(__panel.shadowRoot.querySelector('.cp-ai-model').options).map((o) => o.value)")
         self.assertEqual(opts, ["", "base.safetensors", "sub/other.safetensors"])
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-ai-wf')"))
@@ -1881,6 +1899,153 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate("() => window.__run")
         self.assertFalse(pg.evaluate("() => __panel._cpAiRuns.size"))
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
+        self.assertEqual(self.errors, [])
+
+    def test_an_agent_runs_an_ai_node_through_the_page_and_the_comp_is_saved(self):
+        """edit_comp's run_ai: comp_routes sends imageviewer.comp.agent, the page runs the node as its Run button does,
+        asks nothing, saves the comp with the results and reports to /comp_agent_done (promo run 2026-11-15: the
+        agent could not run AI Depth / AI Matte at all)."""
+        table = os.path.join(self.tmp, "comp_flows_agent")
+        os.makedirs(table, exist_ok=True)
+        graph = {
+            "2": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
+            "3": {"class_type": "SomeMatte", "inputs": {"image": ["2", 0]}},
+            "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
+        }
+        with open(os.path.join(table, "t_matte.json"), "w", encoding="utf-8") as fh:
+            json.dump(graph, fh)
+        with open(os.path.join(table, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": {"matte": {"action": "background", "workflows": ["t_matte"]}},
+                       "entries": [{"id": "t_matte", "label": "Test matte", "file": "t_matte.json", "format": "api",
+                                    "actions": ["background"], "size": {"mp": None, "mult": 8, "max": 2048}, "nodes": []}]}, fh)
+        G = importlib.import_module(self.pkg + ".paint_generate")
+        old_dir = G.COMP_DIR
+        G.COMP_DIR = table
+        self.addCleanup(setattr, G, "COMP_DIR", old_dir)
+        pg = self.page()
+        path = self.new_comp(pg)
+        pg.evaluate(f"""(file) => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const r = e.addNode('read', {{ file }}); const a = e.addNode('ai_matte'); a.name = 'CarMatte'; a.inputs = [r.id];
+            out.inputs = [a.id]; e.refresh(); }}""", self.png)
+        pg.evaluate(f"() => {self.ED}.save()")
+        pg.wait_for_function(f"() => !{self.ED}.isDirty()", timeout=10000)
+        pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
+            return { prompt_id: 'P' + window.__queued.length }; };
+            window.__reports = []; const f = window.__fetchApi;
+            window.__fetchApi = (p, o) => { if (p.startsWith('/imageviewer/comp_agent_done')) {
+                window.__reports.push(JSON.parse(o.body)); return Promise.resolve(new Response('{"ok": true}')); }
+                return p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o); }; }""")
+        # Another tab is up: the request brings the comp's tab back.
+        pg.evaluate("() => __panel.switchTab(Object.keys(__panel.allTabs).find((k) => !k.startsWith('comp:')) || __panel.activeTab)")
+        pg.evaluate("(path) => { window.__run = __panel.compAgentRun({ id: 'A1', action: 'ai_run', args: { path, node: 'CarMatte', first: 1, last: 2 } }); }", path)
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=20000)
+        g = pg.evaluate("() => window.__queued[0]")
+        from PIL import Image
+        os.makedirs(os.path.join(self.dirs["output"], "gen"), exist_ok=True)
+        outs = {}
+        for k, v in g.items():
+            if v["class_type"] == "SaveImage":
+                f = int(v["inputs"]["filename_prefix"].rsplit(".", 1)[1])
+                Image.fromarray(np.full((90, 160, 3), 255, np.uint8), "RGB").save(os.path.join(self.dirs["output"], "gen", f"a{f}.png"))
+                outs[k] = f"a{f}.png"
+        self.assertEqual(len(outs), 2)                                       # frames 1 and 2 only
+        pg.evaluate("""(outs) => { for (const [node, name] of Object.entries(outs))
+                __api.dispatch('executed', { prompt_id: 'P1', node, output: { images: [{ filename: name, subfolder: 'gen', type: 'output' }] } });
+            __api.dispatch('execution_success', { prompt_id: 'P1' }); }""", outs)
+        pg.evaluate("() => window.__run")
+        reps = pg.evaluate("() => window.__reports")
+        self.assertEqual(reps[0]["state"], "running")
+        self.assertEqual(reps[-1]["state"], "done", reps[-1])
+        self.assertEqual(reps[-1]["result"]["done"], 2)
+        self.assertTrue(reps[-1]["result"]["saved"])
+        with open(path, encoding="utf-8") as fh:
+            saved = json.load(fh)
+        node = next(n for n in saved["nodes"] if n.get("name") == "CarMatte")
+        self.assertEqual(sorted(node["results"]["frames"]), ["1", "2"])
+        self.assertFalse(pg.evaluate(f"() => {self.ED}.isDirty()"))
+        # Not an AI node: an error, nothing queued.
+        pg.evaluate("(path) => __panel.compAgentRun({ id: 'A2', action: 'ai_run', args: { path, node: 'Output1' } })", path)
+        self.assertEqual(pg.evaluate("() => window.__reports.at(-1).state"), "error")
+        self.assertEqual(pg.evaluate("() => window.__queued.length"), 1)
+        self.assertEqual(self.errors, [])
+
+    def test_an_ai_node_asks_before_it_downloads_the_model_it_needs(self):
+        """A model file that is not here: the run asks first (the files, their sizes, where they go); "Not now"
+        runs nothing, "Download" fetches them and then runs."""
+        flows = os.path.join(self.tmp, "flows_dl")
+        os.environ["IMAGE_VIEWER_PAINT_WORKFLOWS"] = flows
+        self.addCleanup(os.environ.pop, "IMAGE_VIEWER_PAINT_WORKFLOWS", None)
+        G = importlib.import_module(self.pkg + ".paint_generate")
+        fp = sys.modules[self.pkg + ".viewer_api"].folder_paths
+        lists = {"geometry_estimation": []}
+        fp.folder_names_and_paths = {k: ([], set()) for k in lists}
+        fp.get_filename_list = lambda f: list(lists.get(f, []))
+        fp.get_full_path = lambda f, n: (n if n in lists.get(f, []) else None)
+
+        def undo():
+            for k in ("folder_names_and_paths", "get_filename_list", "get_full_path"):
+                if hasattr(fp, k):
+                    delattr(fp, k)
+        self.addCleanup(undo)
+        graph = {
+            "1": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
+            "2": {"class_type": "LoadDA3Model", "inputs": {"model_name": "depth_test.safetensors"}},
+            "3": {"class_type": "SomeDepth", "inputs": {"image": ["1", 0], "model": ["2", 0]}},
+            "4": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["3", 0], "filename_prefix": "x"}},
+        }
+        table = os.path.join(self.tmp, "comp_flows_dl")
+        os.makedirs(table, exist_ok=True)
+        with open(os.path.join(table, "t_depth.json"), "w", encoding="utf-8") as fh:
+            json.dump(graph, fh)
+        url = "https://huggingface.co/Comfy-Org/Test/resolve/main/geometry_estimation/depth_test.safetensors"
+        with open(os.path.join(table, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": {"depth": {"action": "depth", "workflows": ["t_depth"]}},
+                       "entries": [{"id": "t_depth", "label": "Test depth", "file": "t_depth.json", "format": "api",
+                                    "actions": ["depth"], "size": {"mp": None, "mult": 1, "max": 2048}, "nodes": [],
+                                    "models": [{"name": "depth_test.safetensors", "url": url, "directory": "geometry_estimation"}]}]}, fh)
+        old_dir = G.COMP_DIR
+        G.COMP_DIR = table
+        self.addCleanup(setattr, G, "COMP_DIR", old_dir)
+        pg = self.page()
+        # The two download routes answered in the page (nothing is fetched from the net here).
+        pg.evaluate("""() => { const f = window.__fetchApi; window.__dl = [];
+            const json = (v) => Promise.resolve(new Response(JSON.stringify(v), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+            window.__fetchApi = (p, o) => {
+                if (p === '/imageviewer/paint/models') return json({ id: 't_depth', label: 'Test depth', total: 1.4e9, unknown: [],
+                    files: [{ name: 'depth_test.safetensors', folder: 'geometry_estimation', url: 'u', size: 1.4e9 }] });
+                if (p === '/imageviewer/paint/download') { const b = JSON.parse(o.body); window.__dl.push(b);
+                    return json(b.job ? { state: 'done', files: [{ name: 'depth_test.safetensors', size: 1.4e9, done: 1.4e9, state: 'done' }] } : { job: 'J1' }); }
+                return p.startsWith('/imageviewer/paint/') ? fetch(p, o) : f(p, o); }; }""")
+        self.new_comp(pg)
+        ai = pg.evaluate(f"""(file) => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const r = e.addNode('read', {{ file }}); const a = e.addNode('ai_depth'); a.inputs = [r.id]; out.inputs = [a.id];
+            e.refresh(); e.select([a.id]); return a.id; }}""", self.png)
+        pg.evaluate(f"() => {self.ED}.save()")
+        pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
+            return { prompt_id: 'P' + window.__queued.length }; }; }""")
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-wf')", timeout=10000)
+        self.assertIn("downloads its model first", pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-wf').options[0].textContent"))
+        # Not now: nothing fetched, nothing queued.
+        pg.evaluate(f"(id) => {{ window.__run = __panel._cpAiRun(__panel._cpActive(), id, [0, 1]); }}", ai)
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-confirm')", timeout=10000)
+        text = pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-confirm').textContent")
+        self.assertIn("depth_test.safetensors (1.4 GB) into models/geometry_estimation", text)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-ai-download-ask.png"))
+        pg.evaluate("() => Array.from(__panel.shadowRoot.querySelectorAll('.cp-confirm button')).find((b) => b.textContent === 'Not now').click()")
+        pg.evaluate("() => window.__run")
+        self.assertEqual(pg.evaluate("() => [window.__dl.length, window.__queued.length]"), [0, 0])
+        self.assertFalse(pg.evaluate("() => __panel._cpAiRuns.size"))
+        # Download: fetched, then the job runs with the model now in its folder.
+        pg.evaluate(f"(id) => {{ window.__run = __panel._cpAiRun(__panel._cpActive(), id, [0, 1]); }}", ai)
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-confirm')", timeout=10000)
+        lists["geometry_estimation"].append("depth_test.safetensors")     # what the download put there
+        pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-confirm-ok').click()")
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=20000)
+        self.assertEqual(pg.evaluate("() => window.__dl.map((b) => b.job ? 'poll' : b.workflow)")[:2], ["t_depth", "poll"])
+        pg.evaluate(f"(id) => __panel._cpAiStop(id)", ai)
+        pg.evaluate("() => window.__run")
         self.assertEqual(self.errors, [])
 
 

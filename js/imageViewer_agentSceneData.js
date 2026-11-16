@@ -109,6 +109,52 @@ export function turntableRange(subject, from, to, opts = {}) {
 }
 
 /**
+ * A turntable that FOLLOWS a moving subject: `spheres` = [{f, center, radius}] measured frame by
+ * frame (each frame's own box, not the whole path's). The distance fits the largest one; the pivot
+ * is keyed on every measured frame at that frame's centre (linear between), so the camera keeps
+ * turning about the subject while it moves.
+ */
+export function followTurntable(spheres, from, to, opts = {}) {
+    const list = (spheres || []).filter((s) => s && Array.isArray(s.center)).sort((a, b) => a.f - b.f);
+    if (!list.length) return null;
+    const radius = Math.max(...list.map((s) => num(s.radius, 0.05)));
+    const k = turntableRange({ center: list[0].center, radius }, from, to, opts);
+    const lh = num(opts.look_height, 0);
+    const up = (c) => [c[0], c[1] + lh, c[2]].map(r4);
+    const lag = Math.max(0, num(opts.lag, 0));
+    const ease = (i) => (i === list.length - 1 ? "hold" : "linear");
+    // lag: the orbit's centre runs `lag` frames behind the subject (held at its start until then), so
+    // the subject moves through the picture - a car drives past the camera instead of standing in the
+    // middle of it while the ground streams by. The camera keeps it in view by looking at it (its
+    // look-at target keyed on the subject's own centre).
+    k.pivot.position = list.map((s, i) => ({ f: s.f, v: up(lag ? centreAt(list, s.f - lag) : s.center), ease: ease(i) }));
+    if (lag) k.aim = list.map((s, i) => ({ f: s.f, v: up(s.center), ease: ease(i) }));
+    k.follow = true;
+    return k;
+}
+
+/** The centre of measured spheres at frame f, straight between them, held before the first and after the last. */
+export function centreAt(list, f) {
+    if (f <= list[0].f) return list[0].center;
+    for (let i = 1; i < list.length; i++) {
+        const a = list[i - 1], b = list[i];
+        if (f <= b.f) {
+            const t = b.f > a.f ? (f - a.f) / (b.f - a.f) : 1;
+            return a.center.map((v, j) => v + (b.center[j] - v) * t);
+        }
+    }
+    return list[list.length - 1].center;
+}
+
+/**
+ * The y an item's origin needs for its bottom to rest on `ground` (the ground's height under it):
+ * its origin's y less its box's bottom, kept, on top of the ground.
+ */
+export function groundedY(originY, bottomY, ground) {
+    return r4(num(ground, 0) + (num(originY, 0) - num(bottomY, 0)));
+}
+
+/**
  * The pivot's turn from `a` (at frame `from`) to `b` (at `to`) at an even speed.
  * A rotation key runs to the next the short way round (scene3d's rule), so the
  * keys are never more than 90 degrees apart: on frames where the straight line
@@ -202,4 +248,24 @@ export function describeScene(scene, { activeCamera = null, max = 60 } = {}) {
         items: named, more_items: Math.max(0, items.filter((it) => it.kind !== "control").length - named.length), controls,
         clips: seq, anim_layers: layers, active_layer: scene.activeLayer || null, display_layers: dl,
     };
+}
+
+/**
+ * Where add_model's `path` points. An absolute path (C:\..., \\share\..., /...) is a file on the
+ * machine. Anything else is a ComfyUI file: "output/agent/models/car.glb" (or input/, temp/) names its
+ * folder, a bare relative path is read from the output folder, where every node saves. A relative path
+ * once went into the scene as it was, which no route could find: the model never loaded and the
+ * turntable after it had "nothing to measure".
+ */
+export function modelSource(path) {
+    const p = String(path || "").trim();
+    if (!p) return null;
+    if (/^[a-zA-Z]:[\\/]/.test(p) || /^[\\/]/.test(p)) return { path: p };
+    const parts = p.replace(/\\/g, "/").split("/").filter((s) => s && s !== ".");
+    if (parts.includes("..")) return null;
+    let type = "output";
+    if (parts.length > 1 && /^(output|input|temp)$/i.test(parts[0])) type = parts.shift().toLowerCase();
+    const filename = parts.pop();
+    if (!filename) return null;
+    return { filename, subfolder: parts.join("/"), type };
 }

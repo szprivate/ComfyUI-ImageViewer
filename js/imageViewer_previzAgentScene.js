@@ -3,7 +3,7 @@
 // Sequencer, cameras and turntables, renders and playblasts of the scene on
 // screen, keys on any channel, animation-layer and display-layer settings,
 // IK/FK, spaces, set-driven keys, custom attributes, a model brought in, and a
-// USD stage of the shot. agentY-core's animate_scene sends them through the
+// USD stage of the shot, and the Terrain menu (imageViewer_previzAgentTerrain.js). agentY-core's animate_scene sends them through the
 // viewer's POST /imageviewer/rig/agent (rig_routes.AGENT_ACTIONS), the same road
 // as animate_character; previzRigAgentRun hands every action named in
 // SCENE_AGENT_ACTIONS to previzSceneAgent here.
@@ -12,6 +12,7 @@
 // Items are named by id or by name (case ignored).
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
+import * as W from "./imageViewer_worldData.js";
 import * as R from "./imageViewer_rigData.js";
 import * as Q from "./imageViewer_clipSeqData.js";
 import * as L from "./imageViewer_sceneLayers.js";
@@ -21,7 +22,7 @@ import { canvasContext } from "./imageViewer_exportUI.js";
 
 /** Every action this mixin answers (none needs a character). */
 export const SCENE_AGENT_ACTIONS = new Set([
-    "scene_info", "scene_set", "add_model", "add_camera", "set_camera", "turntable", "render", "playblast",
+    "scene_info", "scene_set", "add_model", "add_shape", "remove_item", "item_set", "add_camera", "set_camera", "turntable", "render", "playblast",
     "key_set", "key_delete", "key_list",
     "layer_set", "layer_remove", "layer_merge_down",
     "display_layer_add", "display_layer_set", "display_layer_list",
@@ -29,6 +30,9 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "clip_track_add", "clip_track_set",
     "ikfk_switch", "ikfk_match", "space_set", "attr_add", "sdk_key", "sdk_remove",
     "export_usd",
+    // The Terrain menu's (imageViewer_previzAgentTerrain.js, TERRAIN_AGENT_ACTIONS).
+    "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
+    "terrain_erode", "scatter_add", "scatter_set", "scatter_paint", "ground",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",
@@ -143,18 +147,59 @@ export const PrevizAgentSceneMixin = {
         this.previzSnapshot("shot settings");
         if (a.length !== undefined) { scene.length = Math.max(1, Math.round(Number(a.length) || 1)); scene.lengthSet = true; }
         if (a.fps !== undefined && Number(a.fps) > 0) scene.fps = Number(a.fps);
-        this.previzChanged();
+        let env = null;
+        if (a.environment && typeof a.environment === "object") {
+            // The world's sky, sun, fog, ambient and look (the Environment item's settings, merged in): a sky dome made
+            // of a big sphere does not show - its faces look outwards - so the black past a canyon's end stayed black.
+            env = scene.items.find((i) => i.kind === "environment");
+            if (!env) {
+                env = W.makeEnvironmentItem(this._worldId(scene, "env"));
+                scene.items.push(env);
+            }
+            const cur = W.environmentSettings(env);
+            for (const part of ["sky", "sun", "fog", "ambient", "render"]) {
+                const p = a.environment[part];
+                if (p && typeof p === "object") cur[part] = { ...cur[part], ...p };
+            }
+            Object.assign(env, W.environmentSettings(cur));
+        }
+        this.previzChanged(env ? { reload: true } : undefined);
         if (this.applyTimelineBounds) this.applyTimelineBounds();
         if (this.previzSyncTimelineFields) this.previzSyncTimelineFields();
         if (a.frame !== undefined) this.setFrame(Math.round(Number(a.frame) || 0));
-        return { length: scene.length, fps: scene.fps };
+        const out = { length: scene.length, fps: scene.fps };
+        if (env) out.environment = W.environmentSettings(env);
+        return out;
+    },
+
+    /** True only when the server says the file is not there (a 404, or "gone"); any other answer lets it through. */
+    async _asaFileGone(where) {
+        try {
+            if (where.path) {
+                const r = await api.fetchApi("/imageviewer/probe_paths", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ paths: [{ path: where.path, external: true }] }),
+                });
+                if (!r.ok) return false;
+                const got = await r.json();
+                return ((got && got.unreachable) || []).some((u) => u && u.reason === "gone");
+            }
+            const q = new URLSearchParams({ filename: where.filename, subfolder: where.subfolder || "", type: where.type || "output" });
+            const r = await api.fetchApi(`/view?${q}`, { method: "HEAD" });
+            return r.status === 404;
+        } catch (_) { return false; }
     },
 
     async _asa_add_model(scene, a) {
         const path = String(a.path || "").trim();
         if (!path) throw new Error("add_model needs path: the model file (.glb, .fbx, .obj, .usd, .abc, ...)");
+        const where = A.modelSource(path);
+        if (!where) throw new Error(`add_model cannot read ${path}: give the file's absolute path, or one inside ComfyUI's output folder (output/...)`);
+        if (await this._asaFileGone(where)) {
+            throw new Error(`no such file: ${path}` + (where.path ? "" : ` (a relative path is read from ComfyUI's ${where.type} folder; give the absolute path if it is elsewhere)`));
+        }
         const before = new Set(scene.items.map((i) => i.id));
-        const n = await this.previzAddModels([{ path, name: a.name || path.split(/[\\/]/).pop() }]);
+        const n = await this.previzAddModels([{ ...where, name: a.name || path.split(/[\\/]/).pop() }]);
         if (!n) throw new Error(`could not add ${path}`);
         const item = scene.items.find((i) => !before.has(i.id) && i.kind === "model");
         if (item && a.name) item.name = S.uniqueName(scene, a.name, item.id);
@@ -163,7 +208,86 @@ export const PrevizAgentSceneMixin = {
             this.previzChanged();
         }
         try { if (this._modelView().whenLoaded) await this._modelView().whenLoaded(30000); } catch (_) { /* answered without */ }
-        return { model: item ? item.name : null, id: item ? item.id : null };
+        // size: the model's longest side in metres (a car "4.7 m long"), whatever units the file is in.
+        // Scale is a factor of the file's own size, which an agent once took for metres (a 9 m car).
+        let size = null;
+        if (item && Number(a.size) > 0) {
+            const box = await this._asaMeasure([item.id], [0]);
+            if (!box) throw new Error(`${item.name} has not loaded, so it could not be sized: set scale yourself`);
+            const long = Math.max(...box.max.map((v, i) => v - box.min[i]));
+            if (long > 1e-6) {
+                const k = Number(a.size) / long;
+                item.scale = (Array.isArray(item.scale) ? item.scale : [1, 1, 1]).map((v) => Number(v) * k);
+                this.previzChanged();
+                size = Number(a.size);
+            }
+        }
+        const out = { model: item ? item.name : null, id: item ? item.id : null };
+        if (item) out.scale = item.scale || [1, 1, 1];
+        if (size !== null) out.size = size;
+        // ground: stood on the terrain (or y = 0) once it is sized, so a car's wheels are on the floor.
+        if (item && a.ground) out.ground = await this._asa_ground(scene, { item: item.id, terrain: a.terrain });
+        return out;
+    },
+
+    /**
+     * A blocking shape (box, sphere, plane, cylinder, cone, torus) or an empty group, as Create makes
+     * them: a solid stands on its base (translate y is where its bottom is), its scale is its size in
+     * metres, a cylinder's axis is Y (turn it 90 degrees about Z for a wheel). `parent` hangs it under
+     * an item (a group), its numbers then in the parent's space. Several shapes under one group and the
+     * group keyed is how a stand-in (a car, a prop) is made.
+     */
+    _asa_add_shape(scene, a) {
+        const type = String(a.type || a.shape || "box").toLowerCase();
+        const types = ["group", ...S.PRIMITIVES.map((p) => p.type)];
+        if (!types.includes(type)) throw new Error(`type is one of ${types.join(", ")}`);
+        const vec = (v, what) => {
+            if (!Array.isArray(v) || v.length !== 3 || v.some((x) => !Number.isFinite(Number(x)))) throw new Error(`${what} is [x, y, z] (Y up)`);
+            return v.map(Number);
+        };
+        this.previzSnapshot(`add ${type}`);
+        const item = type === "group" ? S.makeGroupItem(a.name || "Group") : S.makePrimitiveItem(type, a.name);
+        item.name = S.uniqueName(scene, a.name || item.name);
+        for (const k of ["position", "rotation", "scale"]) if (a[k] !== undefined && a[k] !== null) item[k] = vec(a[k], k);
+        if (a.color !== undefined && type !== "group") {
+            const c = String(a.color).trim();
+            if (!/^#[0-9a-f]{6}$/i.test(c)) throw new Error("color is #rrggbb");
+            item.color = c.toLowerCase();
+        }
+        if (a.parent) item.parent = this._asaItem(scene, a.parent, "parent").id;
+        scene.items.push(item);
+        this.previzChanged({ reload: true });
+        return { item: item.name, id: item.id, type, parent: item.parent ? scene.items.find((i) => i.id === item.parent).name : null };
+    },
+
+    /**
+     * Delete items (`item` or `items`), as Delete in the Outliner: a group takes what it holds with it,
+     * constraints lose the targets that went. One undo step. A referenced item is refused (it goes with
+     * its reference).
+     */
+    _asa_remove_item(scene, a) {
+        const names = Array.isArray(a.items) ? a.items : [a.item];
+        const items = names.map((w) => this._asaItem(scene, w));
+        const refs = items.filter((it) => it.ref).map((it) => it.name);
+        if (refs.length) throw new Error(`${refs.join(", ")} belong to a reference: remove the reference instead`);
+        const gone = new Set();
+        for (const it of items) {
+            gone.add(it.name);
+            for (const c of S.descendantsOf(scene, it.id)) gone.add(c.name);
+        }
+        this.previzDelete(items.map((it) => it.id));
+        return { removed: [...gone] };
+    },
+
+    /** Show or hide an item (the Outliner's eye) and / or rename it. One undo step. */
+    _asa_item_set(scene, a) {
+        const it = this._asaItem(scene, a.item);
+        if (a.visible === undefined && a.name === undefined) throw new Error("give visible and / or name");
+        this.previzSnapshot(`set ${it.name}`);
+        if (a.visible !== undefined) it.visible = !!a.visible;
+        if (a.name !== undefined && String(a.name).trim() && String(a.name).trim() !== it.name) it.name = S.uniqueName(scene, String(a.name).trim());
+        this.previzChanged({ reload: true });
+        return { item: it.name, id: it.id, visible: it.visible !== false };
     },
 
     // ── Cameras ───────────────────────────────────────────────────────────
@@ -205,11 +329,37 @@ export const PrevizAgentSceneMixin = {
         const cam = this._asaItem(scene, a.camera || a.item, "camera");
         if (cam.kind !== "camera") throw new Error(`${cam.name} is not a camera`);
         this.previzSnapshot(`camera ${cam.name}`);
-        if (Number(a.fov) > 0) S.setStaticValue(cam, "fov", Number(a.fov));
-        if (Array.isArray(a.resolution) && a.resolution.length === 2) cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v))));
+        // Place and aim it as add_camera does. A channel that animates gets a key at the frame
+        // (`frame`, else the current one) so the change shows; one that does not is set.
+        const f = a.frame === undefined || a.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(a.frame));
+        const vec = (v, what) => {
+            if (!Array.isArray(v) || v.length !== 3 || v.some((x) => !Number.isFinite(Number(x)))) throw new Error(`${what} is [x, y, z] (Y up)`);
+            return v.map(Number);
+        };
+        // Keyed when `frame` is given or the camera's place or aim animates already: position and aim
+        // are keyed TOGETHER (an orbit keyed by its positions alone kept one aim for every frame).
+        const animated = ["position", "rotation"].some((p) => S.baseTrack(cam, p).length || S.track(cam, p).length);
+        const keying = (a.frame !== undefined && a.frame !== null) || animated;
+        const put = (prop, v) => {
+            if (keying) S.keyPose(scene, cam, prop, f, v);
+            else S.setStaticValue(cam, prop, v);
+        };
+        const changed = [];
+        let position = null;
+        if (a.position !== undefined && a.position !== null) { position = vec(a.position, "position"); put("position", position); changed.push("position"); }
+        if (a.look_at !== undefined && a.look_at !== null) {
+            const from = position || S.currentValue(scene, cam, "position", f);
+            put("rotation", this._asaLookAt(from, vec(a.look_at, "look_at"))); changed.push("rotation");
+        } else if (a.rotation !== undefined && a.rotation !== null) { put("rotation", vec(a.rotation, "rotation")); changed.push("rotation"); }
+        if (Number(a.fov) > 0) { S.setStaticValue(cam, "fov", Number(a.fov)); changed.push("fov"); }
+        if (Array.isArray(a.resolution) && a.resolution.length === 2) { cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v)))); changed.push("resolution"); }
         if (a.active !== false) scene.activeCamera = cam.id;
         this.previzChanged({ reload: true });
-        return { camera: cam.name, active: scene.activeCamera === cam.id };
+        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed, keyed: keying ? f : null };
+        const known = new Set(["camera", "item", "position", "look_at", "rotation", "fov", "resolution", "active", "frame"]);
+        const ignored = Object.keys(a).filter((k) => !known.has(k));
+        if (ignored.length) out.ignored = ignored;
+        return out;
     },
 
     /** The subject's box over frames (meshes and, for a character, its bones - which carry the animation). */
@@ -237,6 +387,30 @@ export const PrevizAgentSceneMixin = {
     },
 
     /**
+     * The subject's box as _asaSubjectBox has it, waiting for it to arrive: a model added a moment
+     * before is often still loading (a turntable called right after add_model once found nothing,
+     * and the agent rendered an empty set). Null after `timeoutMs`.
+     */
+    async _asaMeasure(ids, frames, timeoutMs = 60000) {
+        const view = this._modelView();
+        const t0 = Date.now();
+        for (;;) {
+            const box = this._asaSubjectBox(ids, frames);
+            if (box) return box;
+            if (Date.now() - t0 > timeoutMs) return null;
+            try { if (view.whenLoaded) await view.whenLoaded(Math.max(500, timeoutMs - (Date.now() - t0))); } catch (_) { /* measured again */ }
+            await new Promise((r) => setTimeout(r, 250));
+        }
+    },
+
+    /** turntable's lag in frames: `lag` (frames) or `lag_seconds` at the scene's fps. */
+    _asaLagFrames(a) {
+        if (Number(a.lag) > 0) return Math.round(Number(a.lag));
+        if (Number(a.lag_seconds) > 0) return Math.round(Number(a.lag_seconds) * (Number(this.previzScene().fps) || 24));
+        return 0;
+    },
+
+    /**
      * A turntable camera: one pivot + camera rig ("Turntable" / "Turntable cam"),
      * keyed with a full turn over each range - every clip of the sequencer
      * (`clips`: "all" or names), or from..to. Answers the camera and the ranges.
@@ -259,6 +433,10 @@ export const PrevizAgentSceneMixin = {
             if (!(to >= from)) throw new Error("to must not come before from");
             ranges = [{ from, to, clip: null }];
         }
+        // Measured before anything is made, so a subject that never arrives leaves no rig behind.
+        if (!(await this._asaMeasure(subjectIds, [ranges[0].from]))) {
+            throw new Error("the target has nothing to measure: its model did not load within a minute (check add_model's path)");
+        }
         const name = String(a.name || "Turntable").trim() || "Turntable";
         const camName = `${name} cam`;
         this.previzSnapshot(`turntable ${name}`);
@@ -280,10 +458,34 @@ export const PrevizAgentSceneMixin = {
         const out = [];
         const keyBase = (fn) => (this.previzWithLayer ? this.previzWithLayer(null, fn) : fn());
         for (const rg of ranges) {
-            const sub = this._asaSubjectBox(subjectIds, A.sampleFrames(rg.from, rg.to, 9));
-            if (!sub) throw new Error("the target has nothing to measure (not loaded yet?)");
-            const k = A.turntableRange(sub, rg.from, rg.to, { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
-                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh });
+            const opts = { degrees: a.degrees, start_yaw: a.start_yaw, distance: a.distance,
+                height: a.height, look_height: a.look_height, fov: S.staticValue(cam, "fov") || cam.fov || 35, aspect: rw / rh,
+                lag: this._asaLagFrames(a) };
+            let k;
+            // A subject that moves over the range is followed unless follow is false: a turn about the middle of
+            // a drive left the car out of frame for most of it (the agent had not asked for follow).
+            let follow = a.follow === true || a.follow === "true" || a.follow === 1;
+            if (a.follow === undefined || a.follow === null) {
+                const ends = [rg.from, Math.round((rg.from + rg.to) / 2), rg.to].map((f) => this._asaSubjectBox(subjectIds, [f]));
+                if (ends.every(Boolean)) {
+                    const moved = Math.max(...ends.slice(1).map((b) => Math.hypot(...b.center.map((v, i) => v - ends[0].center[i]))));
+                    follow = moved > Math.max(0.05, 0.1 * ends[0].radius);
+                }
+            }
+            if (opts.lag && a.follow !== false) follow = true;
+            if (follow) {
+                // A moving subject (a car driving): measured on every few frames, the pivot keyed on each.
+                const step = Math.max(1, Math.round(Number(a.follow_step) || 4));
+                const frames = [];
+                for (let f = rg.from; f < rg.to; f += step) frames.push(f);
+                frames.push(rg.to);
+                const spheres = frames.map((f) => ({ f, ...(this._asaSubjectBox(subjectIds, [f]) || {}) }));
+                k = A.followTurntable(spheres, rg.from, rg.to, opts);
+            } else {
+                const sub = this._asaSubjectBox(subjectIds, A.sampleFrames(rg.from, rg.to, 9));
+                k = sub ? A.turntableRange(sub, rg.from, rg.to, opts) : null;
+            }
+            if (!k) throw new Error("the target has nothing to measure (not loaded yet?)");
             keyBase(() => {
                 for (const [it, set] of [[pivot, k.pivot], [cam, k.cam]]) {
                     for (const [prop, keys] of Object.entries(set)) {
@@ -292,8 +494,19 @@ export const PrevizAgentSceneMixin = {
                         S.setTrack(it, prop, A.mergeKeys(list, keys));
                     }
                 }
+                // lag: the camera looks at the subject through its look-at target. A camera that already
+                // looks at its target (an earlier lagging range) gets the pivot as its target on this one,
+                // which is where it looks without one.
+                const aim = k.aim || (cam.aim && cam.aim.on ? k.pivot.position : null);
+                if (aim) {
+                    cam.aim = { ...(cam.aim || {}), on: true, target: aim[0].v.slice() };
+                    ["aim:x", "aim:y", "aim:z"].forEach((prop, j) => {
+                        const list = (S.baseTrack(cam, prop) || []).filter((x) => x.f < rg.from || x.f > rg.to);
+                        S.setTrack(cam, prop, A.mergeKeys(list, aim.map((x) => ({ f: x.f, v: x.v[j], ease: x.ease }))));
+                    });
+                }
             });
-            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center });
+            out.push({ clip: rg.clip, from: rg.from, to: rg.to, distance: k.distance, height: k.height, center: k.center, follow: !!k.follow, lag: opts.lag || 0 });
         }
         if (a.active !== false) scene.activeCamera = cam.id;
         await this.previzChanged({ reload: true });
@@ -378,8 +591,17 @@ export const PrevizAgentSceneMixin = {
         const keys = Array.isArray(a.keys) ? a.keys : [{ frame: a.frame, value: a.value, ease: a.ease }];
         const prop = this._asaProp(it, a.prop);
         this.previzSnapshot(`key ${it.name}.${prop}`);
-        let n = 0;
+        let n = 0, cleared = 0;
         this._asaOnLayer(scene, a.layer, () => {
+            // replace: the channel's keys from the first new frame to the last go first, so an old
+            // key between them (a pass laid over another) cannot pull the curve away.
+            if (a.replace) {
+                const fs = keys.map((k) => (k.frame === undefined || k.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(k.frame))));
+                const lo = Math.min(...fs), hi = Math.max(...fs);
+                for (const k of S.track(it, prop).slice()) {
+                    if (k.f >= lo && k.f <= hi) { S.removeKeyframe(it, k.f, prop); cleared++; }
+                }
+            }
             for (const k of keys) {
                 const f = k.frame === undefined || k.frame === null ? Math.round(this.currentFrame || 0) : Math.round(Number(k.frame));
                 let v = k.value;
@@ -402,7 +624,7 @@ export const PrevizAgentSceneMixin = {
             }
         });
         this.previzChanged();
-        return { item: it.name, prop, keys: n };
+        return a.replace ? { item: it.name, prop, keys: n, cleared } : { item: it.name, prop, keys: n };
     },
 
     _asa_key_delete(scene, a) {

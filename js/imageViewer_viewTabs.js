@@ -17,6 +17,7 @@ export const VT_KINDS = {
     code:    { prefix: "code:",    handler: "_codeTabKind",  icon: "\u{1F4C4} " },
     dataset: { prefix: "dataset:", handler: "_loraTabKind",  icon: "\u{1F5C2} " },
     deps:    { prefix: "deps:",    handler: "_depsTabKind",  icon: "\u{1F517} " },
+    farm:    { prefix: "farm:",    handler: "_farmTabKind",  icon: "\u{1F5A5} " },
 };
 
 export const ViewTabsMixin = {

@@ -260,6 +260,65 @@ class PaintGenerate(unittest.TestCase):
         self.assertEqual(f["to"], os.path.join(root, "checkpoints", "sam3.1_multiplex_fp16.safetensors"))
         self.assertEqual(plan["unknown"], [])
 
+    def test_a_model_download_writes_the_install_log(self):
+        import io
+        import time as _t
+        import urllib.request
+        L = importlib.import_module(self.pkg + ".install_log")
+        root = os.path.join(self.tmp, "models_log")
+        old = getattr(self.fp, "get_folder_paths", None)
+        self.fp.get_folder_paths = lambda d: [os.path.join(root, d)]
+        data = b"x" * (3 * self.G.CHUNK + 5)
+
+        class Answer(io.BytesIO):
+            headers = {"Content-Length": str(len(data))}
+
+        real = urllib.request.urlopen
+        urllib.request.urlopen = lambda req, timeout=60: Answer(data)
+        try:
+            job = self.G.start_file_download([{"name": "w.safetensors", "folder": "detection",
+                                               "url": "https://huggingface.co/a/b/resolve/main/w.safetensors"}],
+                                              self.fp, "sam3d_body")
+            for _ in range(200):
+                if self.G.download_status(job)["state"] != "running":
+                    break
+                _t.sleep(0.02)
+        finally:
+            urllib.request.urlopen = real
+            if old is not None:
+                self.fp.get_folder_paths = old
+        st = self.G.download_status(job)
+        self.assertEqual(st["state"], "done", st)
+        self.assertEqual(st["log"], job)                       # the page opens the log window by the job's id
+        v = L.get(job).view()
+        self.assertEqual(v["state"], "done")
+        self.assertEqual(v["kind"], "download")
+        text = "\n".join(v["lines"])
+        self.assertIn("GET https://huggingface.co/a/b/resolve/main/w.safetensors", text)
+        self.assertIn("w.safetensors: done", text)
+        self.assertEqual(v["lines"][-1], "-- done --")
+        self.assertTrue(os.path.isfile(os.path.join(root, "detection", "w.safetensors")))
+
+    def test_the_install_log_keeps_its_last_lines_and_says_what_it_dropped(self):
+        L = importlib.import_module(self.pkg + ".install_log")
+        log = L.new("t", "install")
+        log.say("a\r\n")
+        log.say("50%\r100%")                                  # a progress bar: the text after the last return
+        log.say("b\nc")
+        self.assertEqual(log.view()["lines"], ["a", "100%", "b", "c"])
+        self.assertEqual(log.view(2)["lines"], ["b", "c"])
+        for i in range(L.MAX_LINES + 10):
+            log.say(str(i))
+        v = log.view(0)
+        self.assertEqual(len(v["lines"]), L.MAX_LINES)
+        self.assertEqual(v["dropped"], 14)
+        self.assertEqual(v["next"], L.MAX_LINES + 14)
+        self.assertEqual(log.view(v["next"] - 1)["lines"], [str(L.MAX_LINES + 9)])
+        self.assertFalse(v["can_stop"])
+        log.finish("done")
+        self.assertEqual(L.get(log.id).state, "done")
+        self.assertFalse(L.stop(log.id))
+
     def test_slots_found_without_titles(self):
         g = {"3": {"class_type": "KSampler", "inputs": {"seed": 5, "steps": 4}},
              "4": {"class_type": "CLIPTextEncode", "_meta": {"title": "Negative"}, "inputs": {"text": "blurry"}},

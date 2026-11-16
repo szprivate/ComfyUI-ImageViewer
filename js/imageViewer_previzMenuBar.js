@@ -1,6 +1,6 @@
 // imageViewer_previzMenuBar.js
 // The 3D space's menu bar, across the top of the canvas (Maya's panel menus,
-// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, View,
+// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, Terrain, View,
 // Windows. The Outliner was the place for these once; it is the tree only now.
 //
 // The view (imageViewer_model3d.js) makes the bar and keeps the shading,
@@ -38,6 +38,7 @@ const MENUS = [
     ["Animate", "previz-anim", (p, a) => [...p._previzKeyMenuEntries(), "-", ...rigMenuOf(p._previzRigMenuEntries(a), "anim")]],
     ["Constrain", "previz-constrain", (p) => p._previzConstrainMenuEntries()],
     ["World", "previz-atlas-menu", (p) => p._previzWorldBarEntries()],
+    ["Terrain", "previz-mb-terrain", (p) => p._previzTerrainMenuEntries()],
     ["View", "previz-mb-view", (p) => p._previzViewMenuEntries()],
     ["Windows", "previz-mb-windows", (p) => p._previzWindowsMenuEntries()],
 ];

@@ -133,11 +133,26 @@ class CompFiles(unittest.TestCase):
 
     # ── AI nodes ──
 
+    def _comp_flows(self, lists, flows):
+        """The Comp's own table for one test: *lists* {kind: {action, workflows}}, *flows* {id: (actions, graph)}."""
+        import json
+        d = tempfile.mkdtemp(dir=self.tmp)
+        entries = []
+        for wid, (actions, graph) in flows.items():
+            with open(os.path.join(d, wid + ".json"), "w", encoding="utf-8") as fh:
+                json.dump(graph, fh)
+            entries.append({"id": wid, "label": wid, "file": wid + ".json", "format": "api", "actions": actions,
+                            "size": {"mp": None, "mult": 8, "max": 2048}, "nodes": []})
+        with open(os.path.join(d, "index.json"), "w", encoding="utf-8") as fh:
+            json.dump({"lists": lists, "entries": entries}, fh)
+        old = self.G.COMP_DIR
+        self.G.COMP_DIR = d
+        self.addCleanup(setattr, self.G, "COMP_DIR", old)
+
     def test_an_ai_matte_runs_through_a_workflow_and_its_answer_lies_beside_the_comp(self):
         graph = {"1": {"class_type": "LoadImage", "_meta": {"title": "paint:image"}, "inputs": {"image": "x.png"}},
                  "2": {"class_type": "SaveImage", "_meta": {"title": "paint:output"}, "inputs": {"images": ["1", 0], "filename_prefix": "x"}}}
-        self.G.set_custom("background", graph, "test matte")
-        self.G.set_choice("background", "custom")
+        self._comp_flows({"matte": {"action": "background", "workflows": ["t_matte"]}}, {"t_matte": (["background"], graph)})
         comp_path = os.path.join(self.dirs["output"], "shot.comp.json")
         comp = {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 4}, "output": "Output1",
                 "nodes": [{"id": "Read1", "type": "read", "file": "plate.png", "inputs": []},
@@ -185,9 +200,186 @@ class CompFiles(unittest.TestCase):
     def test_ai_actions(self):
         self.assertEqual(self.AI.action_of("inpaint", ""), ("remove", ""))
         self.assertEqual(self.AI.action_of("inpaint", "a tree")[0], "fill")
-        self.assertEqual(self.AI.action_of("depth", "")[0], "edit")
+        self.assertEqual(self.AI.action_of("depth", "")[0], "depth")
         with self.assertRaises(self.AI.AiError):
-            self.AI.action_of("relight", "")
+            self.AI.action_of("relight", "")     # the AI Relight node is gone
+
+    def test_each_ai_node_lists_only_its_own_workflows(self):
+        real = self.G.comp_table()["lists"]
+        self.assertEqual(sorted(real), ["depth", "inpaint", "matte", "upscale"])
+        self.assertNotIn("relight", real)
+        got = self.AI.workflows_for("depth")
+        self.assertEqual([w["id"] for w in got["workflows"]], self.DEPTH_IDS)
+        self.assertEqual(got["choice"], "comp_da3_metric")
+        self.assertEqual(got["action"], "depth")
+        fill = [w["id"] for w in self.AI.workflows_for("inpaint", "a tree")["workflows"]]
+        remove = [w["id"] for w in self.AI.workflows_for("inpaint", "")["workflows"]]
+        self.assertIn("flux_fill", fill)
+        self.assertNotIn("flux_fill_onereward_remove", fill)
+        self.assertIn("flux_fill_onereward_remove", remove)
+        for kind in ("matte", "upscale", "inpaint"):    # every id in a list is a workflow that is there
+            for wid in real[kind]["workflows"]:
+                self.assertIsNotNone(self.G._builtin(wid)[0], wid)
+        self.assertEqual(self.AI.pick_workflow("depth", "", "comp_da3_mono"), "comp_da3_mono")
+        self.assertEqual(self.AI.pick_workflow("depth", "", "birefnet"), "comp_da3_metric")   # not its list
+        with self.assertRaises(self.AI.AiError):
+            self.AI.workflows_for("relight")
+
+        async def go(c):
+            r = await c.post("/imageviewer/comp_ai_workflows", json={"kind": "upscale"})
+            res = await r.json()
+            self.assertEqual(r.status, 200, res)
+            self.assertEqual(res["choice"], res["workflows"][0]["id"])
+            r = await c.post("/imageviewer/comp_ai_workflows", json={"kind": "relight"})
+            self.assertEqual(r.status, 400)
+        self.run_c(go)
+
+    DEPTH_IDS = ["comp_da3_metric", "comp_da3_mono", "comp_da3_base", "comp_da3_small", "comp_moge3_vitl",
+                 "comp_moge3_vitg", "comp_moge2_vitl", "comp_lotus_depth", "comp_marigold_v2_depth"]
+
+    def test_every_depth_workflow_is_a_whole_graph_of_comfyuis_own_nodes(self):
+        loaders = self.G.LOADERS
+        for wid in self.DEPTH_IDS:
+            e, g = self.G._builtin(wid)
+            self.assertIsNotNone(e, wid)
+            self.assertEqual(e["actions"], ["depth"], wid)
+            self.assertEqual(sorted({n["class_type"] for n in g.values()}), sorted(e["nodes"]), wid)
+            titles = [((n.get("_meta") or {}).get("title")) for n in g.values()]
+            self.assertIn("paint:image", titles, wid)
+            self.assertIn("paint:output", titles, wid)
+            for k, n in g.items():                     # every link leads to a node of the graph
+                for v in n["inputs"].values():
+                    if isinstance(v, list) and len(v) == 2 and isinstance(v[1], int):
+                        self.assertIn(str(v[0]), g, f"{wid} {k}")
+            out = next(n for n in g.values() if (n.get("_meta") or {}).get("title") == "paint:output")
+            self.assertEqual(out["class_type"], "SaveImageAdvanced", wid)
+            self.assertEqual(out["inputs"]["format"], "exr", wid)
+            # Each model file a loader names is offered for download, from Hugging Face, into its folder.
+            wanted = {(n["inputs"][i], d) for n in g.values() for i, d in loaders.get(n["class_type"], [])}
+            offered = {(m["name"], m["directory"]) for m in e["models"]}
+            self.assertEqual(wanted, offered, wid)
+            for m in e["models"]:
+                self.assertTrue(self.G._allowed_url(m["url"]), m["url"])
+                self.assertTrue(m["url"].endswith("/" + m["name"]), m["url"])
+        near = [w for w in self.DEPTH_IDS if self.AI.near_white(w)]
+        self.assertEqual(near, ["comp_moge3_vitl", "comp_moge3_vitg", "comp_moge2_vitl", "comp_lotus_depth", "comp_marigold_v2_depth"])
+
+    def test_a_depth_model_this_comfyui_cannot_run_is_not_listed(self):
+        have = {"LoadImage", "SaveImageAdvanced", "LoadDA3Model", "DA3Inference", "DA3Render"}
+        got = [w["id"] for w in self.AI.workflows_for("depth", node_classes=have)["workflows"]]
+        self.assertEqual(got, ["comp_da3_metric", "comp_da3_mono", "comp_da3_base", "comp_da3_small"])
+
+    def test_a_missing_depth_model_is_offered_for_download_with_where_it_goes(self):
+        self.MODELS = {"geometry_estimation": []}
+        fp = self._fake_models()
+        fp.get_folder_paths = lambda f: [os.path.join(self.dirs["output"], "models", f)]
+        self.addCleanup(lambda: delattr(fp, "get_folder_paths"))
+        item = next(w for w in self.AI.workflows_for("depth", folder_paths=fp)["workflows"] if w["id"] == "comp_moge3_vitl")
+        self.assertEqual([m["what"] for m in item["missing"]], ["moge_3_vitl_fp16.safetensors"])
+        plan = self.G.download_plan("comp_moge3_vitl", fp, sizes=False)
+        self.assertEqual([(f["name"], f["folder"]) for f in plan["files"]], [("moge_3_vitl_fp16.safetensors", "geometry_estimation")])
+        self.assertTrue(plan["files"][0]["url"].startswith("https://huggingface.co/Comfy-Org/MoGe/"))
+        self.assertEqual(plan["unknown"], [])
+
+    def test_a_map_that_is_near_white_already_is_read_the_right_way_round(self):
+        try:
+            import av  # noqa: F401
+        except ImportError:
+            self.skipTest("needs PyAV")
+        path = os.path.join(self.dirs["output"], "nw.exr")
+        v = np.tile(np.linspace(1.0, 0.0, 40, dtype=np.float32), (20, 1))   # near (white) on the left
+        self._exr(path, v)
+        d = self.AI.read_depth(path, True)
+        self.assertLess(float(d[3, 0]), float(d[3, 39]))         # larger = farther
+        self.assertGreater(float(d.min()), 0.0)                   # the nearest is not taken for "no depth"
+        m = self.AI.depth_maps([d])[0]
+        self.assertGreater(int(m[3, 0]), int(m[3, 39]))
+        self.assertGreater(int(m[3, 0]), 60000)
+        png = os.path.join(self.dirs["output"], "nw.png")
+        from PIL import Image
+        Image.fromarray(np.full((4, 4, 3), 255, np.uint8)).save(png)   # a picture that is all nearest
+        self.assertGreater(float(self.AI.read_depth(png).min()), 0.0)
+
+    def test_depth_is_one_range_for_the_whole_job_near_white(self):
+        a = np.full((4, 4), 2.0, np.float32)
+        b = np.full((4, 4), 2.0, np.float32)
+        b[:, 2:] = 10.0                     # the second frame reaches farther
+        ma, mb = self.AI.depth_maps([a, b])
+        self.assertEqual(ma.dtype, np.uint16)
+        self.assertEqual(int(ma[0, 0]), int(mb[0, 0]))      # the same depth is the same grey in both frames
+        self.assertGreater(int(mb[0, 0]), int(mb[0, 3]))    # nearer is whiter
+        z = np.array([[0.0, np.nan], [2.0, 4.0]], np.float32)
+        m = self.AI.depth_maps([z])[0]
+        self.assertEqual(int(m[0, 0]), int(m[0, 1]))        # no depth counts as far
+        self.assertLessEqual(int(m[0, 0]), int(m[1, 1]))
+
+    def _exr(self, path, depth):
+        import av
+        cc = av.CodecContext.create("exr", "w")
+        h, w = depth.shape
+        cc.width, cc.height, cc.pix_fmt = w, h, "gbrpf32le"
+        rgb = np.ascontiguousarray(np.repeat(depth[..., None], 3, axis=2).astype(np.float32))
+        fr = av.VideoFrame.from_ndarray(rgb, format="gbrpf32le")
+        data = b"".join(bytes(p) for p in cc.encode(fr)) + b"".join(bytes(p) for p in cc.encode(None))
+        with open(path, "wb") as fh:
+            fh.write(data)
+
+    def test_a_depth_range_runs_depth_anything_once_and_lands_as_16_bit_pngs(self):
+        try:
+            import av  # noqa: F401
+        except ImportError:
+            self.skipTest("needs PyAV")
+        self.MODELS = {"geometry_estimation": ["depth_anything_3_mono_large.safetensors"]}
+        self._fake_models()
+        comp_path = os.path.join(self.dirs["output"], "dep.comp.json")
+        comp = {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 4}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "plate.png", "inputs": []},
+                          {"id": "AI1", "type": "ai_depth", "inputs": ["Read1"], "workflow": "comp_da3_mono"},
+                          {"id": "Output1", "type": "output", "inputs": ["AI1"]}]}
+        from PIL import Image
+        out = os.path.join(self.dirs["output"], "gen")
+        os.makedirs(out, exist_ok=True)
+        d = np.tile(np.linspace(1.0, 5.0, 60, dtype=np.float32), (40, 1))   # far to the right
+        self._exr(os.path.join(out, "d.exr"), d)
+        self.assertLess(abs(float(self.AI.read_depth(os.path.join(out, "d.exr"))[5, 30]) - float(d[5, 30])), 1e-3)
+
+        async def go(c):
+            r = await c.post("/imageviewer/comp_ai_batch", json={"path": comp_path, "comp": comp, "node": "AI1", "frames": [0, 1, 2]})
+            prep = await r.json()
+            self.assertEqual(r.status, 200, prep)
+            self.assertEqual(prep["workflow"], "comp_da3_mono")
+            kinds = [v["class_type"] for v in prep["graph"].values()]
+            self.assertEqual(kinds.count("LoadDA3Model"), 1)      # the model loads once for the range
+            self.assertEqual(kinds.count("DA3Inference"), 3)
+            images = {str(f): {"filename": "d.exr", "subfolder": "gen", "type": "output"} for f in prep["frames"]}
+            r = await c.post("/imageviewer/comp_ai_batch_place", json={"run": prep["run"], "images": images})
+            placed = await r.json()
+            self.assertEqual(r.status, 200, placed)
+            return placed
+        placed = self.run_c(go)
+        im = Image.open(os.path.join(self.dirs["output"], *placed["frames"]["1"].split("/")))
+        self.assertIn(im.mode, ("I;16", "I"))
+        px = np.asarray(im)
+        self.assertGreater(int(px[20, 2]), int(px[20, 57]))       # near (left) is whiter
+        self.assertGreater(int(px[20, 2]), 60000)
+
+        # MoGe answers near = white already: the same placing reads it the other way round.
+        self.MODELS = {"geometry_estimation": ["moge_3_vitl_fp16.safetensors"]}
+        self._fake_models()
+        comp["nodes"][1]["workflow"] = "comp_moge3_vitl"
+        self._exr(os.path.join(out, "m.exr"), np.tile(np.linspace(1.0, 0.0, 60, dtype=np.float32), (40, 1)))
+
+        async def moge(c):
+            r = await c.post("/imageviewer/comp_ai_batch", json={"path": comp_path, "comp": comp, "node": "AI1", "frames": [0, 1]})
+            prep = await r.json()
+            self.assertEqual(r.status, 200, prep)
+            self.assertEqual([v["class_type"] for v in prep["graph"].values()].count("LoadMoGeModel"), 1)
+            images = {str(f): {"filename": "m.exr", "subfolder": "gen", "type": "output"} for f in prep["frames"]}
+            r = await c.post("/imageviewer/comp_ai_batch_place", json={"run": prep["run"], "images": images})
+            return await r.json()
+        placed = self.run_c(moge)
+        px = np.asarray(Image.open(os.path.join(self.dirs["output"], *placed["frames"]["0"].split("/"))))
+        self.assertGreater(int(px[20, 2]), int(px[20, 57]))
 
     # ── a frame range as one job; picking the models ──
 
@@ -242,8 +434,7 @@ class CompFiles(unittest.TestCase):
 
     def test_a_frame_range_is_one_job_and_comes_back_as_a_png_sequence(self):
         self._fake_models()
-        self.G.set_custom("background", self.LOADER_FLOW, "test matte with a model")
-        self.G.set_choice("background", "custom")
+        self._comp_flows({"matte": {"action": "background", "workflows": ["t_matte"]}}, {"t_matte": (["background"], self.LOADER_FLOW)})
         comp_path = os.path.join(self.dirs["output"], "seq.comp.json")
         comp = {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 6}, "output": "Output1",
                 "nodes": [{"id": "Read1", "type": "read", "file": "plate.png", "inputs": []},
@@ -319,10 +510,11 @@ class CompFiles(unittest.TestCase):
             self.G.apply_models(g, {"1.model": "C:/elsewhere/x8.pth"}, fp)
 
         async def go(c):
-            self.G.set_custom("upscale", self.LOADER_FLOW, "with a model")
-            r = await c.post("/imageviewer/comp_ai_models", json={"action": "upscale", "workflow": "custom"})
+            self._comp_flows({"upscale": {"action": "upscale", "workflows": ["t_up"]}}, {"t_up": (["upscale"], self.LOADER_FLOW)})
+            r = await c.post("/imageviewer/comp_ai_models", json={"kind": "upscale", "workflow": "not-in-the-list"})
             res = await r.json()
             self.assertEqual(r.status, 200, res)
+            self.assertEqual(res["workflow"], "t_up")      # not in the node's list: its default
             self.assertEqual(res["inputs"][0]["options"], ["base.safetensors", "sub/other.safetensors"])
         self.run_c(go)
 

@@ -46,6 +46,9 @@ EASES = ["smooth", "linear", "hold", "easeIn", "easeOut", "easeInOut", "backOut"
 NODE_GAP = 60
 
 
+# The AI nodes (comp_ai.AI_KINDS): their pictures come from a ComfyUI run, kept as the node's results.
+AI_TYPES = ("ai_matte", "ai_depth", "ai_inpaint", "ai_upscale")
+
 class CompError(ValueError):
     pass
 
@@ -124,9 +127,16 @@ class Comp:
                 row["params"] = params
             if n.get("tracks"):
                 row["keys"] = {p: [k["f"] for k in ks] for p, ks in n["tracks"].items() if ks}
+            if n["type"] in AI_TYPES:
+                # An AI node shows nothing until it is run (edit_comp's run_ai / the node's Run button).
+                got = (n.get("results") or {}).get("frames") if isinstance(n.get("results"), dict) else None
+                row["results"] = len(got) if isinstance(got, dict) else 0
             out.append(row)
         return {"path": self.path, "format": self.format, "output": self.output, "nodes": out,
-                "writes": [n["id"] for n in self.nodes("write")]}
+                "writes": [n["id"] for n in self.nodes("write")],
+                # Every type "add" takes, so a reader never has to guess (the promo run's agent did not find
+                # depthblur and built depth of field from a plain blur).
+                "node_types": sorted(M.NODE_TYPES)}
 
     # ── edits ────────────────────────────────────────────────────────────────
 

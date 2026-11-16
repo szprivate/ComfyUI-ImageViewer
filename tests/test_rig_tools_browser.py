@@ -13,6 +13,7 @@ import email.parser
 import email.policy
 import json
 import math
+import re
 import os
 import shutil
 import socket
@@ -226,13 +227,15 @@ class RigToolsBrowserTests(unittest.TestCase):
                 "skintokens": {"ready": ready and getattr(self, "skin_ready", False), "why": "SkinTokens is not set up"},
                 "kimodo": {"ready": ready, "why": "" if ready else "Kimodo is not set up", "model": "Kimodo-SOMA-RP-v1.2"},
                 "posetrack": {"ready": ready, "why": "" if ready else "Motion from video is not set up"},
-                "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None}}))
+                "install": {"root": "D:/AI/rigtools", "hf_token": False, "running": None,
+                            "python": "C:/Comfy/python.exe", "script": "C:/Comfy/custom_nodes/viewer/scripts/rig/install_rig_tools.py",
+                            "windows": True}}))
 
         def install(route, request):
             self.requests.append(("install", json.loads(request.post_data or "{}")))
-            state["install_polls"] = 0
             route.fulfill(status=200, content_type="application/json",
-                          body=json.dumps({"job": "inst", "kind": "install", "state": "running", "log": [], "share": 0}))
+                          body=json.dumps({"command": "python -u install_rig_tools.py --root D:/AI/rigtools",
+                                           "root": "D:/AI/rigtools", "only": None}))
 
         def start(kind):
             def handler(route, request):
@@ -251,15 +254,6 @@ class RigToolsBrowserTests(unittest.TestCase):
             return handler
 
         def job(route, request):
-            if "job=inst" in request.url:
-                state["install_polls"] += 1
-                if state["install_polls"] < 3:
-                    body = {"job": "inst", "state": "running", "log": ["$ pip install torch"], "share": 0.4}
-                else:
-                    self.installed = True
-                    body = {"job": "inst", "state": "done", "log": ["== written"], "share": 1.0}
-                route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
-                return
             route.fulfill(status=200, content_type="application/json",
                           body=json.dumps({"job": "x", "state": "done", "log": ["done"], "result": state["result"]}))
 
@@ -472,17 +466,23 @@ class RigToolsBrowserTests(unittest.TestCase):
         box.wait_for(state="detached", timeout=30000)
 
     def test_install_from_the_auto_rig_dialog(self):
-        """Not set up: Auto-rig… offers the install, which runs and then opens the Auto-rig dialog."""
+        """Not set up: Auto-rig… shows the install command to run; Check again opens Auto-rig once it is set up.
+        The viewer never runs the installer itself (the registry's standards forbid pip at run time)."""
         self.installed = False
         pg = self.page()
         try:
             pg.evaluate(OPEN, ["statue.glb", "Statue"])
             self._menu(pg, "Auto-rig")
-            box = pg.locator('.rd-box[aria-label="Install AI rigging / motion models"]')
+            box = pg.locator('.rd-box[aria-label="Set up AI rigging / motion models"]')
             box.wait_for(state="visible", timeout=10000)
             text = box.inner_text()
+            command = box.locator(".rig-install-cmd").first.input_value()
             self.assertEqual(box.locator('input[type="password"]').count(), 1)
             box.locator('input[type="password"]').fill("hf_" + "b" * 30)
+            box.locator("button.rd-go").click()
+            box.locator(".rd-message", has_text="Not set up yet").wait_for(state="visible", timeout=10000)
+            still = box.count()
+            self.installed = True
             box.locator("button.rd-go").click()
             rig = pg.locator('.rd-box[aria-label="Auto-rig"]')
             rig.wait_for(state="visible", timeout=20000)
@@ -491,6 +491,9 @@ class RigToolsBrowserTests(unittest.TestCase):
             pg.close()
             self.installed = True
         self.assertIn("not set up on this machine", text)
+        self.assertIn("install_rig_tools.py", command)
+        self.assertIn("--root D:/AI/rigtools", command)
+        self.assertEqual(still, 1)                            # not ready yet: the dialog stays
         body = [b for k, b in self.requests if k == "install"][0]
         self.assertEqual(body["root"], "D:/AI/rigtools")                # the server's suggestion
         self.assertEqual(body["hf_token"], "hf_" + "b" * 30)
@@ -828,6 +831,231 @@ class RigToolsBrowserTests(unittest.TestCase):
         self.assertTrue(done, f"no answer to {aid}")
         return done[-1]
 
+    def test_an_agent_request_brings_the_3d_space_up_from_another_tab(self):
+        """animate_scene's request reached no page while the viewer was on another tab (show_in_viewer had switched
+        it), and the agent could not switch back. The page in front brings the open 3D tab up, else a new scene."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            first = pg.evaluate("() => window.__panel.activeTab")
+            pg.evaluate("""() => { const P = window.__panel; const k = 'folder_history';
+                if (!P.allTabs[k]) { P.allTabs[k] = []; P.tabOrder.push(k); P.tabLabels[k] = 'Viewer'; }
+                P.switchTab(k); }""")
+            self.assertFalse(pg.evaluate("() => window.__panel.isPrevizTab()"))
+            back = self._ask(pg, "b1", "scene_info", {})
+            tab = pg.evaluate("() => window.__panel.activeTab")
+        finally:
+            pg.close()
+        self.assertEqual(back["state"], "done", back)
+        self.assertEqual(tab, first, "the open 3D tab came back, no new one")
+        self.assertEqual(self.errors, [])
+
+    def test_a_turntable_follows_a_driving_car_unasked_and_scene_set_makes_a_sky(self):
+        """A turntable round a subject that moves follows it even when follow is not given (a turn about the middle of
+        a drive once left the car out of frame most of the time); follow false still turns about one place.
+        scene_set environment makes the world's sky (a big sphere as a dome does not show from inside)."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._ask(pg, "s1", "add_shape", {"type": "box", "name": "Car", "scale": [1.8, 1.4, 4.6]})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, -12], "ease": "linear"}, {"frame": 48, "value": [0, 0, 12], "ease": "linear"}]})
+            auto = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "distance": 5, "height": 1.5, "name": "Orbit"})
+            still = self._ask(pg, "t2", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": False, "name": "Fixed"})
+            env = self._ask(pg, "e1", "scene_set", {"environment": {"sky": {"top": "#3a6fb0", "horizon": "#f0c89a"},
+                                                                    "sun": {"elevation": 50}}})
+            env2 = self._ask(pg, "e2", "scene_set", {"environment": {"fog": {"density": 0.001}}})
+            got = pg.evaluate("""() => { const scene = window.__panel.previzScene();
+                const keys = (n) => (scene.items.find((i) => i.name === n).tracks.position || []).length;
+                const envs = scene.items.filter((i) => i.kind === 'environment');
+                return { orbit: keys('Orbit'), fixed: keys('Fixed'), envs: envs.length,
+                         top: envs[0] && envs[0].sky.top, sun: envs[0] && envs[0].sun.elevation, fog: envs[0] && envs[0].fog.density }; }""")
+        finally:
+            pg.close()
+        self.assertEqual(auto["state"], "done", auto)
+        self.assertTrue(auto["result"]["ranges"][0]["follow"], auto)
+        self.assertGreater(got["orbit"], 5, "the pivot is keyed along the drive")
+        self.assertFalse(still["result"]["ranges"][0]["follow"])
+        self.assertEqual(got["fixed"], 1)
+        self.assertEqual(env["state"], "done", env)
+        self.assertEqual(got["envs"], 1, "a second scene_set changes the one environment")
+        self.assertEqual(got["top"], "#3a6fb0")
+        self.assertEqual(got["sun"], 50)
+        self.assertEqual(got["fog"], 0.001)
+        self.assertEqual(env2["result"]["environment"]["sky"]["top"], "#3a6fb0", "merged, not replaced")
+        self.assertEqual(self.errors, [])
+
+    def test_the_agent_builds_a_stand_in_car_and_turns_round_it_while_it_drives(self):
+        """add_shape: a group with boxes and wheels under it; turntable follow: the camera keeps turning about the
+        car while the car drives, at one car's distance."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            car = self._ask(pg, "s1", "add_shape", {"type": "group", "name": "Car"})
+            body = self._ask(pg, "s2", "add_shape", {"type": "box", "name": "Body", "parent": "Car", "position": [0, 0.3, 0],
+                                                    "scale": [1.8, 0.7, 4.6], "color": "#cc1111"})
+            wheel = self._ask(pg, "s3", "add_shape", {"type": "cylinder", "name": "Wheel FL", "parent": "Car",
+                                                     "position": [0.9, 0, 1.4], "rotation": [0, 0, 90], "scale": [0.66, 0.25, 0.66]})
+            bad = self._ask(pg, "s4", "add_shape", {"type": "teapot"})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, 40], "ease": "linear"}, {"frame": 48, "value": [0, 0, -8], "ease": "linear"}]})
+            tt = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": True, "name": "Orbit"})
+            got = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene(), T = view.libs.THREE;
+                const cam = scene.items.find((i) => i.name === 'Orbit cam'), car = scene.items.find((i) => i.name === 'Car');
+                const body = scene.items.find((i) => i.name === 'Body');
+                const out = { color: body.color, parent: scene.items.find((i) => i.id === body.parent).name, frames: [] };
+                for (const f of [0, 12, 24, 36, 48]) { view.applyFrame(f);
+                    const e = view._entries.get(cam.id), c = view._entries.get(car.id);
+                    e.root.updateMatrixWorld(true); c.root.updateMatrixWorld(true);
+                    out.frames.push([f, e.camera.getWorldPosition(new T.Vector3()).toArray(), c.root.getWorldPosition(new T.Vector3()).toArray(),
+                        new T.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new T.Quaternion())).toArray()]); }
+                view.applyFrame(0); return out; }""")
+        finally:
+            pg.close()
+        self.assertEqual(car["state"], "done", car)
+        self.assertEqual(body["result"]["parent"], "Car")
+        self.assertEqual(wheel["state"], "done", wheel)
+        self.assertEqual(bad["state"], "error")
+        self.assertIn("type is one of", bad["error"])
+        self.assertEqual(got["color"], "#cc1111")
+        self.assertEqual(got["parent"], "Car")
+        self.assertEqual(tt["state"], "done", tt)
+        self.assertTrue(tt["result"]["ranges"][0]["follow"])
+        dist = tt["result"]["ranges"][0]["distance"]
+        self.assertLess(dist, 20, "one car's distance, not the whole road's")
+        angles = []
+        for f, cam, car_at, look in got["frames"]:
+            flat = math.hypot(cam[0] - car_at[0], cam[2] - car_at[2])
+            self.assertAlmostEqual(flat, dist, delta=0.6, msg=f"frame {f}: the camera stays round the car")
+            to = [car_at[0] - cam[0], 0, car_at[2] - cam[2]]
+            n = math.hypot(*to)
+            self.assertGreater((look[0] * to[0] + look[2] * to[2]) / n, 0.95, f"frame {f} looks at the car")
+            angles.append(math.degrees(math.atan2(cam[0] - car_at[0], cam[2] - car_at[2])))
+        turned = sum(((b - a + 180) % 360) - 180 for a, b in zip(angles, angles[1:]))
+        self.assertAlmostEqual(abs(turned), 360 * 48 / 49, delta=8, msg="a full turn over the range")
+        self.assertEqual(self.errors, [])
+
+    def test_the_agent_removes_hides_and_rekeys_without_a_stale_key_left(self):
+        """remove_item takes a group with what it holds; item_set hides an item; key_set replace clears the
+        channel's old keys between its first and last frame (a stray key once pulled a 360 orbit away)."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            self._ask(pg, "a1", "add_shape", {"type": "group", "name": "Proxy"})
+            self._ask(pg, "a2", "add_shape", {"type": "box", "name": "Proxy body", "parent": "Proxy"})
+            self._ask(pg, "a3", "add_shape", {"type": "box", "name": "Sign"})
+            gone = self._ask(pg, "r1", "remove_item", {"item": "Proxy"})
+            hid = self._ask(pg, "h1", "item_set", {"item": "Sign", "visible": False})
+            self._ask(pg, "c1", "add_camera", {"name": "Cam", "position": [0, 2, 10]})
+            self._ask(pg, "k1", "key_set", {"item": "Cam", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 2, 10]}, {"frame": 119, "value": [0, 6, -30]}]})
+            re = self._ask(pg, "k2", "key_set", {"item": "Cam", "prop": "position", "replace": True, "keys": [
+                {"frame": 0, "value": [0, 2, 10]}, {"frame": 60, "value": [10, 2, 0]}, {"frame": 120, "value": [0, 2, 10]}]})
+            got = pg.evaluate("""() => { const scene = window.__panel.previzScene();
+                const cam = scene.items.find((i) => i.name === 'Cam'), sign = scene.items.find((i) => i.name === 'Sign');
+                return { names: scene.items.map((i) => i.name), sign: sign.visible,
+                         frames: cam.tracks.position.map((k) => k.f) }; }""")
+        finally:
+            pg.close()
+        self.assertEqual(gone["state"], "done", gone)
+        self.assertEqual(sorted(gone["result"]["removed"]), ["Proxy", "Proxy body"])
+        self.assertNotIn("Proxy", got["names"])
+        self.assertNotIn("Proxy body", got["names"])
+        self.assertEqual(hid["result"]["visible"], False)
+        self.assertIs(got["sign"], False)
+        self.assertEqual(re["result"]["cleared"], 2)
+        self.assertEqual(got["frames"], [0, 60, 120])
+        self.assertEqual(self.errors, [])
+
+    def test_add_model_sizes_it_and_a_turntable_waits_for_it_to_load(self):
+        """add_model size = its longest side in metres (an agent once read "4.7 m" as a scale and made a 9 m car);
+        a turntable right after add_model waits for the model instead of "nothing to measure"."""
+        pg = self.page()
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            # A slow load: the model's item lands at once, its file a moment later (as a 15 MB GLB does).
+            pg.evaluate("""async () => { const P = window.__panel;
+                const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+                P.previzAddModels = async (items) => { const scene = P.previzScene();
+                    const it = S.makeModelItem({ url: '/media/statue.glb', filename: 'statue.glb' }, 'Car');
+                    scene.items.push(it);
+                    setTimeout(() => P.previzChanged({ reload: true }), 1500);
+                    return 1; }; }""")
+            # ComfyUI's /view: statue.glb is in the output folder, nothing else is.
+            pg.evaluate("""() => { const was = window.__fetchApi;
+                window.__fetchApi = async (p, o) => { if (!p.startsWith('/view?')) return was(p, o);
+                    const q = new URLSearchParams(p.split('?')[1]);
+                    const there = q.get('filename') === 'statue.glb' && q.get('type') === 'output';
+                    return { ok: there, status: there ? 200 : 404, json: async () => ({}) }; }; }""")
+            gone = self._ask(pg, "m0", "add_model", {"path": "output/agent/models/nope.glb", "name": "Nope"})
+            added = self._ask(pg, "m1", "add_model", {"path": "statue.glb", "name": "Car", "size": 4.7})
+            self._ask(pg, "k1", "key_set", {"item": "Car", "prop": "position", "keys": [
+                {"frame": 0, "value": [0, 0, -10], "ease": "linear"}, {"frame": 48, "value": [0, 0, 10], "ease": "linear"}]})
+            tt = self._ask(pg, "t1", "turntable", {"target": "Car", "from": 0, "to": 48, "follow": True, "distance": 5})
+            long = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), T = view.libs.THREE;
+                const it = P.previzScene().items.find((i) => i.name === 'Car'); view.applyFrame(0);
+                const e = view._entries.get(it.id); e.root.updateMatrixWorld(true);
+                const s = new T.Box3().setFromObject(e.root).getSize(new T.Vector3()); return Math.max(s.x, s.y, s.z); }""")
+        finally:
+            pg.close()
+        self.assertEqual(gone["state"], "error", gone)
+        self.assertIn("no such file", gone["error"])
+        self.assertIn("output folder", gone["error"])
+        self.assertEqual(added["state"], "done", added)
+        self.assertEqual(added["result"]["size"], 4.7)
+        self.assertAlmostEqual(long, 4.7, delta=0.05)
+        self.assertEqual(tt["state"], "done", tt)
+        self.assertTrue(tt["result"]["ranges"][0]["follow"])
+        self.assertEqual(self.errors, [])
+
+    def test_set_camera_moves_and_aims_the_camera(self):
+        """set_camera takes position / look_at / rotation as add_camera does (it once answered ok and moved nothing);
+        a camera whose position animates gets a key at the frame instead."""
+        pg = self.page()
+        look = """([name, f]) => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
+            const c = scene.items.find((i) => i.name === name); const e = view._entries.get(c.id); view.applyFrame(f);
+            e.root.updateMatrixWorld(true); const T = view.libs.THREE;
+            const p = e.camera.getWorldPosition(new T.Vector3()).toArray();
+            const d = new T.Vector3(0, 0, -1).applyQuaternion(e.camera.getWorldQuaternion(new T.Quaternion())).toArray();
+            view.applyFrame(0); return [p, d]; }"""
+        try:
+            pg.evaluate(OPEN, ["statue.glb", "Statue"])
+            add = self._ask(pg, "a1", "add_camera", {"name": "Road", "position": [0, -50, 0], "look_at": [0, 0, 10]})
+            moved = self._ask(pg, "a2", "set_camera", {"camera": "Road", "position": [0, 5.8, -50], "look_at": [-30, 4, 100], "fov": 40})
+            p, d = pg.evaluate(look, ["Road", 0])
+            key0 = self._ask(pg, "a3", "key_set", {"item": "Road", "prop": "position", "frame": 0, "value": [0, 5.8, -50]})
+            keyed = self._ask(pg, "a4", "set_camera", {"camera": "Road", "position": [0, 5.8, -30], "frame": 20, "zoom": 2})
+            p20, _ = pg.evaluate(look, ["Road", 20])
+            p0, _ = pg.evaluate(look, ["Road", 0])
+            bad = self._ask(pg, "a5", "set_camera", {"camera": "Road", "position": [1, 2]})
+            # An orbit keyed with set_camera alone: every call keys the place AND the aim.
+            self._ask(pg, "o0", "add_camera", {"name": "Orbit", "position": [8, 1.6, 0], "look_at": [0, 1, 0]})
+            for i, (fr, pos) in enumerate([(0, [8, 1.6, 0]), (10, [0, 1.6, 8]), (20, [-8, 1.6, 0])]):
+                self._ask(pg, f"o{i + 1}", "set_camera", {"camera": "Orbit", "frame": fr, "position": pos, "look_at": [0, 1, 0]})
+            orbit = [pg.evaluate(look, ["Orbit", fr]) for fr in (0, 10, 20)]
+        finally:
+            pg.close()
+        self.assertEqual(add["state"], "done", add)
+        self.assertEqual(moved["state"], "done", moved)
+        self.assertEqual(moved["result"]["changed"], ["position", "rotation", "fov"])
+        for got, want in zip(p, [0, 5.8, -50]):
+            self.assertAlmostEqual(got, want, delta=1e-4)
+        to = [-30, 4 - 5.8, 150]
+        n = math.hypot(*to)
+        self.assertGreater(sum(d[i] * to[i] / n for i in range(3)), 0.9999, (d, "it looks at look_at"))
+        self.assertEqual(key0["state"], "done", key0)
+        self.assertEqual(keyed["state"], "done", keyed)
+        self.assertEqual(keyed["result"]["ignored"], ["zoom"])
+        self.assertAlmostEqual(p20[2], -30, delta=1e-4)
+        self.assertAlmostEqual(p0[2], -50, delta=1e-4, msg="the key at frame 0 stays")
+        self.assertEqual(bad["state"], "error")
+        self.assertIn("[x, y, z]", bad["error"])
+        for p_, d_ in orbit:
+            to = [0 - p_[0], 1 - p_[1], 0 - p_[2]]
+            n = math.hypot(*to)
+            self.assertGreater(sum(d_[i] * to[i] / n for i in range(3)), 0.999, (p_, d_, "each key looks at the centre"))
+        self.assertEqual(self.errors, [])
+
     def test_the_agent_makes_clips_and_renders_a_turntable_of_each(self):
         """animate_scene's road: AI takes as clips, a clip placed, one turntable rig keyed per clip, a render per clip,
         keys, layers, display layers, set-driven keys, IK/FK, USD and the scene in viewerState."""
@@ -863,7 +1091,7 @@ class RigToolsBrowserTests(unittest.TestCase):
             placed = self._ask(pg, "c1", "clip_place", {"source": src, "at": 30})
             sped = self._ask(pg, "c2", "clip_set", {"clip": placed["result"]["clip"], "name": "Fast walk", "speed": 2})
             listed = self._ask(pg, "c3", "clip_list")
-            tt = self._ask(pg, "t1", "turntable", {"clips": "all", "degrees": 360})
+            tt = self._ask(pg, "t1", "turntable", {"clips": "all", "degrees": 360, "follow": False})
             orbit = pg.evaluate("""() => { const P = window.__panel, view = P._modelView(), scene = P.previzScene();
                 const cam = scene.items.find((i) => i.kind === 'camera' && i.name === 'Turntable cam');
                 const e = view._entries.get(cam.id); const out = [];

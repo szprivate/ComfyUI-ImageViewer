@@ -23,6 +23,9 @@ export const SPACE_ICON_SHAPES = {
         + '<path d="m9.3 10.4 1.9 3.7"/><path d="m14.7 10.4-1.9 3.7"/>',
     // A cube.
     "3d": RING + '<path d="m12 6.5 5 2.75v5.5L12 17.5l-5-2.75v-5.5Z"/><path d="M12 12v5.5"/><path d="m7 9.25 5 2.75 5-2.75"/>',
+    // Two machines in a rack, a light on each: the Farm.
+    farm: RING + '<rect x="7" y="7" width="10" height="4" rx="1"/><rect x="7" y="13" width="10" height="4" rx="1"/>'
+        + '<path d="M9.5 9h.01"/><path d="M9.5 15h.01"/>',
 };
 
 // Each space's accent: the colour its icon is drawn in, on its group in the
@@ -37,6 +40,7 @@ export const SPACE_COLORS = {
     motion: "#a487ea",   // violet
     comp: "#3bb8a6",     // teal
     "3d": "#79b84e",     // green
+    farm: "#8fa6c4",     // steel
 };
 
 /** The accent colour of a space, or "" for a kind that has none. */
@@ -56,7 +60,7 @@ export function spaceIconSvg(kind, size = 24) {
 // The emoji the spaces' tab labels have carried in front of the name. The
 // labels keep them (they are saved, and agentY reads them); the tab draws the
 // icon in their place.
-const SPACE_EMOJI = ["\u{1F5BC}️", "\u{1F5BC}", "✂️", "✂", "\u{1F58C}️", "\u{1F58C}", "\u{1F3AC}", "\u{1F39E}\u{FE0F}", "\u{1F39E}", "\u{1F9CA}"];
+const SPACE_EMOJI = ["\u{1F5A5} ", "\u{1F5BC}️", "\u{1F5BC}", "✂️", "✂", "\u{1F58C}️", "\u{1F58C}", "\u{1F3AC}", "\u{1F39E}\u{FE0F}", "\u{1F39E}", "\u{1F9CA}"];
 
 /** A space tab's label without the emoji in front of it. */
 export function stripSpaceEmoji(label) {

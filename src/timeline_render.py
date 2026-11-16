@@ -38,19 +38,48 @@ def is_still(path):
     return str(path or "").lower().endswith(_STILLS)
 
 
+# The NTSC rates, as the exact fractions they stand for (resolve_export.rate_of does the same).
+_NTSC = (24, 30, 48, 60, 120)
+
+
+def _exact_rate(fps):
+    """The film's frame rate as a fraction: 23.976 is 24000/1001, 29.97 is 30000/1001."""
+    value = float(fps or 24.0)
+    for base in _NTSC:
+        if abs(value - base * 1000 / 1001) < 0.01:
+            return Fraction(base * 1000, 1001)
+    return Fraction(value).limit_denominator(1001)
+
+
 def _even(v):
     v = max(2, int(round(v)))
     return v - (v % 2)
 
 
-def fit(src_w, src_h, w, h):
+def fit(src_w, src_h, w, h, mode="fit"):
     """The size a ``src_w x src_h`` picture is drawn at inside ``w x h``, and where:
-    ``(draw_w, draw_h, left, top)``. Scaled to fit, centred, never stretched."""
-    if src_w <= 0 or src_h <= 0:
+    ``(draw_w, draw_h, left, top)``, centred. *mode* (timeline_io.FIT_MODES, the
+    Edit tab's fitBox): "fit" scaled to fit, never stretched; "fill" scaled to
+    cover the frame (larger than it: left / top negative); "stretch" the frame's
+    size; "none" its own pixels."""
+    if src_w <= 0 or src_h <= 0 or mode == "stretch":
         return w, h, 0, 0
-    scale = min(w / src_w, h / src_h)
-    dw, dh = min(w, _even(src_w * scale)), min(h, _even(src_h * scale))
+    if mode == "none":
+        dw, dh = _even(src_w), _even(src_h)
+    elif mode == "fill":
+        scale = max(w / src_w, h / src_h)
+        dw, dh = max(w, _even(src_w * scale)), max(h, _even(src_h * scale))
+    else:
+        scale = min(w / src_w, h / src_h)
+        dw, dh = min(w, _even(src_w * scale)), min(h, _even(src_h * scale))
     return dw, dh, (w - dw) // 2, (h - dh) // 2
+
+
+def fit_mode(clip, cut_fit="fit"):
+    """How *clip*'s picture is brought into the frame: its own (``fx["fit"]``), else the timeline's."""
+    fx = clip.get("fx") if isinstance(clip, dict) else None
+    own = fx.get("fit") if isinstance(fx, dict) else None
+    return own if own in timeline_io.FIT_MODES else cut_fit if cut_fit in timeline_io.FIT_MODES else "fit"
 
 
 def frame_counts(clips, fps):
@@ -79,28 +108,33 @@ def film_frames(counts):
 # ── picture ──────────────────────────────────────────────────────────────────
 
 def _canvas(arr, w, h, np):
-    """*arr* (already at its drawn size) centred on a black ``w x h`` frame."""
+    """*arr* (already at its drawn size) centred on a black ``w x h`` frame - cut
+    off at the frame's edges where it is larger."""
     if arr.shape[0] == h and arr.shape[1] == w:
         return arr
     out = np.zeros((h, w, 3), dtype=np.uint8)
     top, left = (h - arr.shape[0]) // 2, (w - arr.shape[1]) // 2
-    out[top:top + arr.shape[0], left:left + arr.shape[1]] = arr
+    y0, x0 = max(0, top), max(0, left)
+    y1, x1 = min(h, top + arr.shape[0]), min(w, left + arr.shape[1])
+    if y1 > y0 and x1 > x0:
+        out[y0:y1, x0:x1] = arr[y0 - top:y1 - top, x0 - left:x1 - left]
     return out
 
 
-def _clip_pictures(path, start, count, w, h, fps):
+def _clip_pictures(path, start, count, w, h, fps, mode="fit"):
     """*count* frames of the film's size, from *start* seconds into *path*.
 
     A frame of the film shows whatever the source shows at that moment, so a
     source at another frame rate is neither sped up nor slowed down. A source
     that ends early holds its last picture.
     """
-    return _pictures_at(path, [start + (k + 0.5) / fps for k in range(count)], w, h)
+    return _pictures_at(path, [start + (k + 0.5) / fps for k in range(count)], w, h, mode)
 
 
-def _pictures_at(path, times, w, h):
+def _pictures_at(path, times, w, h, mode="fit"):
     """The pictures of *path* at the source moments *times* (seconds, rising),
-    each the source frame on screen at that moment, fitted into ``w x h``."""
+    each the source frame on screen at that moment, brought into ``w x h`` by
+    *mode* (:func:`fit`)."""
     import av
     import numpy as np
     count = len(times)
@@ -108,7 +142,7 @@ def _pictures_at(path, times, w, h):
         from PIL import Image
         with Image.open(path) as im:
             im = im.convert("RGB")
-            dw, dh, _l, _t = fit(im.width, im.height, w, h)
+            dw, dh, _l, _t = fit(im.width, im.height, w, h, mode)
             still = _canvas(np.asarray(im.resize((dw, dh))), w, h, np)
         for _ in range(count):
             yield still
@@ -119,7 +153,7 @@ def _pictures_at(path, times, w, h):
         if not src.streams.video:
             raise RenderError(f"{os.path.basename(path)} has no picture")
         stream = src.streams.video[0]
-        dw, dh, _l, _t = fit(stream.width, stream.height, w, h)
+        dw, dh, _l, _t = fit(stream.width, stream.height, w, h, mode)
         first = times[0]
         if first > 0.5:
             try:
@@ -168,10 +202,11 @@ def clip_frames(clip, done, count, w, h, fps):
     go forwards through the file; a ping-pong's way back is read forwards and
     handed out reversed."""
     times = [source_moment(clip, (done + k + 0.5) / fps) for k in range(count)]
+    mode = clip.get("fit") or "fit"
     plain = float(clip.get("speed") or 1.0) == 1.0 and not clip.get("loop") and not clip.get("motion") \
         and not timeline_io._ramp(clip)
     if plain:
-        yield from _pictures_at(clip["file"], times, w, h)
+        yield from _pictures_at(clip["file"], times, w, h, mode)
         return
     k = 0
     while k < count:
@@ -181,9 +216,9 @@ def clip_frames(clip, done, count, w, h, fps):
             j += 1
         run = times[k:j]
         if rising or len(run) == 1:
-            yield from _pictures_at(clip["file"], run, w, h)
+            yield from _pictures_at(clip["file"], run, w, h, mode)
         else:
-            yield from reversed(list(_pictures_at(clip["file"], list(reversed(run)), w, h)))
+            yield from reversed(list(_pictures_at(clip["file"], list(reversed(run)), w, h, mode)))
         k = j
 
 
@@ -264,7 +299,7 @@ def effective(fx, u=0.0):
     out = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
     out.update({"fh": False, "fv": False})
     for key, value in fx.items():
-        if key in ("toff", "coff", "ooff"):
+        if key in ("toff", "coff", "ooff", "fit"):
             continue
         section = "ooff" if key == "op" else "coff" if key in ("cl", "cr", "ct", "cb") else "toff"
         if not fx.get(section):
@@ -277,10 +312,11 @@ def effective(fx, u=0.0):
 _BOXES = {}
 
 
-def picture_box(path, w, h):
-    """Where *path*'s picture lies in a ``w x h`` frame once fitted into it:
-    ``(left, top, width, height)``. The rest of the frame is not picture."""
-    key = (path, w, h)
+def picture_box(path, w, h, mode="fit"):
+    """Where *path*'s picture lies in a ``w x h`` frame once brought into it by
+    *mode* (:func:`fit`): ``(left, top, width, height)`` - beyond the frame where
+    it is larger. The rest of the frame is not picture."""
+    key = (path, w, h, mode)
     if key not in _BOXES:
         if len(_BOXES) > 256:
             _BOXES.clear()
@@ -292,7 +328,7 @@ def picture_box(path, w, h):
             import av
             with av.open(path) as src:
                 sw, sh = src.streams.video[0].width, src.streams.video[0].height
-        dw, dh, _l, _t = fit(sw, sh, w, h)
+        dw, dh, _l, _t = fit(sw, sh, w, h, mode)
         _BOXES[key] = ((w - dw) // 2, (h - dh) // 2, dw, dh)
     return _BOXES[key]
 
@@ -310,6 +346,8 @@ def lay(under, frame, fx, box):
     alpha = np.zeros((h, w), dtype=np.uint8)
     a0, b0 = left + int(round(fx["cl"] * dw)), top + int(round(fx["ct"] * dh))
     a1, b1 = left + dw - int(round(fx["cr"] * dw)), top + dh - int(round(fx["cb"] * dh))
+    # A picture larger than the frame ("fill", "none") was cut off at its edges: so is its box.
+    a0, b0, a1, b1 = max(0, a0), max(0, b0), min(w, a1), min(h, b1)
     if a1 > a0 and b1 > b0:
         alpha[b0:b1, a0:a1] = 255
     if frame.shape[2] == 4:
@@ -352,7 +390,7 @@ def film_pictures(clips, counts, w, h, fps):
         keep = []
         moving = animated(clip.get("fx"))
         fx = effective(clip.get("fx"))
-        box = picture_box(clip["file"], w, h) if (fx or moving) else None
+        box = picture_box(clip["file"], w, h, clip.get("fit") or "fit") if (fx or moving) else None
         for k, frame in enumerate(clip_frames(clip, 0, n, w, h, fps)):
             if moving:
                 # Keyed: at the middle of frame k of the clip (the Edit tab draws frame f at (f + 0.5) / fps).
@@ -485,7 +523,8 @@ def covered(base, overlays, total, w, h, fps, notes=None):
             running[k] = (gen, n + 1)
             if over is None:
                 continue
-            box = (0, 0, w, h) if clip.get("title") is not None else picture_box(clip["file"], w, h) if fx else None
+            box = (0, 0, w, h) if clip.get("title") is not None else \
+                picture_box(clip["file"], w, h, clip.get("fit") or "fit") if fx else None
             frame = over if fx is None else lay(frame, over, fx, box)
         yield black if frame is None else frame
 
@@ -795,6 +834,7 @@ def read_cut(doc):
     view of it: the film's size, each clip's volume, the bed."""
     edit = timeline_io.editable(doc)
     envs = timeline_io.audio_envs(edit)
+    cut_fit = edit.get("fit") or "fit"
     video = timeline_io._track_of(doc, "video") or {}
     children = video.get("children") or []
     about = _note(doc)
@@ -825,7 +865,7 @@ def read_cut(doc):
                       "speed": c.get("speed", 1.0), "loop": c.get("loop", ""), "span": c.get("span", 0.0), "motion": c.get("motion", ""),
                       "volume": float(note.get("volume", 1.0)), "fx": c.get("fx") or {},
                       "mute": bool(c.get("mute")), "env": envs.get(("V1", idx)), "afx": c.get("afx") or [],
-                      "tfx": timeline_io.clean_tfx(c.get("tfx"))})
+                      "tfx": timeline_io.clean_tfx(c.get("tfx")), "fit": fit_mode(c, cut_fit)})
         cut_in = False
     off = edit.get("off") or {}
     overlays, sounds = [], []
@@ -842,7 +882,7 @@ def read_cut(doc):
                     "volume": float(c.get("volume", 1.0)), "name": c["name"], "order": order,
                     "fx": c.get("fx") or {}, "mute": bool(c.get("mute")),
                     "track": track.get("name") or track.get("id"), "env": envs.get((track.get("id"), ci)),
-                    "track_id": track.get("id"), "afx": c.get("afx") or []}
+                    "track_id": track.get("id"), "afx": c.get("afx") or [], "fit": fit_mode(c, cut_fit)}
             if c.get("title") is not None:
                 item.update(title=c["title"], file="", speed=1.0, loop="", span=0.0, motion="", volume=0.0)
             (sounds if track.get("kind") == "audio" else overlays).append(item)
@@ -865,7 +905,8 @@ def read_cut(doc):
             # The Mixer's master: on the whole mix (after every track), and its switch.
             "master_afx": (edit.get("afx") or {}).get("master") or [], "master_off": bool(off.get("master")),
             "texts": titles, "clip_sound": bool(about.get("clip_sound", True)),
-            "width": int(about.get("width") or 0), "height": int(about.get("height") or 0)}
+            # The timeline's size (timeline_io.cut_settings: the panel's, else agentY's note); 0 = the first shot's.
+            "width": int(edit.get("width") or 0), "height": int(edit.get("height") or 0), "fit": cut_fit}
 
 
 def _size(cut):
@@ -966,7 +1007,7 @@ def render(doc, out_path, fmt="mp4", may_use=None, codec=None, quality="high", f
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     tmp = out_path + ".part." + fmt
-    rate = Fraction(fps).limit_denominator(1001)
+    rate = _exact_rate(fps)
     try:
         with av.open(tmp, "w", format="mov" if fmt == "mov" else "mp4") as out:
             vs = out.add_stream(how["encoder"], rate=rate, options=dict(how["options"]))

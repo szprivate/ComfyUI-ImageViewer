@@ -23,6 +23,7 @@ import * as C from "./imageViewer_compModel.js";
 import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./imageViewer_compModel.js";
 import { decodeDeep } from "./imageViewer_compDeep.js";
 import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
+import { showInstallLog } from "./imageViewer_installLog.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -735,33 +736,110 @@ export const CompPanelMixin = {
         notice("error", "The CDL was not written", "There are 99 already.");
     },
 
-    // ── AI nodes: a frame range through Paint's Generate workflows as ONE ComfyUI job (comp_ai on the server) ──
+    // ── AI nodes: a frame range through the node's workflow as ONE ComfyUI job (comp_ai on the server) ──
 
-    /** The Generate action an AI node asks for. */
-    _cpAiAction(n) {
+    /** An AI node's own short list of workflows (the server's comp_ai_workflows/index.json): {kind, action,
+     * workflows, choice (the default)}, asked once per node kind and action. */
+    async _cpAiList(n) {
         const kind = n && C.EX.AI_KINDS[n.type];
         if (!kind) return null;
-        return { matte: "background", depth: "edit", relight: "edit", upscale: "upscale" }[kind]
-            || ((n.prompt || "").trim() ? "fill" : "remove");
+        const prompt = kind === "inpaint" ? (n.prompt || "") : "";
+        const key = `${kind}|${kind === "inpaint" && prompt.trim() ? "fill" : ""}`;
+        const kept = this._cpAiLists || (this._cpAiLists = new Map());
+        if (!kept.has(key)) {
+            const ask = cpPost("/imageviewer/comp_ai_workflows", { kind, prompt });
+            kept.set(key, ask);
+            ask.catch(() => kept.delete(key));
+        }
+        return kept.get(key);
     },
 
-    /** What an AI node can pick: Paint's workflows for its action, which one it uses, and that workflow's model
-     * inputs with the files ComfyUI's model folders hold ({workflows, choice, using, custom, inputs}). */
+    /** What an AI node can pick: its workflows, which one it uses, and that workflow's model inputs with the files
+     * ComfyUI's model folders hold ({workflows, choice, using, inputs}). */
     async _cpAiModels(rec, id) {
         const ed = rec.editor, n = ed && ed.node(id);
-        const action = this._cpAiAction(n);
-        if (!action) return { workflows: [], inputs: [] };
-        const t = await this._paintWorkflows();
-        const a = t && t.actions && t.actions[action];
-        if (!a) throw new Error("this ComfyUI's viewer is older than the page");
-        const using = n.workflow && (a.workflows.some((w) => w.id === n.workflow) || (n.workflow === "custom" && a.custom)) ? n.workflow : a.choice;
-        const out = { workflows: a.workflows, choice: a.choice, using, custom: a.custom, inputs: [] };
-        if (using === "agent") return out;
+        const a = await this._cpAiList(n);
+        if (!a) return { workflows: [], inputs: [] };
+        const using = n.workflow && a.workflows.some((w) => w.id === n.workflow) ? n.workflow : a.choice;
+        const out = { workflows: a.workflows, choice: a.choice, using, inputs: [] };
+        if (!using) return out;
         const item = a.workflows.find((w) => w.id === using);
         const graph = item ? await this._paintPrompt(item, () => {}) : null;
-        const r = await cpPost("/imageviewer/comp_ai_models", { action, workflow: using, graph });
+        const r = await cpPost("/imageviewer/comp_ai_models", { kind: a.kind, prompt: n.prompt || "", workflow: using, graph });
         out.inputs = r.inputs || [];
         return out;
+    },
+
+    /** A yes / no question in a small dialog over the comp: true for *okText*. */
+    _cpConfirm(rec, title, text, okText) {
+        const doc = rec.el.ownerDocument;
+        const el = (tag, cls, t) => { const e = doc.createElement(tag); if (cls) e.className = cls; if (t != null) e.textContent = t; return e; };
+        return new Promise((done) => {
+            const shade = el("div", "cp-dlg-shade");
+            const box = el("div", "cp-dlg cp-confirm");
+            box.append(el("h3", "", title));
+            const note = el("div", "cp-note", text);
+            note.style.whiteSpace = "pre-line";
+            box.append(note);
+            const go = el("div", "cp-go");
+            const cancel = el("button", "mg-btn", "Not now");
+            const ok = el("button", "mg-btn on cp-confirm-ok", okText);
+            go.append(cancel, ok); box.append(go); shade.append(box);
+            const end = (v) => { shade.remove(); done(v); };
+            cancel.addEventListener("click", () => end(false));
+            ok.addEventListener("click", () => end(true));
+            box.tabIndex = -1;
+            box.addEventListener("keydown", (e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") { e.preventDefault(); end(false); } else if (e.key === "Enter") { e.preventDefault(); end(true); }
+            });
+            shade.addEventListener("pointerdown", (e) => { e.stopPropagation(); if (e.target === shade) end(false); });
+            rec.el.append(shade);
+            setTimeout(() => ok.focus(), 0);
+        });
+    },
+
+    /**
+     * Whether the model files an AI node's workflow needs are here, fetching them when the user says so (Paint's
+     * routes: /paint/models for the plan and sizes, /paint/download for the files, from Hugging Face into
+     * ComfyUI's model folders). Asked first, with each file, its size and where it goes; the download shows on
+     * the node's busy line and Stop stops it. False when the user says not now or stops it.
+     */
+    async _cpModelsReady(rec, item, tell, run) {
+        const gone = (item && item.missing || []).filter((m) => m.kind !== "node");
+        if (!gone.length) return true;
+        tell("looking up the model files");
+        const plan = await cpPost("/imageviewer/paint/models", { workflow: item.id });
+        const files = (plan.files || []).filter((f) => f.url);
+        if (!files.length) return true;                 // nothing offered: the run says what is missing
+        const mb = (n) => (n ? (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.max(1, Math.round(n / 1e6))} MB`) : "size not known");
+        const list = files.map((f) => `• ${f.name} (${mb(f.size)}) into models/${f.folder}`).join("\n");
+        const more = plan.unknown && plan.unknown.length ? `\nNot offered for download (put them there yourself): ${plan.unknown.join(", ")}` : "";
+        const yes = await this._cpConfirm(rec, "Download the models?",
+            `${item.label} needs model files that are not on this machine:\n${list}\nTogether ${mb(plan.total)}, from Hugging Face.${more}`, "Download");
+        if (!yes) return false;
+        const { job } = await cpPost("/imageviewer/paint/download", { workflow: item.id });
+        showInstallLog(job, { host: this.container });
+        run.stop = () => { cpPost("/imageviewer/paint/download", { job, cancel: true }).catch(() => {}); };
+        let st;
+        try {
+            for (;;) {
+                await new Promise((r) => setTimeout(r, 1000));
+                st = await cpPost("/imageviewer/paint/download", { job });
+                const total = st.files.reduce((t, f) => t + (f.size || 0), 0);
+                const done = st.files.reduce((t, f) => t + (f.done || 0), 0);
+                const now = st.files.find((f) => f.state === "fetching");
+                tell(`downloading ${now ? now.name : "the models"} · ${mb(done)} of ${mb(total)}`);
+                if (st.state !== "running") break;
+            }
+        } finally { run.stop = null; }
+        if (st.state === "done") {
+            if (this._cpAiLists) this._cpAiLists.clear();
+            if (rec.editor && rec.editor.forgetAiModels) rec.editor.forgetAiModels();
+            return true;
+        }
+        if (st.state === "stopped" || run.stopped) return false;
+        throw new Error("the download did not work: " + (st.error || st.state));
     },
 
     /** Stop an AI node's job: out of ComfyUI's queue, or interrupted if it runs. */
@@ -775,20 +853,18 @@ export const CompPanelMixin = {
      * models loaded once; the answers come back as a PNG sequence beside the comp and become the node's results
      * (one undo step a job).
      */
-    async _cpAiRun(rec, id, frames) {
+    async _cpAiRun(rec, id, frames, { agent = false } = {}) {
         const ed = rec.editor;
-        if (!ed) return;
-        if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return; }
+        if (!ed) return { done: 0, error: "the comp is not open" };
+        if (!rec.path) { notice("warn", "Save the comp first", "The results are kept beside it."); return { done: 0, error: "the comp is not saved" }; }
         const runs = this._cpAiRuns || (this._cpAiRuns = new Map());
-        if (runs.has(id)) return;
+        if (runs.has(id)) return { done: 0, error: "the node is running already" };
         const n0 = ed.node(id);
-        const action = this._cpAiAction(n0);
-        if (!action) return;
-        const t = await this._paintWorkflows();
-        const a = t && t.actions && t.actions[action];
-        if (!a) { notice("error", "The workflows are not here", "This ComfyUI's viewer is older than the page."); return; }
-        const wid = n0.workflow && (a.workflows.some((w) => w.id === n0.workflow) || (n0.workflow === "custom" && a.custom)) ? n0.workflow : a.choice;
-        if (wid === "agent") { notice("warn", "Pick a workflow", `${a.label} is set to agentY, which the Comp cannot ask: pick a workflow on the node, or in Paint's Generate \u203a Workflows\u2026`); return; }
+        let a;
+        try { a = await this._cpAiList(n0); } catch (e) { notice("error", "The workflows are not here", String(e.message || e)); return { done: 0, error: `no workflows: ${e.message || e}` }; }
+        if (!a) return { done: 0, error: `${id} is not an AI node` };
+        const wid = n0.workflow && a.workflows.some((w) => w.id === n0.workflow) ? n0.workflow : a.choice;
+        if (!wid) { notice("warn", "No workflow for this node here", "This ComfyUI has none of the node packs its workflows need."); return { done: 0, error: "this ComfyUI has none of the node packs the node's workflows need" }; }
         const item = a.workflows.find((w) => w.id === wid);
         const label = `${n0.name || n0.id}`;
         const all = [...new Set(frames)].sort((x, y) => x - y);
@@ -803,6 +879,17 @@ export const CompPanelMixin = {
         tell(`0 / ${all.length}`);
         let done = 0, failed = null, skipped = [];
         try {
+            // An agent's run asks no one: missing model files are its answer, to download and run again.
+            const gone = agent && item ? (item.missing || []).filter((m) => m.kind !== "node") : [];
+            if (gone.length) {
+                failed = new Error(`the model files it needs are not on this machine: ${gone.map((m) => `${m.what} (${m.folder})`).join(", ")}`);
+                failed.missing = gone;
+                return { done: 0, error: failed.message, missing: gone };
+            }
+            if (item && !(await this._cpModelsReady(rec, item, (t) => tell(t), run))) {
+                notice("info", `${label}: not run`, "The model files it needs are not on this machine.");
+                return { done: 0, error: "the model files it needs are not on this machine" };
+            }
             const graph = item ? await this._paintPrompt(item, () => {}) : null;
             const tune = (item && item.tune && item.tune.length && this._paintTune(wid)) || null;
             for (const part of chunks) {
@@ -837,7 +924,8 @@ export const CompPanelMixin = {
             if (run.stopped) notice("info", `${label}: stopped`, done ? `${done} frame(s) came back before it stopped.` : "");
             else if (miss && miss.length) {
                 const list = miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ");
-                notice("error", "The workflow needs what is not here", `${list} - pick another model on the node, fetch it from Paint's Generate, or pick another workflow`);
+                const urls = miss.filter((m) => m.url).map((m) => m.url);
+                notice("error", "The workflow needs what is not here", `${list} - pick another model or workflow on the node${urls.length ? `, or put the file into that ComfyUI model folder: ${urls.join(" ")}` : ""}`);
             } else notice("error", `${label} did not run`, String(e.message || e));
         } finally {
             runs.delete(id);
@@ -845,7 +933,59 @@ export const CompPanelMixin = {
             if (rec.editor) ed.setAiBusy(busy(), Object.assign({}, shared));
         }
         if (skipped.length) notice("warn", `${label}: ${skipped.length} frame(s) left out`, skipped.slice(0, 3).map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
-        if (!failed && done) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`} (${chunks.length === 1 ? "one job" : `${chunks.length} jobs`})`, "Save the comp to keep them.");
+        if (!failed && done && !agent) notice("info", `${label}: ${done === 1 ? "the result is in" : `${done} frames are in`} (${chunks.length === 1 ? "one job" : `${chunks.length} jobs`})`, "Save the comp to keep them.");
+        return { done, of: all.length, jobs: chunks.length, workflow: wid, skipped,
+                 error: failed ? String(failed.message || failed) : (run.stopped ? "stopped" : null) };
+    },
+
+    /**
+     * An agent's request (comp_routes' POST /imageviewer/comp_agent, edit_comp's run_ai): run a comp's AI node over
+     * its frames as the node's Run button does, save the comp and report to /imageviewer/comp_agent_done. The
+     * comp is opened in its tab when it is not; nothing is asked (missing model files are the answer).
+     */
+    async compAgentRun(detail) {
+        const { id, args = {} } = detail || {};
+        const report = (body) => api.fetchApi("/imageviewer/comp_agent_done", {
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, ...body }),
+        }).catch(() => {});
+        try {
+            const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+            const find = () => Object.values(this._cpState().tabs).find((r) => norm(r.path) === norm(args.path));
+            let rec = find();
+            if (!rec || !this.allTabs[COMP_PREFIX + rec.path]) {
+                if (!(await this.compOpenFile(args.path))) throw new Error("the comp could not be opened");
+                rec = find();
+            } else if (this.activeTab !== COMP_PREFIX + rec.path) this.switchTab(COMP_PREFIX + rec.path);
+            const win = this._viewerWindow ? this._viewerWindow() : window;
+            for (let t = 0; rec && !rec.editor && t < 200; t++) await new Promise((r) => win.setTimeout(r, 100));
+            if (!rec || !rec.editor) throw new Error("the comp's tab did not come up");
+            const ed = rec.editor;
+            if (ed.isDirty && ed.isDirty()) throw new Error("the comp is open with changes not saved: save or close its tab first");
+            const nodes = (ed.comp().nodes || []);
+            const want = String(args.node || "");
+            const hit = nodes.filter((n) => n.id === want);
+            const named = hit.length ? hit : nodes.filter((n) => n.name === want);
+            if (named.length !== 1) throw new Error(named.length ? `${named.length} nodes are named ${want}: use the id` : `no node ${want}`);
+            const node = named[0];
+            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_inpaint, ai_upscale)`);
+            const fmt = ed.comp().format || {};
+            const count = Math.max(1, Math.round(fmt.frames || 1));
+            const first = Number.isInteger(args.first) ? Math.min(args.first, count - 1) : 0;
+            const last = Number.isInteger(args.last) ? Math.min(args.last, count - 1) : count - 1;
+            if (last < first) throw new Error("last is before first");
+            const frames = [];
+            for (let f = first; f <= last; f++) frames.push(f);
+            report({ state: "running", progress: `0 / ${frames.length}` });
+            const res = await this._cpAiRun(rec, node.id, frames, { agent: true });
+            if (res.done && rec.editor) {
+                await this._cpSave(rec.path, rec.editor.comp());
+                rec.editor.markSaved();
+            }
+            if (res.error && !res.done) report({ state: "error", error: res.error, result: { node: node.id, ...res } });
+            else report({ state: "done", result: { node: node.id, saved: !!res.done, ...res } });
+        } catch (e) {
+            report({ state: "error", error: String(e && e.message || e) });
+        }
     },
 
     /**

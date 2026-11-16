@@ -462,6 +462,9 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         say("Loops come as the clip repeated: Resolve has no loop, so they no longer stretch as one clip.")
     if any(effective(p.get("fx")) and (effective(p["fx"])["fh"] or effective(p["fx"])["fv"]) for p in every):
         say("A flip is written as a negative scale; Resolve's manual only promises flips from AAF, so check it.")
+    stretched = lambda p: (timeline_io.clean_fx(p.get("fx")).get("fit") or edit.get("fit")) == "stretch"
+    if any(not p.get("sound") and p.get("title") is None and stretched(p) for p in every):
+        say("Stretched clips (the Stretch scaling) come in fitted: FCPXML's conform has no stretch - set it in Resolve.")
     if any(p.get("link") for p in every) or _has_links(edit):
         say("Linked picture and sound arrive as separate clips (Resolve's own Link Clips can join them again).")
     if any(c.get("color") for c in clips):
@@ -481,7 +484,7 @@ def build_model(doc, probes, frames=None, empty_ok=False):
         say("Files that are not there and so are not in the package: " + ", ".join(skipped))
 
     # The picture's size: the timeline's own, else the first shot's (timeline_render._size).
-    about = timeline_io._note(doc)
+    about = timeline_io.cut_settings(doc)
     width, height = int(about.get("width") or 0), int(about.get("height") or 0)
     if not (width > 0 and height > 0):
         first = next((p for p in every if not p.get("sound") and (probes.get(p["file"]) or {}).get("width")), None)
@@ -497,7 +500,8 @@ def build_model(doc, probes, frames=None, empty_ok=False):
             seen.add(key)
             files.append(p["file"])
     return {"name": str(edit.get("name") or "cut"), "rate": rate, "width": width, "height": height, "total": total,
-            "spine": full, "lanes": lanes, "left_out": left, "files": files, "markers": marks}
+            "spine": full, "lanes": lanes, "left_out": left, "files": files, "markers": marks,
+            "fit": str(edit.get("fit") or "fit")}
 
 
 # ── sound effects, baked ─────────────────────────────────────────────────────
@@ -739,6 +743,18 @@ def _intrinsics(parent, p, info, model, shift=None):
         # Neutral where it starts, animated later: the adjustments are written for their keys.
         fx = {key: neutral for key, (neutral, _l, _h) in timeline_io.FX.items()}
         fx.update({"fh": False, "fv": False})
+    # How a picture of another size comes into the frame (the timeline's or the clip's own scaling):
+    # Resolve's fit is the default, fill and none are an adjust-conform, after the crop (the DTD's order).
+    own = timeline_io.clean_fx(p.get("fx")).get("fit")
+    conform = {"fill": "fill", "none": "none"}.get(own or model.get("fit") or "fit") \
+        if not p.get("sound") and p.get("title") is None and shift is None else None
+
+    def write_conform():
+        if conform:
+            ET.SubElement(parent, "adjust-conform", {"type": conform})
+
+    if not fx:
+        write_conform()
     if fx:
         pw, ph = (info or {}).get("width") or model["width"], (info or {}).get("height") or model["height"]
         if any(fx[k] for k in ("cl", "cr", "ct", "cb")) or moving("cl", "cr", "ct", "cb"):
@@ -751,6 +767,7 @@ def _intrinsics(parent, p, info, model, shift=None):
                 if keys.get(name):
                     _keyframes(rect, side, keys, [name], lambda v, n=name, w=wide: _num(v[n] * (pw / ph if w else 1) * 100),
                                p, info, rate)
+        write_conform()
         sx = fx["zx"] * (-1 if fx["fh"] else 1)
         sy = fx["zy"] * (-1 if fx["fv"] else 1)
         dx, dy = shift or (0, 0)
