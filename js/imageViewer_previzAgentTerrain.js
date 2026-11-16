@@ -82,6 +82,9 @@ export function layersByPlace(given, names, fileSource = modelSource) {
         if (at >= names.length) throw new Error(`a terrain has ${names.length} layers (${names.join(", ")})`);
         // The shader multiplies a layer's texture by its colour: a texture given without one shows as it is.
         if (l.src && l.color === undefined) l.color = "#ffffff";
+        // A texture taken away (src null / "") without a colour: the layer goes back to its own colour, not
+        // the white a texture was given (promo run 2026-11-15: a grey previz asked for src null stayed white).
+        if ("src" in l && !l.src && l.color === undefined) l.color = null;
         out[at] = { ...(out[at] || {}), ...l };
     });
     return out;
@@ -178,8 +181,11 @@ export const PrevizAgentTerrainMixin = {
         if (Array.isArray(a.layers)) {
             const cur = terrainSettings(item).layers;
             const given = layersByPlace(a.layers, cur.map((l) => l.name));
-            t.layers = cur.map((l, i) => ({ ...((item.terrain && item.terrain.layers && item.terrain.layers[i]) || {}),
-                                           ...(given[i] || {}) }));
+            t.layers = cur.map((l, i) => {
+                const m = { ...((item.terrain && item.terrain.layers && item.terrain.layers[i]) || {}), ...(given[i] || {}) };
+                if (m.color === null) delete m.color;          // its default colour (terrainSettings)
+                return m;
+            });
         }
         item.terrain = t;
         for (const k of ["position", "rotation", "scale"]) if (Array.isArray(a[k]) && a[k].length === 3 && a[k].every(isNum)) item[k] = a[k].map(Number);
@@ -188,7 +194,10 @@ export const PrevizAgentTerrainMixin = {
     _asaTerrainOut(item) {
         const t = terrainSettings(item);
         return { terrain: item.name, id: item.id, size: t.size, height: t.height, seed: t.seed, roughness: t.roughness,
-                 segments: t.segments, layers: t.layers.map((l) => l.name), sculpted: !!t.sculpt, layer_painted: !!t.layerPaint };
+                 segments: t.segments, layers: t.layers.map((l) => l.name), sculpted: !!t.sculpt, layer_painted: !!t.layerPaint,
+                 // What each layer shows now, so a change can be checked from the answer.
+                 layer_looks: t.layers.map((l) => ({ name: l.name, texture: l.src ? (l.src.path || [l.src.type, l.src.subfolder, l.src.filename].filter(Boolean).join("/")) : null,
+                                                     color: l.color, tile: l.tile })) };
     },
 
     async _asa_terrain_add(scene, a) {

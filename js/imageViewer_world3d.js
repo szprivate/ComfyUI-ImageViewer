@@ -687,7 +687,7 @@ export const WorldViewMixin = {
         mesh.userData.imageViewerItemId = item.id;
         this._bodyOf(entry).add(mesh);
         entry.object = mesh;
-        this._originals.set(mesh, material);
+        this._keepOriginal(mesh, material);
         entry.terrain = { heights, seg, size: t.size, height: t.height, weights, normals: nrm.array, mesh, uniforms,
                           base, ruleWeights, geom };
         entry.stats = { meshes: 1, vertices: pos.count, triangles: seg * seg * 2 };
@@ -987,7 +987,7 @@ export const WorldViewMixin = {
             mesh.userData.imageViewerItemId = item.id;
             mesh.userData.sharedGeometry = !part.material;       // built-in shapes are cached
             group.add(mesh);
-            this._originals.set(mesh, material);
+            this._keepOriginal(mesh, material);
         }
         this._bodyOf(entry).add(group);
         entry.object = group;
@@ -1065,7 +1065,7 @@ export const WorldViewMixin = {
             // The bulb is inside it: a fixture that cast a shadow would put its own light out.
             fixture.userData.imageViewerNoShadow = true;
             group.add(fixture);
-            this._originals.set(fixture, mat);
+            this._keepOriginal(fixture, mat);
         } else {
             group.add(this._lightGlyph(l));
         }
@@ -1282,7 +1282,7 @@ export const WorldViewMixin = {
         mesh.userData.imageViewerItemId = item.id;
         this._bodyOf(entry).add(mesh);
         entry.object = mesh;
-        this._originals.set(mesh, material);
+        this._keepOriginal(mesh, material);
         entry.stats = { meshes: 1, vertices: cols * rows, triangles: index.length / 3 };
     },
 

@@ -185,6 +185,33 @@ class AgentTerrainTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_a_texture_taken_away_gives_the_layer_its_colour_and_a_rebuilt_terrain_keeps_the_clay_look(self):
+        # Promo run 2026-11-15: terrain_set src null for a grey previz, then a clay render.
+        pg = self._page()
+        try:
+            P = "window.__panel"
+            out = self._ask(pg, "terrain_add", name="Hills", size=[80, 80], height=10,
+                            layers=[{"layer": "ground", "texture": "output/tex/sand.png", "scale": 4}])
+            self.assertEqual(out["layer_looks"][0]["texture"], "output/tex/sand.png")
+            self.assertEqual(out["layer_looks"][0]["color"], "#ffffff")
+            out = self._ask(pg, "terrain_set", layers=[{"layer": "ground", "src": None}])
+            self.assertIsNone(out["layer_looks"][0]["texture"])
+            self.assertEqual(out["layer_looks"][0]["color"], "#5f7a3c")      # its own colour, not the texture's white
+            out = self._ask(pg, "terrain_set", layers=[{"layer": "rock", "texture": "", "color": "#808080"}])
+            self.assertEqual(out["layer_looks"][1], {"name": "rock", "texture": None, "color": "#808080", "tile": 14})
+            pg.evaluate(f"() => {P}._modelView().setMaterialMode('clay')")
+            self._ask(pg, "terrain_set", height=12)                          # the terrain is built again
+            look = pg.evaluate(f"""() => {{ const v = {P}._modelView();
+                const t = {P}.previzScene().items.find((i) => i.kind === 'terrain');
+                const m = v._entries.get(t.id).terrain.mesh;
+                const clay = m.material === v.materials.clay;
+                v.setMaterialMode('original');
+                return {{ clay, back: m.material !== v.materials.clay }}; }}""")
+            self.assertEqual(look, {"clay": True, "back": True})
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_a_car_heading_sideways_on_rough_ground_does_not_tumble_and_smooth_steadies_it(self):
         pg = self._page()
         try:
