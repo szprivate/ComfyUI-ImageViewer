@@ -1140,19 +1140,31 @@ export class Model3DView {
 
     setMaterialMode(mode) {
         this.materialMode = MATERIAL_MODES.some(([v]) => v === mode) ? mode : "original";
-        // An image plane keeps its picture: clay or normals would show
-        // something that is not the picture, which is the whole point of it.
-        for (const [mesh, original] of this._originals) {
-            // A splat's bounds box stays unseen whatever the look.
-            if (mesh.name === "imageplane" || mesh.name === "splatbounds") continue;
-            // A templated item keeps its wire, whatever the look of the rest.
-            if (this._templated && this._templated.has(mesh)) continue;
-            mesh.material = (this.materialMode === "original" || this.materialMode === "pathtraced")
-                ? original : this.materials[this.materialMode];
-        }
+        for (const [mesh, original] of this._originals) this._lookOn(mesh, original);
         if (this._ptModeChanged) this._ptModeChanged();
         this._syncToolbar();
         this.requestRender();
+    }
+
+    /**
+     * A mesh in the look chosen (clay, normals ...), its own material kept as the original. Every mesh made
+     * while a look is on goes through here: a terrain rebuilt during a clay render was drawn in its textures
+     * (promo run 2026-11-15).
+     */
+    _keepOriginal(mesh, material) {
+        this._originals.set(mesh, material);
+        this._lookOn(mesh, material);
+    }
+
+    _lookOn(mesh, original) {
+        // An image plane keeps its picture: clay or normals would show
+        // something that is not the picture, which is the whole point of it.
+        // A splat's bounds box stays unseen whatever the look.
+        if (mesh.name === "imageplane" || mesh.name === "splatbounds") return;
+        // A templated item keeps its wire, whatever the look of the rest.
+        if (this._templated && this._templated.has(mesh)) return;
+        const look = this.materials && this.materials[this.materialMode];
+        mesh.material = look || original;      // original, path traced, or no look made yet
     }
 
     setGrid(on) {
@@ -1316,7 +1328,7 @@ export class Model3DView {
         entry.color = item.color;
         entry.key = type;
         entry.stats = this._statsOf(group, type);
-        this._originals.set(mesh, material);
+        this._keepOriginal(mesh, material);
         return entry;
     }
 
@@ -1628,7 +1640,7 @@ export class Model3DView {
             entry.stats = this._statsOf(loaded.object, format);
             // Its bones as the file has them: the rest pose a rig is built on.
             this._rigCapture(entry);
-            loaded.object.traverse((c) => { if (c.isMesh) this._originals.set(c, c.material); });
+            loaded.object.traverse((c) => { if (c.isMesh) this._keepOriginal(c, c.material); });
             if (loaded.animations && loaded.animations.length) {
                 const { THREE } = this.libs;
                 entry.mixer = new THREE.AnimationMixer(loaded.object);
