@@ -307,6 +307,10 @@ function _isEndBone(name, kids) {
  * auto-rigger's bone_12 — is read from its shape instead.
  */
 export function matchHumanoid(bones) {
+    // One bone per name (the first, highest in the tree), never its own parent: a file that
+    // repeats names (three.js's FBX copies of shared bones) would otherwise walk in circles.
+    const seen = new Set();
+    bones = bones.filter((b) => !seen.has(b.name) && seen.add(b.name)).map((b) => (b.parent === b.name ? { ...b, parent: null } : b));
     const byName = new Map(bones.map((b) => [b.name, b]));
     const kids = new Map(bones.map((b) => [b.name, []]));
     for (const b of bones) if (b.parent && kids.has(b.parent)) kids.get(b.parent).push(b.name);
@@ -339,7 +343,8 @@ export function matchHumanoid(bones) {
         // The spine is whatever lies between the hips and the neck.
         const top = roles.neck || roles.head;
         const chain = [];
-        for (let n = byName.get(top) && byName.get(top).parent; n && n !== roles.hips; n = byName.get(n) && byName.get(n).parent) {
+        // (A bone listed as its own parent - two bones of one name - must not walk forever.)
+        for (let n = byName.get(top) && byName.get(top).parent; n && n !== roles.hips && chain.length < bones.length; n = byName.get(n) && byName.get(n).parent) {
             chain.unshift(n);
         }
         if (chain.length >= 1 && byName.get(chain[0]) && byName.get(chain[0]).parent !== undefined) {
@@ -362,7 +367,7 @@ export function matchHumanoid(bones) {
 
 function _depth(byName, name) {
     let d = 0;
-    for (let n = byName.get(name); n && n.parent; n = byName.get(n.parent)) d++;
+    for (let n = byName.get(name); n && n.parent && d <= byName.size; n = byName.get(n.parent)) d++;
     return d;
 }
 

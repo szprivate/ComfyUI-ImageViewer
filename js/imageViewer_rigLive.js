@@ -277,7 +277,7 @@ export const Z_UP_TO_Y_UP = mat4.compose([0, 0, 0], quat.axisAngle([1, 0, 0], -M
  *   match: Map dst name -> src name (`matchBones`)
  * Answers [{ f, pose: Map dst name -> model-space 4x4 }], every target bone on every frame.
  */
-export function retarget(src, dst, match) {
+export function retarget(src, dst, match, { alignRest = true } = {}) {
     const sRest = new Map(src.bones.map((b) => [b.name, b.world]));
     const order = topoOrder(dst.bones);
     const dRest = new Map(dst.bones.map((b) => [b.name, b.world]));
@@ -311,6 +311,7 @@ export function retarget(src, dst, match) {
     }
     const sRestD = new Map([...sRest].map(([n, m]) => [n, mat4.decompose(m)]));
     const dRestD = new Map([...dRest].map(([n, m]) => [n, mat4.decompose(m)]));
+    const align = alignRest ? restAlignment(src, dst, match) : new Map();
     return src.frames.map((fr) => {
         const pose = new Map();
         for (const b of order) {
@@ -324,7 +325,9 @@ export function retarget(src, dst, match) {
                 continue;
             }
             const now = mat4.decompose(sw), was = sRestD.get(sn);
-            const q = quat.norm(quat.mul(quat.mul(now.q, quat.conj(was.q)), rd.q));
+            // The source's turn from its rest, put on the target's rest turned to stand as the source's does.
+            const rq = align.has(b.name) ? quat.mul(align.get(b.name), rd.q) : rd.q;
+            const q = quat.norm(quat.mul(quat.mul(now.q, quat.conj(was.q)), rq));
             let pos;
             if (top.has(b.name) || !pw) {
                 pos = v3.add(rd.p, v3.scale(v3.sub(now.p, was.p), ratio));
@@ -340,6 +343,56 @@ export function retarget(src, dst, match) {
         }
         return { f: fr.f, pose };
     });
+}
+
+/**
+ * The turn (model space) that makes each target bone point at rest the way its source bone
+ * does: a T-pose file onto an A-pose character turns the arms up first, so that the file's
+ * rest is the character's rest and the motion lands as it looks in the file. A bone points
+ * from its head to the middle of its matched children (compared bone for bone, so the two
+ * skeletons' proportions do not matter); a bone with no matched child takes the turn of its
+ * nearest bone above that has one (a hand keeps lying along its forearm). Swing only: the
+ * smallest turn between the two directions. Answers Map dst name -> quaternion; bones that
+ * already agree (the same skeleton coming back) are left out.
+ */
+export function restAlignment(src, dst, match) {
+    const sRest = new Map(src.bones.map((b) => [b.name, b.world]));
+    const dRest = new Map(dst.bones.map((b) => [b.name, b.world]));
+    const head = (m) => [m[12], m[13], m[14]];
+    const parentOf = new Map(dst.bones.map((b) => [b.name, b.parent && dRest.has(b.parent) ? b.parent : null]));
+    const kids = new Map();
+    for (const b of dst.bones) {
+        const p = parentOf.get(b.name);
+        if (p && match.has(b.name) && sRest.has(match.get(b.name))) {
+            if (!kids.has(p)) kids.set(p, []);
+            kids.get(p).push(b.name);
+        }
+    }
+    const mid = (names, rest, map) => {
+        const sum = names.reduce((a, n) => v3.add(a, head(rest.get(map ? map.get(n) : n))), [0, 0, 0]);
+        return v3.scale(sum, 1 / names.length);
+    };
+    const out = new Map();
+    const own = new Map();
+    for (const b of topoOrder(dst.bones)) {
+        const sn = match.get(b.name);
+        const ch = kids.get(b.name);
+        if (sn && sRest.has(sn) && ch && ch.length) {
+            const dDir = v3.sub(mid(ch, dRest, null), head(dRest.get(b.name)));
+            const sDir = v3.sub(mid(ch, sRest, match), head(sRest.get(sn)));
+            if (v3.len(dDir) > 1e-9 && v3.len(sDir) > 1e-9) {
+                const q = quat.between(dDir, sDir);
+                own.set(b.name, q);
+                continue;
+            }
+        }
+        // No direction of its own: the nearest bone above with one.
+        let p = parentOf.get(b.name);
+        while (p && !own.has(p)) p = parentOf.get(p);
+        if (p) own.set(b.name, own.get(p));
+    }
+    for (const [n, q] of own) if (Math.abs(q[3]) < 1 - 1e-9) out.set(n, q);
+    return out;
 }
 
 /**

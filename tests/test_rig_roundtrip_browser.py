@@ -13,6 +13,7 @@ Run: python -m unittest tests.test_rig_roundtrip_browser
 import json
 import os
 import shutil
+import struct
 import sys
 import unittest
 
@@ -149,6 +150,84 @@ class RigRoundTripBrowserTests(unittest.TestCase):
         self.assertEqual(restored, before)
         self.assertTrue(any("Add motion from file" in s for s in labels), labels)
         self.assertTrue(any("Export USD" in s for s in labels), labels)
+        self.assertEqual(self.errors, [])
+
+    def test_several_motions_go_into_the_clip_sequencer(self):
+        pg = self.page()
+        try:
+            pg.evaluate(T.OPEN, ["hero.glb", "Hero"])
+            pg.evaluate("async () => { await window.__panel.previzRigCharacter(window.__hero); }")
+            pg.evaluate(T.HELP)
+            hand24 = pg.evaluate(KEY_ARM)
+            fbx = pg.evaluate("async () => window.__panel.previzRigExport(window.__hero, 'fbx', { first: 0, last: 30 })")
+            two = os.path.join(self.tmp, "walk_two.fbx")
+            shutil.copyfile(fbx["path"], two)
+            files = [dict(self._file(fbx), name="walk_one.fbx"), {"path": two, "url": "/media/walk_two.fbx", "name": "walk_two.fbx"}]
+            # The controls' keys gone: what plays afterwards is the clips.
+            pg.evaluate("""() => { const P = window.__panel;
+                for (const it of P.previzScene().items) if (it.kind === 'control') it.tracks = {}; P.previzChanged(); }""")
+            out = pg.evaluate("""async (files) => { const P = window.__panel; const takes = [];
+                for (const f of files) takes.push(...(await P.previzRigReadMotion(f, { clips: 'all' })).takes);
+                const r = P.previzRigAddMotionClips(window.__hero, takes, { start: 5 });
+                const Q = await import('/extensions/viewer/imageViewer_clipSeqData.js');
+                const q = Q.seqOf(P.previzScene());
+                return { r, names: takes.map((t) => t.name), clips: q.tracks.flatMap((t) => t.clips.map((c) => [c.start, c.length])) }; }""", files)
+            state = pg.evaluate(RIG_STATE)
+            hand = pg.evaluate("() => window.__boneAt('LeftHand', 29)")
+            # Through the dialog: two more sources, placed after the first two.
+            pg.evaluate("""async (files) => { const P = window.__panel; const reads = [];
+                for (const f of files) reads.push({ f, read: await P.previzRigReadMotion(f, { clips: 'all' }) });
+                P._previzAddMotionsAsk(window.__hero, reads, reads.flatMap((x) => x.read.takes)); }""", files)
+            box = pg.locator('.rd-box[aria-label="Add motions from files"]')
+            box.wait_for(state="visible", timeout=10000)
+            note = box.inner_text()
+            box.locator("button.rd-go").click()
+            box.wait_for(state="detached", timeout=30000)
+            sources = pg.evaluate("""async () => { const Q = await import('/extensions/viewer/imageViewer_clipSeqData.js');
+                return Q.seqOf(window.__panel.previzScene()).sources.length; }""")
+        finally:
+            pg.close()
+        self.assertTrue(out["r"]["ok"], out)
+        self.assertEqual(out["names"], ["walk_one", "walk_two"])
+        self.assertEqual(len(out["r"]["sources"]), 2)
+        self.assertEqual(sorted(out["clips"]), [[5, 30], [35, 30]])
+        self.assertEqual(state["keys"], 0, "the controls keep their own keys (none)")
+        for a, b in zip(hand, hand24):
+            self.assertAlmostEqual(a, b, delta=0.01)
+        self.assertIn("2 from 2 files", note)
+        self.assertEqual(sources, 4)
+        self.assertEqual(self.errors, [])
+
+    def test_an_fbx_in_centimetres_comes_in_at_metres(self):
+        pg = self.page()
+        try:
+            pg.evaluate(T.OPEN, ["hero.glb", "Hero"])
+            pg.evaluate("async () => { await window.__panel.previzRigCharacter(window.__hero); }")
+            fbx = pg.evaluate("async () => window.__panel.previzRigExport(window.__hero, 'fbx', { first: 0, last: 4 })")
+            # The same file saying its unit is the centimetre (as Mixamo's and Maya's do).
+            with open(fbx["path"], "rb") as fh:
+                data = bytearray(fh.read())
+            key = b"S\x0f\x00\x00\x00UnitScaleFactor"
+            at = data.index(key)
+            hundred = b"D" + struct.pack("<d", 100.0)
+            v = data.index(hundred, at)
+            data[v:v + 9] = b"D" + struct.pack("<d", 1.0)
+            with open(os.path.join(self.tmp, "in_cm.fbx"), "wb") as fh:
+                fh.write(data)
+            shutil.copyfile(fbx["path"], os.path.join(self.tmp, "in_m.fbx"))
+            got = pg.evaluate("""async () => { const P = window.__panel; const out = {};
+                for (const name of ['in_cm.fbx', 'in_m.fbx']) {
+                    await P.previzAddModels([{ url: '/media/' + name, filename: name, name, kind: 'model' }]);
+                    await P._modelView().whenLoaded(20000);
+                    await new Promise((r) => setTimeout(r, 300));
+                    const it = P.previzScene().items.find((i) => i.id === P._previzSelection);
+                    out[name] = it.scale;
+                }
+                return out; }""")
+        finally:
+            pg.close()
+        self.assertEqual(got["in_cm.fbx"], [0.01, 0.01, 0.01])
+        self.assertEqual(got["in_m.fbx"], [1, 1, 1])
         self.assertEqual(self.errors, [])
 
     @unittest.skipUnless(HAVE_USD, "needs usd-core")
