@@ -25,6 +25,23 @@ The Edit, Inspector, Effects and Mixer panels are only shown while a cut's tab i
 
 Each track header has enable, solo, lock and the auto track selector. Shift + mouse wheel changes track height.
 
+## Timeline settings
+
+A cut has one picture size and one frame rate. Set them in the Inspector with nothing selected, or with **Timeline settings…** in the Save menu: resolution (or a preset), frame rate, and how a clip of another size comes in:
+
+| Scaling | Result |
+|---|---|
+| Fit (default) | The whole picture, centred, black beside it |
+| Fill | Covers the frame, the rest is cut off |
+| Stretch | Fills the frame, not kept in shape |
+| None | The clip's own pixels, centred |
+
+A clip can override the timeline's scaling in the Inspector (Video tab, **Scaling**). The preview, the exported film and the FCPXML follow it (FCPXML has no stretch: such clips come in fitted, and the package README says so).
+
+A clip with another frame rate plays at its own speed: each frame of the cut shows the clip's frame at that moment, so frames are repeated or skipped as needed.
+
+The first film or picture dropped into an empty timeline sets its size and frame rate (a picture only its size). Settings changed by hand stay, whatever is dropped in afterwards. Changing the frame rate later keeps the clips where they are in seconds.
+
 ## Adding clips
 
 - Drag History thumbnails, file browser rows, desktop files or canvas nodes onto the timeline.
@@ -81,7 +98,7 @@ The patch buttons at the left of the track headers set the destination tracks.
 
 ## Picture, titles, transitions
 
-- **Inspector**: zoom, position, rotation, crop, opacity, volume and speed. The ◇ keys a parameter at the playhead. With several clips selected, a change applies to all of them.
+- **Inspector**: zoom, position, rotation, crop, scaling, opacity, volume and speed. The ◇ keys a parameter at the playhead. With several clips selected, a change applies to all of them.
 - **Titles** (Effects panel): drop one on a video track and edit it in the Inspector's Title tab.
 - **Transitions** (Effects panel): cross dissolve, dip to black / white, wipe. Drop one on an edit point.
 

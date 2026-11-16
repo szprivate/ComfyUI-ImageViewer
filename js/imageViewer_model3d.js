@@ -34,6 +34,9 @@ import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
 import { View3DVideoPlaneMixin, isVideoSrc } from "./imageViewer_view3dVideoPlane.js";
+import { ScatterPaint3DMixin } from "./imageViewer_scatterPaint3d.js";
+import { TerrainBrush3DMixin } from "./imageViewer_terrainBrush3d.js";
+import { TerrainErode3DMixin } from "./imageViewer_terrainErode3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 
@@ -508,6 +511,13 @@ export class Model3DView {
     // click only counts as a pick when the pointer stayed put.
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
+        // The scatter brush has the left button while it is on (Alt still navigates).
+        if ((this._sp && this._spDown(e)) || (this._tb && this._tbDown(e))) {
+            this._downAt = null;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         this._downAt = { x: e.clientX, y: e.clientY, button: e.button, alt: e.altKey };
         this._mqJustBoxed = false;
         // K held: the drag scrubs the timeline, and nothing else may have it.
@@ -722,6 +732,11 @@ export class Model3DView {
         // Walking is bound to this canvas and its document; a rebuilt one
         // starts standing still.
         if (this._walk) this.walkExit();
+        // So is the scatter brush.
+        if (this._sp) this.scatterPaintEnd();
+        if (this._tb) this.terrainBrushEnd();
+        // An erosion's render targets belong to this renderer.
+        if (this._te) this.terrainErodeEnd(false);
         if (this._raf && this._rafWin) {
             try { this._rafWin.cancelAnimationFrame(this._raf); } catch (e) {}
         }
@@ -1125,19 +1140,31 @@ export class Model3DView {
 
     setMaterialMode(mode) {
         this.materialMode = MATERIAL_MODES.some(([v]) => v === mode) ? mode : "original";
-        // An image plane keeps its picture: clay or normals would show
-        // something that is not the picture, which is the whole point of it.
-        for (const [mesh, original] of this._originals) {
-            // A splat's bounds box stays unseen whatever the look.
-            if (mesh.name === "imageplane" || mesh.name === "splatbounds") continue;
-            // A templated item keeps its wire, whatever the look of the rest.
-            if (this._templated && this._templated.has(mesh)) continue;
-            mesh.material = (this.materialMode === "original" || this.materialMode === "pathtraced")
-                ? original : this.materials[this.materialMode];
-        }
+        for (const [mesh, original] of this._originals) this._lookOn(mesh, original);
         if (this._ptModeChanged) this._ptModeChanged();
         this._syncToolbar();
         this.requestRender();
+    }
+
+    /**
+     * A mesh in the look chosen (clay, normals ...), its own material kept as the original. Every mesh made
+     * while a look is on goes through here: a terrain rebuilt during a clay render was drawn in its textures
+     * (promo run 2026-11-15).
+     */
+    _keepOriginal(mesh, material) {
+        this._originals.set(mesh, material);
+        this._lookOn(mesh, material);
+    }
+
+    _lookOn(mesh, original) {
+        // An image plane keeps its picture: clay or normals would show
+        // something that is not the picture, which is the whole point of it.
+        // A splat's bounds box stays unseen whatever the look.
+        if (mesh.name === "imageplane" || mesh.name === "splatbounds") return;
+        // A templated item keeps its wire, whatever the look of the rest.
+        if (this._templated && this._templated.has(mesh)) return;
+        const look = this.materials && this.materials[this.materialMode];
+        mesh.material = look || original;      // original, path traced, or no look made yet
     }
 
     setGrid(on) {
@@ -1301,7 +1328,7 @@ export class Model3DView {
         entry.color = item.color;
         entry.key = type;
         entry.stats = this._statsOf(group, type);
-        this._originals.set(mesh, material);
+        this._keepOriginal(mesh, material);
         return entry;
     }
 
@@ -1613,7 +1640,7 @@ export class Model3DView {
             entry.stats = this._statsOf(loaded.object, format);
             // Its bones as the file has them: the rest pose a rig is built on.
             this._rigCapture(entry);
-            loaded.object.traverse((c) => { if (c.isMesh) this._originals.set(c, c.material); });
+            loaded.object.traverse((c) => { if (c.isMesh) this._keepOriginal(c, c.material); });
             if (loaded.animations && loaded.animations.length) {
                 const { THREE } = this.libs;
                 entry.mixer = new THREE.AnimationMixer(loaded.object);
@@ -2520,6 +2547,9 @@ export class Model3DView {
         // Cameras' look-at targets are handles, never in a picture.
         for (const entry of this._entries.values()) hide(entry.aimViz);
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
+        hide(this._spGroup);            // the scatter brush's wash and ring are for painting
+        hide(this._spRing);
+        hide(this._tbRing);
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         for (const j of (this._joints || new Map()).values()) hide(j.group);
         // An Atlas world's views are there to see where its pictures were taken, never in a picture.
@@ -2751,3 +2781,6 @@ Object.assign(Model3DView.prototype, Atlas3DMixin);
 Object.assign(Model3DView.prototype, View3DPathTraceMixin);
 Object.assign(Model3DView.prototype, CameraAim3DMixin);
 Object.assign(Model3DView.prototype, View3DVideoPlaneMixin);
+Object.assign(Model3DView.prototype, ScatterPaint3DMixin);
+Object.assign(Model3DView.prototype, TerrainBrush3DMixin);
+Object.assign(Model3DView.prototype, TerrainErode3DMixin);

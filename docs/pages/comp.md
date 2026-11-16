@@ -96,7 +96,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
-| AI | AI Matte, AI Depth, AI Relight, AI Inpaint, AI Upscale |
+| AI | AI Matte, AI Depth, AI Inpaint, AI Upscale |
 | VFX | VFX Alpha Matte, VFX SDR to HDR, VFX Reframe, VFX Upscale |
 | Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
@@ -141,11 +141,24 @@ Over its own degrained plate with nothing changed, Regrain gives the plate back 
 
 ### AI nodes
 
-AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. They use the same workflows as Paint's Generate (Matte uses background removal, Depth and Relight an image edit with words, Inpaint fill or remove inside the alpha of its mask input, Upscale the upscalers). By default a node runs the workflow picked there for its action.
+AI nodes send the image coming into them through a ComfyUI workflow and keep the answer. Each node has its own short list of workflows, picked because they do that node's job and behave the same on every frame, so they suit footage as well as stills:
+
+- **AI Matte**: background removal (BiRefNet, RMBG, BEN2, InSPyReNet and two API removers). Its answer becomes the alpha.
+- **AI Depth**: the depth models ComfyUI runs with its own nodes, no node pack needed:
+  - *Depth Anything 3* Metric, Mono, Base and Small. Metric gives depth in the same scale from frame to frame, Mono the finest detail per frame, Base and Small are lighter and faster. These write raw depth as float EXR, and the whole job is mapped through one range (the 1st to the 99th percentile of every frame), so a depth keeps its grey across the frames.
+  - *MoGe 3* Large and Giant, *MoGe 2* Large: sharp edges and fine structure.
+  - *Lotus Depth*: a one-step diffusion model.
+  - *Marigold V2*: the most detail, but slow and a 22 GB download.
+
+  MoGe, Lotus and Marigold hand back a map that ComfyUI's node has already scaled to each frame, so on footage the grey of a depth can shift from frame to frame. Use Depth Anything 3 Metric when it has to hold still. The result is a 16-bit PNG, near is white.
+- **AI Inpaint**: fills inside the alpha of its mask input. With a prompt it lists the fill models, without one the removal models.
+- **AI Upscale**: upscalers that keep the picture rather than invent detail (an upscale model, SeedVR2, two API upscalers).
+
+The first workflow of a list that this ComfyUI can run is the default. Workflows whose nodes this ComfyUI does not have are left out. "Downloads its model first" means the model files are not on this machine yet: Run then lists the files, their sizes and the model folders they go into, and asks before it fetches anything. The files come from Hugging Face, the download shows on the node's progress line and in the [install log](reference.md#install-log), and Stop ends it. Say "Not now" and nothing is fetched or run.
 
 Each node can pick its own:
 
-- **workflow**: Paint's choice, or any workflow Paint lists for that action (local models and API models; "files missing" means the model files are not installed yet). Changing it clears the node's model picks.
+- **workflow**: one from its list. Changing it clears the node's model picks.
 - **model files**: one row per model input of that workflow (diffusion model, checkpoint, text encoder, VAE, LoRA, upscale model, and loaders of node packs whose file sits in a ComfyUI model folder). Each row lists the files in that model folder; "workflow's own" keeps the file the workflow names. Only files ComfyUI lists can be picked.
 
 A changed workflow or model marks the node's results as out of date.

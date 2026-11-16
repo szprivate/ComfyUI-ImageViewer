@@ -482,46 +482,48 @@ class RigRoutes(unittest.TestCase):
             await asyncio.sleep(0.05)
         return job
 
-    def test_install_runs_the_installer_and_keeps_the_token(self):
+    def test_install_only_from_the_comfyui_machine(self):
+        """Installing runs pip on this machine: another machine that can open the page may not ask for it."""
+        pa = sys.modules[self.pkg + ".path_access"]
+        old = (pa._is_local, os.environ.pop(pa.INSTALL_REMOTE_ENV, None), self.routes.INSTALLER)
+        pa._is_local = lambda request: False
+        self.routes.INSTALLER = os.path.join(self.tmp, "must_not_run.py")
+        try:
+            async def go(c):
+                r = await c.post("/imageviewer/rig/install", json={"root": os.path.join(self.tmp, "remote")})
+                return r.status, await r.json()
+            status, out = self.run_c(go)
+        finally:
+            pa._is_local, self.routes.INSTALLER = old[0], old[2]
+            if old[1] is not None:
+                os.environ[pa.INSTALL_REMOTE_ENV] = old[1]
+        self.assertEqual(status, 403, out)
+        self.assertIn(pa.INSTALL_REMOTE_ENV, out["error"])
+
+    def test_install_answers_the_command_and_keeps_the_token(self):
+        """Install runs nothing (no runtime pip from a node pack): it answers the line to run and keeps the token."""
+        marker = os.path.join(self.tmp, "installer_ran")
         fake = os.path.join(self.tmp, "fake_install.py")
         with open(fake, "w") as fh:
-            fh.write(textwrap.dedent("""
-                import json, sys, time
-                args = sys.argv[1:]
-                if "--slow" in open(__file__).read() and "slow" in args[1]:
-                    import subprocess
-                    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-                    print("$ pip install torch", flush=True); time.sleep(60)
-                for i in range(7):
-                    print(f"$ step {i}", flush=True)
-                print("== written", flush=True)
-                json.dump(args, open(args[1] + ".args.json", "w"))
-            """) + "# --slow\n")
+            fh.write(f"open({marker!r}, 'w').write('ran')\n")
         token_file = os.path.join(self.tmp, "hf", "token")
         old = (self.routes.INSTALLER, os.environ.get("HF_TOKEN_PATH"), os.environ.get("HF_TOKEN"))
         self.routes.INSTALLER = fake
         os.environ["HF_TOKEN_PATH"] = token_file
         os.environ.pop("HF_TOKEN", None)
-        root = os.path.join(self.tmp, "rigtools")
-        slow = os.path.join(self.tmp, "slow")
+        root = os.path.join(self.tmp, "rig tools")
 
         async def go(c):
             t0 = await (await c.get("/imageviewer/rig/tools")).json()
             bad = await c.post("/imageviewer/rig/install", json={"root": root, "hf_token": "not-a-token"})
             r = await c.post("/imageviewer/rig/install", json={"root": root, "only": "kimodo",
                                                                "hf_token": "hf_" + "a" * 30})
-            job = await r.json()
-            again = await (await c.post("/imageviewer/rig/install", json={"root": "/elsewhere"})).json()
-            done = await self.wait(c, job)
+            out = await r.json()
             t1 = await (await c.get("/imageviewer/rig/tools")).json()
-            # A cancel stops the installer and what it started.
-            sj = await (await c.post("/imageviewer/rig/install", json={"root": slow})).json()
-            await asyncio.sleep(0.5)
-            await c.post("/imageviewer/rig/job", json={"job": sj["job"], "cancel": True})
-            stopped = await self.wait(c, sj)
-            return t0, bad.status, job, again, done, t1, stopped
+            return t0, bad.status, r.status, out, t1
         try:
-            t0, bad, job, again, done, t1, stopped = self.run_c(go)
+            t0, bad, status, out, t1 = self.run_c(go)
+            time.sleep(0.3)
         finally:
             self.routes.INSTALLER = old[0]
             for k, v in (("HF_TOKEN_PATH", old[1]), ("HF_TOKEN", old[2])):
@@ -531,18 +533,30 @@ class RigRoutes(unittest.TestCase):
                     os.environ[k] = v
         self.assertFalse(t0["install"]["hf_token"])
         self.assertIsNone(t0["install"]["running"])
-        self.assertTrue(t0["install"]["root"])
+        self.assertEqual(t0["install"]["python"], sys.executable)
         self.assertEqual(bad, 400)
-        self.assertEqual(again["job"], job["job"])                 # one install at a time: the running one
-        self.assertEqual(done["state"], "done", done)
-        self.assertEqual(done["share"], 1.0)
-        self.assertNotIn("hf_", json.dumps(done))                   # the token is never answered
+        self.assertEqual(status, 200, out)
+        self.assertNotIn("job", out)
+        self.assertFalse(os.path.exists(marker))                    # nothing was started
+        self.assertIn(fake, out["command"])
+        self.assertIn("--only kimodo", out["command"])
+        self.assertEqual(out["root"], root)
+        self.assertNotIn("hf_", json.dumps(out))                    # the token is never answered
         with open(token_file) as fh:
             self.assertEqual(fh.read(), "hf_" + "a" * 30)
-        with open(root + ".args.json") as fh:
-            self.assertEqual(json.load(fh), ["--root", root, "--only", "kimodo"])
         self.assertTrue(t1["install"]["hf_token"])
-        self.assertEqual(stopped["state"], "cancelled", stopped)
+
+    def test_install_command_quotes_for_each_shell(self):
+        import shlex
+        posix = self.routes.install_command("/a b/rig", "unirig", python="/py/python", script="/s/i.py", windows=False)
+        self.assertEqual(shlex.split(posix["command"]), ["/py/python", "-u", "/s/i.py", "--root", "/a b/rig", "--only", "unirig"])
+        win = self.routes.install_command(r"D:\AI\rig tools", None, python=r"C:\Py\python.exe", script=r"D:\v\i.py", windows=True)
+        self.assertEqual(win["command"], r'C:\Py\python.exe -u D:\v\i.py --root "D:\AI\rig tools"')
+        self.assertEqual(win["powershell"], r"& C:\Py\python.exe -u D:\v\i.py --root 'D:\AI\rig tools'")
+
+    def test_no_route_starts_the_installer(self):
+        src = open(os.path.join(os.path.dirname(__file__), "..", "src", "rig_routes.py"), encoding="utf-8").read()
+        self.assertNotIn("Popen(cmd, cwd=os.path.dirname(script)", src)
 
     def test_autorig_runs_unirig_steps(self):
         async def go(c):

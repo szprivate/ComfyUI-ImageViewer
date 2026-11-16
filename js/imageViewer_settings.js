@@ -20,6 +20,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
+import { renderSettingsPage } from "./imageViewer_settingsPage.js";
 import { THEME, THEME_SCOPE_ID, THEME_PRESET_ID, PRESETS, COMFY, COMFY_NAME, matchPreset, makeThemeMixin,
          readComfyColours } from "./imageViewer_theme.js";
 
@@ -27,6 +28,7 @@ const P = "ImageViewer.";
 const CAT = "ComfyUI Image Viewer";
 
 export const PREF = {
+    page:           P + "Settings.Page",
     folders:        P + "Folders.Allowed",
     paintWorkflows: P + "Paint.Workflows",
     browserStart:   P + "Browser.StartFolder",
@@ -184,6 +186,8 @@ function defs() {
         {
             id: PREF.paintWorkflows, category: sec("Paint", "Workflows"),
             name: "Generate workflows",
+            wideHelp: "The ComfyUI workflow each of Paint's Generate actions runs: one that comes with the viewer, " +
+                      "one of your own (from the canvas or an API-format file), or agentY building one.",
             tooltip: "The ComfyUI workflow each of Paint's Generate actions runs: one that comes with the viewer, " +
                      "one of your own (from the canvas or an API-format file), or agentY building one. " +
                      "Kept on the ComfyUI machine in ~/.comfyui_image_viewer/paint_workflows/, not in your settings.",
@@ -337,13 +341,14 @@ function defs() {
         },
         ...THEME.map((t, i) => ({
             id: t.id, category: sec("Colours", t.id.slice(P.length + "Colours.".length)),
-            name: t.name, type: "color", defaultValue: t.def,
+            name: t.name, type: "color", defaultValue: t.def, noReset: true,
             ...(t.tip ? { tooltip: t.tip } : {}),
             sortOrder: 644 - i, onChange: (value, old) => { panelApply(t.id)(value); colourChanged(old); },
         })),
         {
             id: PREF.colourReset, category: sec("Colours", "Reset"),
-            name: "Back to the preset's colours",
+            name: "Back to the preset's colours", inline: true,
+            tooltip: "Every colour back to the preset's: ComfyUI's while following it, Paint's when the preset is Custom.",
             type: () => renderColourReset(),
             defaultValue: "", sortOrder: 620,
         },
@@ -402,38 +407,37 @@ function defs() {
         },
         {
             id: PREF.renderFormat, category: sec("Previz", "RenderFormat"),
-            name: "Render: format", type: "combo", defaultValue: S.RENDER_DEFAULTS.format,
+            name: "Format", type: "combo", defaultValue: S.RENDER_DEFAULTS.format,
             options: opts([["mp4", "MP4"], ["mov", "MOV"], ["webm", "WebM"], ["png", "PNG sequence"]]),
-            tooltip: "For a shot that has never been rendered. A shot keeps what its render dialog last used.",
             sortOrder: 370, onChange: applySceneDefaults,
         },
         {
             id: PREF.renderQuality, category: sec("Previz", "RenderQuality"),
-            name: "Render: quality", type: "combo", defaultValue: S.RENDER_DEFAULTS.quality,
+            name: "Quality", type: "combo", defaultValue: S.RENDER_DEFAULTS.quality,
             options: opts([["high", "High"], ["medium", "Medium"], ["low", "Low"]]),
             sortOrder: 360, onChange: applySceneDefaults,
         },
         {
             id: PREF.renderScale, category: sec("Previz", "RenderScale"),
-            name: "Render: scale", type: "combo", defaultValue: String(S.RENDER_DEFAULTS.scale),
+            name: "Scale", type: "combo", defaultValue: String(S.RENDER_DEFAULTS.scale),
             options: opts([25, 50, 75, 100, 150, 200].map((v) => [String(v), `${v}%`])),
             sortOrder: 350, onChange: applySceneDefaults,
         },
         {
             id: PREF.renderAA, category: sec("Previz", "RenderAA"),
-            name: "Render: anti-aliasing", type: "combo", defaultValue: String(S.RENDER_DEFAULTS.aa),
+            name: "Anti-aliasing", type: "combo", defaultValue: String(S.RENDER_DEFAULTS.aa),
             options: opts([["1", "Off"], ["2", "2×"], ["4", "4×"]]),
             sortOrder: 340, onChange: applySceneDefaults,
         },
         {
             id: PREF.renderBg, category: sec("Previz", "RenderBackground"),
-            name: "Render: background", type: "combo", defaultValue: S.RENDER_DEFAULTS.background,
+            name: "Background", type: "combo", defaultValue: S.RENDER_DEFAULTS.background,
             options: opts([["viewer", "As the viewport"], ["color", "Colour"], ["transparent", "Transparent"]]),
             sortOrder: 330, onChange: applySceneDefaults,
         },
         {
             id: PREF.renderColor, category: sec("Previz", "RenderColor"),
-            name: "Render: background colour", type: "color",
+            name: "Background colour", type: "color",
             defaultValue: S.RENDER_DEFAULTS.color.replace(/^#/, ""),
             sortOrder: 320, onChange: applySceneDefaults,
         },
@@ -449,13 +453,45 @@ function defs() {
     ];
 }
 
-/** The `settings` array for registerExtension. */
+/** The rows that draw themselves on the page (they keep nothing in the setting). */
+const CUSTOM_ROWS = () => ({
+    [PREF.folders]: renderFolderEditor,
+    [PREF.paintWorkflows]: renderPaintWorkflowEditor,
+    [PREF.colourReset]: renderColourReset,
+});
+
+/** The whole page (imageViewer_settingsPage.js), drawn for ComfyUI's dialog. */
+export function renderViewerSettingsPage(store) {
+    const s = store || {
+        get: (id) => pref(id),
+        set: (id, v) => app.extensionManager.setting.set(id, v),
+    };
+    return renderSettingsPage({
+        defs: defs().filter((d) => d.type !== "hidden"),
+        idOf: (k) => PREF[k],
+        themeIds: THEME.map((t) => t.id),
+        store: s,
+        custom: CUSTOM_ROWS(),
+    });
+}
+
+/** The `settings` array for registerExtension: ONE entry ComfyUI shows (the page),
+ *  every setting it draws registered as hidden, so they keep their ids, defaults,
+ *  onChange and the per-user file exactly as before. */
 export function viewerSettings(getPanel) {
     if (getPanel) _getPanel = getPanel;
-    const list = defs();
+    const list = defs().map((d) => ({ ...d, type: "hidden" }));
+    list.unshift({
+        // ComfyUI's own search goes by name: every row's name is in it, so a search there
+        // still finds the viewer (the page then narrows to it). The label itself is not shown.
+        id: PREF.page, category: [CAT, "Viewer", "Page"],
+        name: "Image Viewer: " + defs().filter((d) => d.type !== "hidden").map((d) => d.name).join(" · "),
+        type: () => renderViewerSettingsPage(), defaultValue: "", sortOrder: 2000,
+    });
     for (const d of list) {
         DEFAULTS[d.id] = d.defaultValue;
-        if (d.id === PREF.folders || d.id === PREF.colourReset) continue;   // not a setting: a list on the server, a button
+        if (d.id === PREF.page || d.id === PREF.folders || d.id === PREF.colourReset ||
+            d.id === PREF.paintWorkflows) continue;   // not settings: the page, a list on the server, a button
         // Every change is also written to the per-user file (see below).
         const own = d.onChange;
         d.onChange = (value, old) => {
@@ -517,7 +553,7 @@ async function loadUserSettings() {
 
     const seed = {};
     for (const id of Object.keys(DEFAULTS)) {
-        if (id === PREF.folders || id === PREF.paintWorkflows || id === PREF.colourReset) continue;
+        if (id === PREF.page || id === PREF.folders || id === PREF.paintWorkflows || id === PREF.colourReset) continue;
         const here = pref(id);
         if (id in stored) {
             // The user's file wins over what this ComfyUI user directory holds.
@@ -766,42 +802,42 @@ function renderColourReset() {
 
 const CSS = `
 .imageviewer-roots { display:flex; flex-direction:column; gap:8px; width:100%; min-width:320px;
-    font-size:13px; color:var(--p-text-color, #ddd); }
-.imageviewer-roots-h { font-size:11px; text-transform:uppercase; letter-spacing:.05em; opacity:.6; margin-top:4px; }
+    font-size:13px; color:#e6e8ec; }
+.imageviewer-roots-h { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#9aa0aa; margin-top:6px; }
 .imageviewer-roots-list { display:flex; flex-direction:column; gap:3px; }
 .imageviewer-roots-row { display:flex; align-items:center; gap:8px; padding:4px 8px; border-radius:4px;
-    background:var(--comfy-input-bg, #222); border:1px solid var(--border-color, #444); }
+    background:#161a20; border:1px solid #2c313b; border-radius:7px; }
 .imageviewer-roots-row.imageviewer-roots-fixed { opacity:.7; }
 .imageviewer-roots-path { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
     font-family:ui-monospace, Consolas, monospace; font-size:12px; direction:rtl; text-align:left; }
 .imageviewer-roots-label { opacity:.6; font-size:11px; white-space:nowrap; }
-.imageviewer-roots-bad { color:#ff9d4d; font-size:11px; white-space:nowrap; }
-.imageviewer-roots button { background:var(--comfy-menu-bg, #333); color:inherit; cursor:pointer;
-    border:1px solid var(--border-color, #555); border-radius:4px; padding:3px 10px; font-size:12px; }
-.imageviewer-roots button:hover:not(:disabled) { border-color:#f60; color:#f60; }
+.imageviewer-roots-bad { color:#e5c07b; font-size:11px; white-space:nowrap; }
+.imageviewer-roots button { background:#1e2128; color:#e6e8ec; cursor:pointer;
+    border:1px solid #2c313b; border-radius:7px; padding:5px 12px; font-size:12px; }
+.imageviewer-roots button:hover:not(:disabled) { border-color:#6f97ff; }
 .imageviewer-roots button:disabled { opacity:.4; cursor:default; }
 .imageviewer-roots button.imageviewer-roots-x { padding:1px 7px; }
 .imageviewer-roots-add { display:flex; gap:6px; }
-.imageviewer-roots-add input { flex:1; min-width:0; background:var(--comfy-input-bg, #222); color:inherit;
-    border:1px solid var(--border-color, #555); border-radius:4px; padding:4px 8px;
+.imageviewer-roots-add input { flex:1; min-width:0; background:#161a20; color:inherit; outline:none;
+    border:1px solid #2c313b; border-radius:7px; padding:6px 9px;
     font-family:ui-monospace, Consolas, monospace; font-size:12px; }
-.imageviewer-roots-note { font-size:12px; opacity:.7; line-height:1.4; }
-.imageviewer-roots-err { font-size:12px; color:#ff6b6b; white-space:pre-wrap; }
-.imageviewer-roots-pick { border:1px solid var(--border-color, #555); border-radius:4px; padding:6px;
+.imageviewer-roots-note { font-size:11.5px; color:#9aa0aa; line-height:1.45; }
+.imageviewer-roots-err { font-size:12px; color:#e5736f; white-space:pre-wrap; }
+.imageviewer-roots-pick { border:1px solid #2c313b; border-radius:7px; background:#161a20; padding:6px;
     display:flex; flex-direction:column; gap:6px; }
 .imageviewer-roots-pick-bar { display:flex; gap:6px; align-items:center; }
 .imageviewer-roots-pick-list { max-height:220px; overflow:auto; display:flex; flex-direction:column; }
 .imageviewer-roots-pick-item { padding:3px 6px; cursor:pointer; border-radius:3px; white-space:nowrap;
     overflow:hidden; text-overflow:ellipsis; }
-.imageviewer-roots-pick-item:hover { background:rgba(255,102,0,.15); color:#f60; }
-.imageviewer-pwf-row { display:flex; flex-direction:column; gap:4px; padding:6px 8px; border-radius:4px;
-    background:var(--comfy-input-bg, #222); border:1px solid var(--border-color, #444); }
+.imageviewer-roots-pick-item:hover { background:#262b34; color:#6f97ff; }
+.imageviewer-pwf-row { display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:7px;
+    background:#161a20; border:1px solid #2c313b; }
 .imageviewer-pwf-line { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.imageviewer-pwf-name { min-width:150px; font-weight:600; }
-.imageviewer-pwf-line select { flex:1; min-width:180px; background:var(--comfy-input-bg, #222); color:inherit;
-    border:1px solid var(--border-color, #555); border-radius:4px; padding:3px 6px; font-size:12px; }
+.imageviewer-pwf-name { min-width:150px; font-weight:600; font-size:12.5px; }
+.imageviewer-pwf-line select { flex:1; min-width:180px; background:#1e2128; color:inherit; outline:none;
+    border:1px solid #2c313b; border-radius:7px; padding:5px 8px; font-size:12px; }
 .imageviewer-pwf-status { font-size:11px; opacity:.75; line-height:1.4; }
-.imageviewer-pwf-status.imageviewer-pwf-warn { color:#ff9d4d; opacity:1; }
+.imageviewer-pwf-status.imageviewer-pwf-warn { color:#e5c07b; opacity:1; }
 `;
 
 function h(tag, props = {}, ...kids) {

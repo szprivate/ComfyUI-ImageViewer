@@ -243,6 +243,34 @@ class Routes(unittest.TestCase):
             self.assertEqual(s["writes"], ["Write1"])
         self.run_c(go)
 
+    def test_the_agent_reads_every_node_type_and_asks_the_page_to_run_an_ai_node(self):
+        path = os.path.join(self.dirs["output"], "agent", "ai.comp.json")
+
+        async def go(c):
+            st, d = await self.j(c, "/imageviewer/comp_ops", {"path": path, "create": {"width": 32, "height": 20, "frames": 6}, "ops": [
+                {"op": "add", "type": "read", "file": "../plate.png"},
+                {"op": "add", "type": "ai_depth", "inputs": ["$0"], "name": "Depth"}]})
+            self.assertEqual(st, 200, d)
+            r = await c.get("/imageviewer/comp_summary", params={"path": path})
+            s = await r.json()
+            self.assertIn("depthblur", s["node_types"])
+            self.assertIn("ai_matte", s["node_types"])
+            self.assertEqual(next(n for n in s["nodes"] if n.get("name") == "Depth")["results"], 0)
+            st, d = await self.j(c, "/imageviewer/comp_agent", {"action": "ai_run", "path": path, "node": "Depth", "first": 2, "last": 4})
+            self.assertEqual(st, 200, d)
+            self.assertEqual(d["state"], "sent")
+            ev = [x for x in self.sent if x[0] == "imageviewer.comp.agent"][-1][1]
+            self.assertEqual(ev["args"], {"path": os.path.abspath(path), "node": "Depth", "first": 2, "last": 4})
+            st, _ = await self.j(c, "/imageviewer/comp_agent_done", {"id": d["id"], "state": "done", "result": {"done": 3}})
+            self.assertEqual(st, 200)
+            r = await c.get("/imageviewer/comp_agent", params={"id": d["id"]})
+            self.assertEqual((await r.json())["result"], {"done": 3})
+            st, d = await self.j(c, "/imageviewer/comp_agent", {"action": "ai_run", "path": path})
+            self.assertEqual(st, 400, d)
+            st, d = await self.j(c, "/imageviewer/comp_agent", {"action": "ai_run", "path": path + ".nope.comp.json", "node": "Depth"})
+            self.assertIn(st, (403, 404), d)
+        self.run_c(go)
+
     def test_relink_and_localise(self):
         path = os.path.join(self.dirs["output"], "r.comp.json")
         moved = os.path.join(self.dirs["output"], "moved", "deep")

@@ -11,6 +11,9 @@
 // azimuth of 0 is straight ahead (-Z), +90 to the right (+X); elevation is
 // degrees above the horizon.
 
+import { cleanPaint } from "./imageViewer_scatterPaint.js";
+import { cleanSculpt, cleanLayerPaint } from "./imageViewer_terrainSculpt.js";
+
 export const WORLD_KINDS = ["environment", "terrain", "scatter", "depthmesh", "light"];
 export const SCATTER_TYPES = ["pine", "tree", "bush", "grass", "rock", "column", "lamp", "model"];
 export const TONE_CURVES = ["neutral", "aces", "agx", "linear"];
@@ -153,6 +156,9 @@ export function terrainSettings(item) {
         segments: Math.round(num(t.segments, 256, 8, 512)),
         // A ceiling is a terrain turned over; you don't stand on it.
         walkable: t.walkable !== false,
+        // Hand edits from the terrain brushes (imageViewer_terrainSculpt.js), or null.
+        sculpt: cleanSculpt(t.sculpt),
+        layerPaint: cleanLayerPaint(t.layerPaint),
         layers,
         rules: {
             rockSlope: pair(r.rockSlope, [24, 38], 0, 90),
@@ -220,6 +226,9 @@ export function scatterSettings(item) {
         lift: num(s.lift, 0, -1000, 1000),
         emissive: num(s.emissive, 0, 0, 1000),
         roughness: s.roughness == null ? null : num(s.roughness, 0.85, 0.02, 1),
+        // Painted density over the terrain (imageViewer_scatterPaint.js), or
+        // null: grow anywhere the rules above allow.
+        paint: cleanPaint(s.paint),
     };
 }
 

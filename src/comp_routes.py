@@ -33,10 +33,15 @@ and a render of its Output by the export rule.
                                                           a frame range as ONE prompt (comp_ai.prepare_batch):
                                                           {run, graph, outputs {frame: node}, skipped}; 409 {missing}
     POST /imageviewer/comp_ai_batch_place {run, images {frame: {filename, subfolder, type}}}
+    POST /imageviewer/comp_agent {action: ai_run, path, node, first?, last?} -> {id, state: sent}: the open page runs
+                                 the comp's AI node over those frames, saves the comp and reports to
+                                 POST /imageviewer/comp_agent_done; GET /imageviewer/comp_agent?id= -> {state, result?}
                                                           the answers as a PNG sequence beside the comp -> {frames}
     POST /imageviewer/comp_grain {path, comp, node, frames}  a Grain / Degrain / Regrain node's grain measured at
                                                           full size (comp_grain.analyse) -> {profile, frames, width, height}
-    POST /imageviewer/comp_ai_models {action, workflow?, graph?}
+    POST /imageviewer/comp_ai_workflows {kind, prompt?}   an AI node's own short list of workflows (comp_ai.workflows_for):
+                                                          {kind, action, workflows, choice}
+    POST /imageviewer/comp_ai_models {kind, prompt?, workflow?, graph?}  (or {action, ...}: an older page)
                                                           the model files a workflow's inputs can take
     GET  /imageviewer/comp_formats - the Send to Viewer node's formats and per-format options (file_writer)
     POST /imageviewer/comp_render {path, format, options? {bit_depth, compression, quality, compress_level, codec},
@@ -1215,12 +1220,24 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         res["missing"] = sorted(int(f) for f in images if str(f).lstrip("-").isdigit() and int(f) not in found)
         return web.json_response(res)
 
+    async def ai_workflows(request):
+        from . import paint_generate as G
+        body = await body_of(request)
+        try:
+            res = await off(comp_ai.workflows_for, str(body.get("kind") or ""), str(body.get("prompt") or ""),
+                            folder_paths, node_classes())
+        except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res, headers={"Cache-Control": "no-cache"})
+
     async def ai_models(request):
         from . import paint_generate as G
         body = await body_of(request)
         try:
             res = await off(comp_ai.models_for, str(body.get("action") or ""), folder_paths,
-                            wid=body.get("workflow") or None, graph=body.get("graph"))
+                            wid=body.get("workflow") or None, graph=body.get("graph"),
+                            kind=str(body.get("kind") or "") or None, prompt=str(body.get("prompt") or ""),
+                            node_classes=node_classes())
         except (comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
             return err(e)
         return web.json_response(res, headers={"Cache-Control": "no-cache"})
@@ -1264,6 +1281,58 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             sources.close()
         return web.json_response(res)
 
+    # ── An agent's request the open page carries out (edit_comp's run_ai): run an AI node ──
+    # The AI nodes' workflows are made into prompts by ComfyUI's own page, and their results are written into the
+    # comp by its editor, so the page does it - as rig_routes' /rig/agent does for the 3D space.
+    agent_asks = {}
+
+    async def comp_agent(request):
+        body = await body_of(request)
+        if body.get("action") != "ai_run":
+            return err("action is ai_run")
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        if not os.path.isfile(path):
+            return err("no such comp", 404)
+        if not str(body.get("node") or "").strip():
+            return err("name the AI node (its id or name)")
+        if send is None:
+            return err("the viewer's page cannot be reached", 501)
+        for old in [k for k, v in agent_asks.items() if v["state"] in ("done", "error")][:max(0, len(agent_asks) - 40)]:
+            agent_asks.pop(old, None)
+        aid = secrets.token_hex(8)
+        args = {"path": path, "node": str(body.get("node")).strip()}
+        for k in ("first", "last"):
+            if isinstance(body.get(k), int) and not isinstance(body.get(k), bool) and body[k] >= 0:
+                args[k] = body[k]
+        agent_asks[aid] = {"id": aid, "action": "ai_run", "state": "sent", "sent": time.time()}
+        send("imageviewer.comp.agent", {"id": aid, "action": "ai_run", "args": args})
+        return web.json_response(agent_asks[aid])
+
+    async def comp_agent_state(request):
+        ask = agent_asks.get(request.query.get("id") or "")
+        if not ask:
+            return err("no such request", 404)
+        out = dict(ask)
+        if out["state"] == "sent" and time.time() - out["sent"] > 30:
+            out["note"] = "no page has taken it yet: is ComfyUI open in a browser with the viewer?"
+        return web.json_response(out)
+
+    async def comp_agent_done(request):
+        body = await body_of(request)
+        ask = agent_asks.get(str(body.get("id") or ""))
+        if not ask:
+            return err("no such request", 404)
+        if body.get("state") not in ("running", "done", "error"):
+            return err("state is running, done or error")
+        ask["state"] = body["state"]
+        for k in ("result", "error", "progress"):
+            if k in body:
+                ask[k] = body[k]
+        return web.json_response({"ok": True})
+
     async def get_formats(request):
         return web.json_response(comp_io.formats(), headers={"Cache-Control": "no-cache"})
 
@@ -1277,7 +1346,11 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_ai_place", ai_place)
         add("POST", f"{prefix}/comp_ai_batch", ai_batch)
         add("POST", f"{prefix}/comp_ai_batch_place", ai_batch_place)
+        add("POST", f"{prefix}/comp_agent", comp_agent)
+        add("GET", f"{prefix}/comp_agent", comp_agent_state)
+        add("POST", f"{prefix}/comp_agent_done", comp_agent_done)
         add("POST", f"{prefix}/comp_ai_models", ai_models)
+        add("POST", f"{prefix}/comp_ai_workflows", ai_workflows)
         add("POST", f"{prefix}/comp_grain", grain)
         add("POST", f"{prefix}/comp_vfx", vfx_prepare)
         add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)

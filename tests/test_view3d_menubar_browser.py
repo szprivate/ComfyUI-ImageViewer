@@ -126,7 +126,7 @@ class MenuBarPaneTests(unittest.TestCase):
             mode = pg.evaluate("() => window.__panel._modelView().gizmoMode")
         finally:
             pg.close()
-        self.assertEqual(labels, ["File", "Edit", "Create", "Rig", "Animate", "Constrain", "World", "View", "Windows"])
+        self.assertEqual(labels, ["File", "Edit", "Create", "Rig", "Animate", "Constrain", "World", "Terrain", "View", "Windows"])
         self.assertGreaterEqual(right, 3)
         self.assertTrue(inside)
         self.assertEqual(tools[:4], ["select", "translate", "rotate", "scale"])

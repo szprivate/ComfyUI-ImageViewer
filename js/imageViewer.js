@@ -10,6 +10,8 @@ import { LayoutMixin }   from "./imageViewer_mixinLayout.js";
 import { HistoryMixin, HISTORY_LIMIT_DEFAULT, HISTORY_LIMIT_OLD_DEFAULT, HISTORY_KEY, HISTORY_VIEW_TAB, VIEWER_TAB_LABEL, clampHistoryLimit }  from "./imageViewer_mixinHistory.js";
 import { mergeTabHistories, snapshotTab, isMediaTabKey, isFeedTabKey, foldIntoTab, groupFromLabel, packSnapshot, unpackSnapshot } from "./imageViewer_historyData.js";
 import { PrevizWorldMixin } from "./imageViewer_previzWorld.js";
+import { PrevizTerrainMixin } from "./imageViewer_previzTerrain.js";
+import { PrevizTerrainErodeMixin } from "./imageViewer_previzTerrainErode.js";
 import { PlaybackMixin } from "./imageViewer_mixinPlayback.js";
 import { ParamsMixin }   from "./imageViewer_mixinParams.js";
 import { UIMixin }       from "./imageViewer_mixinUI.js";
@@ -40,6 +42,7 @@ import { ParamCurvesMixin } from "./imageViewer_paramCurves.js";
 import { ViewTabsMixin } from "./imageViewer_viewTabs.js";
 import { CodePanelMixin } from "./imageViewer_codePanel.js";
 import { DepsPanelMixin } from "./imageViewer_depsPanel.js";
+import { FarmMixin } from "./imageViewer_farm.js";
 import { MgPanelMixin } from "./imageViewer_mgPanel.js";
 import { CompPanelMixin } from "./imageViewer_compPanel.js";
 import { CompRotoMixin } from "./imageViewer_compRoto.js";
@@ -67,6 +70,7 @@ import { PrevizMenuBarMixin } from "./imageViewer_previzMenuBar.js";
 import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { PrevizRigAIMixin } from "./imageViewer_previzRigAI.js";
 import { PrevizAgentSceneMixin } from "./imageViewer_previzAgentScene.js";
+import { PrevizAgentTerrainMixin } from "./imageViewer_previzAgentTerrain.js";
 import { PrevizRigPoseMixin } from "./imageViewer_previzRigPose.js";
 import { PrevizRigRoundTripMixin } from "./imageViewer_previzRigRoundTrip.js";
 import { PrevizRigExtrasMixin } from "./imageViewer_previzRigExtras.js";
@@ -1654,6 +1658,7 @@ Object.assign(
     ViewTabsMixin,
     CodePanelMixin,
     DepsPanelMixin,
+    FarmMixin,
     MgPanelMixin,
     CompPanelMixin,
     CompRotoMixin,
@@ -1680,6 +1685,7 @@ Object.assign(
     PrevizRigToolsMixin,
     PrevizRigAIMixin,
     PrevizAgentSceneMixin,
+    PrevizAgentTerrainMixin,
     PrevizRigPoseMixin,
     PrevizRigRoundTripMixin,
     PrevizRigExtrasMixin,
@@ -1716,6 +1722,8 @@ Object.assign(
     ViewerAudioMixin,
     FrameMasksMixin,
     PrevizWorldMixin,
+    PrevizTerrainMixin,
+    PrevizTerrainErodeMixin,
     PrefsMixin,
 );
 
@@ -1775,6 +1783,12 @@ function _applyViewerOnlyMode(panel) {
 // 
 // ComfyUI extension registration
 // 
+/** "Render on farm…" (the canvas menu, the command): the viewer up, its Farm tab, the render dialog. */
+function _renderOnFarm() {
+    _setViewerPanelToggle(true, { syncDisplay: true });
+    if (globalViewerPanel && globalViewerPanel.farmRenderDialog) globalViewerPanel.farmRenderDialog();
+}
+
 try {
 app.registerExtension({
     name: "ComfyUI.ImageViewer",
@@ -1803,13 +1817,25 @@ app.registerExtension({
         // Settings → Keybinding for rebinding. They act on the visible panel, so
         // a combo assigned there also works with the cursor off the viewer.
         ...viewerCommands(_activeViewerPanel),
+        {
+            id:    "ImageViewer.renderOnFarm",
+            label: "ComfyUI Image Viewer: Render this workflow on the farm",
+            function: () => _renderOnFarm(),
+        },
+        {
+            id:    "ImageViewer.openFarm",
+            label: "ComfyUI Image Viewer: Open the Farm",
+            function: () => { _setViewerPanelToggle(true, { syncDisplay: true }); if (globalViewerPanel) globalViewerPanel.farmOpen(); },
+        },
     ],
     keybindings: viewerKeybindings(),
+    // The Farm (imageViewer_farm.js): this canvas's workflow rendered on the farm's GPU machines.
+    getCanvasMenuItems: () => [null, { content: "Render on farm\u2026", callback: () => _renderOnFarm() }],
     // Comp's node graph in ComfyUI's own bottom panel, beside the canvas (imageViewer_compComfyTab.js).
     bottomPanelTabs: compBottomTabs(() => globalViewerPanel, () => _setViewerPanelToggle(true, { syncDisplay: true })),
     menuCommands: [
         { path: ["Extensions", "ComfyUI Image Viewer"],
-          commands: ["ImageViewer.toggleViewer", "ImageViewer.sendSelectionToViewer"] },
+          commands: ["ImageViewer.toggleViewer", "ImageViewer.sendSelectionToViewer", "ImageViewer.openFarm", "ImageViewer.renderOnFarm"] },
     ],
     actionBarButtons: [
         {
@@ -1904,6 +1930,15 @@ app.registerExtension({
                 try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
                 if (e.detail && e.detail.path) globalViewerPanel?.mgOpenFile?.(e.detail.path);
             } catch (err) { console.warn("imageViewer: motion scene not opened", err); }
+        });
+
+        // An agent's request for a comp (comp_routes.py /comp_agent): run an AI node, save, report back.
+        api.addEventListener("imageviewer.comp.agent", (e) => {
+            try {
+                const bridge = window.imageViewerApi || {};
+                try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                globalViewerPanel?.compAgentRun?.(e.detail);
+            } catch (err) { console.warn("imageViewer: comp request not run", err); }
         });
 
         // An agent opened a comp (POST /imageviewer/push with a .comp.json).

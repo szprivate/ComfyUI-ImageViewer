@@ -2712,8 +2712,12 @@ export const EditTimelineMixin = {
             this.editTlRefresh();
             return;
         }
-        await this._editTlProbe(plan.map((p) => p.it.path));
+        const probed = await this._editTlProbe(plan.map((p) => p.it.path));
         let cut = this._editTlCut || D.emptyCut();
+        // The first picture into a timeline with none takes its size and frame rate (unless set by hand).
+        const first = plan.find((p) => p.kind !== "sound" && probed[p.it.path] && !probed[p.it.path].error);
+        const adopted = first ? D.adoptSettings(cut, probed[first.it.path]) : { cut, took: "" };
+        cut = adopted.cut;
         const fps = cut.fps || 24;
         let index = at == null || !cut.clips.length ? cut.clips.length : D.dropIndex(cut, at);
         const start = D.toFrame(at == null ? this._editTlNowSeconds() : at, fps);
@@ -2780,6 +2784,7 @@ export const EditTimelineMixin = {
         }
         this._editTlSel = sel;
         this._editTlNote = [
+            adopted.took ? `timeline set to ${adopted.took} from ${String(first.it.name || first.it.path).split(/[\\/]/).pop()}` : "",
             ins.length ? `${ins.length} clip(s) inserted at ${D.timecode(start, fps)}${split ? ", the shot there split" : ""}` : "",
             later.length ? `${later.length} sound(s) onto ${(D.trackOf(cut, soundId) || {}).name || soundId} at ${D.timecode(start, fps)}` : "",
             skipped ? `${skipped} item(s) left out` : "",
@@ -2850,6 +2855,7 @@ export const EditTimelineMixin = {
             { label: "Open recent\u2026", run: () => this.editTlOpenMenu(anchor, false) },
             { label: "Revert to saved", disabled: !dirty || !this._editTlSaved, run: () => this._editTlRevert() },
             "-",
+            { label: "Timeline settings\u2026", run: () => this.editTlSettingsShow() },
             { label: "Export film\u2026", disabled: !has, run: () => this._editTlRender() },
             { label: "Export to Resolve\u2026", disabled: !has, run: () => this.editTlResolveDialog() },
         ], a.left, a.bottom + 2, anchor);

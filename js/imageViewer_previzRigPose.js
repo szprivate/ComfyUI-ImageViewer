@@ -9,6 +9,7 @@ import * as M from "./imageViewer_rigMotion.js";
 import * as P from "./imageViewer_rigPoseSpec.js";
 import { api } from "../../scripts/api.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
+import { showInstallLog } from "./imageViewer_installLog.js";
 
 const PICTURE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"];
 
@@ -143,6 +144,7 @@ export const PrevizRigPoseMixin = {
         try {
             const start = await post({});
             if (!start.job) return true;
+            showInstallLog(start.job, { host: this.container });
             for (;;) {
                 await new Promise((r) => setTimeout(r, 1000));
                 const st = await post({ job: start.job });

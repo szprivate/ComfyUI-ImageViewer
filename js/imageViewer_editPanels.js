@@ -243,6 +243,73 @@ export const EditPanelsMixin = {
         })), e.clientX, e.clientY);
     },
 
+    // The timeline's settings in the Inspector (nothing selected): its picture's
+    // size, its frame rate, how pictures of another size come into it (D.cutSettings).
+    _editInspSettings({ cut, el, quiet, row, section, numField, said, tip }) {
+        const s = D.cutSettings(cut);
+        const size = (this.editFrameSize && this.editFrameSize()) || null;
+        const set = (patch) => this.editTlSetSettings(patch);
+        section("Timeline Settings", { reset: null });
+        const shown = s.width ? { w: s.width, h: s.height } : size || { w: 0, h: 0 };
+        const wField = numField(shown.w, 0, (v) => set({ width: v, height: shown.h || v }), { step: 2, min: 16, max: 16384, title: "width, pixels" });
+        const hField = numField(shown.h, 0, (v) => set({ width: shown.w || v, height: v }), { step: 2, min: 16, max: 16384, title: "height, pixels" });
+        wField.classList.add("insp-size");
+        hField.classList.add("insp-size");
+        if (!s.width) { wField.value = shown.w ? String(shown.w) : ""; hField.value = shown.h ? String(shown.h) : ""; wField.placeholder = hField.placeholder = "—"; }
+        const preset = quiet(el("select", "insp-select insp-size-preset"));
+        const head = el("option", "", "\u25be");
+        head.value = "";
+        preset.append(head);
+        for (const [w, h] of D.FRAME_SIZES) { const o = el("option", "", `${w} x ${h}`); o.value = `${w}x${h}`; preset.append(o); }
+        preset.title = "A common size";
+        preset.addEventListener("change", () => { const [w, h] = preset.value.split("x").map(Number); if (w && h) set({ width: w, height: h }); });
+        row("Resolution", [wField, el("span", "insp-axis", "x"), hField, preset]);
+        const rate = quiet(el("select", "insp-select insp-rate"));
+        const rates = D.FRAME_RATES.includes(Math.round(s.fps * 1000) / 1000) ? D.FRAME_RATES : [...D.FRAME_RATES, s.fps].sort((a, b) => a - b);
+        for (const r of rates) { const o = el("option", "", D.rateLabel(r) + " fps"); o.value = String(r); rate.append(o); }
+        rate.value = String(rates.find((r) => Math.abs(r - s.fps) < 1e-3));
+        rate.title = "The timeline's frames per second. A clip at another rate plays at its own speed: each frame shows the source's frame at that moment.";
+        rate.addEventListener("change", () => set({ fps: Number(rate.value) }));
+        const other = numField(s.fps, 3, (v) => set({ fps: v }), { step: 0.001, min: 1, max: 240, title: "another frame rate" });
+        other.classList.add("insp-rate-num");
+        row("Frame rate", [rate, other]);
+        const fit = quiet(el("select", "insp-select insp-fit"));
+        for (const m of D.FIT_MODES) { const o = el("option", "", D.FIT_LABELS[m]); o.value = m; fit.append(o); }
+        fit.value = s.fit;
+        fit.title = "How a picture of another size or shape comes into the frame (a clip can have its own: Video tab, Scaling)";
+        fit.addEventListener("change", () => set({ fit: fit.value }));
+        row("Scaling", fit);
+        row("Set by", tip(said(s.setBy === "hand" ? "hand" : s.width ? "the first clip" : size ? "not set: the first shot's size" : "not set: the first clip sets it"),
+                          "The first film or picture put into a timeline with no picture on it gives it its size and frame rate - unless they were set here."));
+    },
+
+    /** Change the timeline's settings (one undo step); the playhead stays at its moment when the frame rate changes. */
+    editTlSetSettings(patch) {
+        const cut = this._editTlTab ? this._editTlCut : null;
+        if (!cut) return false;
+        const before = cut.fps || 24;
+        const at = (Number(this.currentFrame) || 0) / before;
+        const next = D.setCutSettings(cut, patch, true);
+        if (this._editTlApply(next) === false) return false;
+        if (Math.abs((next.fps || 24) - before) > 1e-6 && this._editTlOnScreen && this._editTlOnScreen() && this.setFrame) {
+            this.setFrame(Math.round(at * (next.fps || 24)));
+        }
+        return true;
+    },
+
+    /** The Save menu's "Timeline settings…": the Inspector with nothing selected. */
+    editTlSettingsShow() {
+        if (!this._editTlTab) return;
+        this._editTlSel = null;
+        this._editTlMulti = null;
+        this._editTlEditSel = null;
+        if (this.setPanelDocked && this.isPanelDocked && !this.isPanelDocked("editInspector")) {
+            this._editTlWant("editInspector", true);
+            this.setPanelDocked("editInspector", true);
+        }
+        this.editTlRefresh();
+    },
+
     _editInspRender() {
         const host = this.editInspectorPanel;
         if (!host || !this.isPanelDocked || !this.isPanelDocked("editInspector")) return;
@@ -539,6 +606,20 @@ export const EditPanelsMixin = {
                 row("Flip", [flip("fh", "Horizontal", "Flip left to right"), flip("fv", "Vertical", "Flip top to bottom")],
                     () => setFx({ fh: false, fv: false }));
 
+                // Scaling: how a picture of another size comes into the timeline's frame - the timeline's way, or its own.
+                const fitSel = quiet(el("select", "insp-select insp-fit"));
+                const cutFit = D.cutSettings(cut).fit;
+                for (const [v, label] of [["", `As the timeline (${cutFit})`], ...D.FIT_MODES.map((m) => [m, D.FIT_LABELS[m]])]) {
+                    const o = el("option", "", label);
+                    o.value = v;
+                    fitSel.append(o);
+                }
+                const ownFit = D.FIT_MODES.includes(c.fx && c.fx.fit) ? c.fx.fit : "";
+                fitSel.value = ownFit;
+                fitSel.title = "How this picture is brought into the timeline's frame when its size or shape differs";
+                fitSel.addEventListener("change", () => apply(eachTarget(["zx"], (n, t) => D.setClipFx(n, t.sel, { fit: fitSel.value }))));
+                row("Scaling", fitSel, ownFit ? () => apply(eachTarget(["zx"], (n, t) => D.setClipFx(n, t.sel, { fit: "" }))) : null);
+
                 section("Cropping", { off: fx.coff, toggle: (off) => setFx({ coff: off }), reset: () => resetFx("crop") });
                 pct("cl", "Crop Left", { title: "percent of the picture taken off its left" });
                 pct("cr", "Crop Right", { title: "percent of the picture taken off its right" });
@@ -814,11 +895,11 @@ export const EditPanelsMixin = {
             tabs([["timeline", "Timeline", true]]);
             section("Timeline");
             row("Length", said(D.lengthLabel(D.filmLength(cut)) + " \u00b7 " + D.filmFrames(cut) + " frames"));
-            row("Frame rate", said(String(Math.round(fps * 1000) / 1000) + " fps"));
             row("Shots", said(String(cut.clips.length)));
             const more = (cut.tracks || []).map((k) => `${k.name} (${k.clips.length})`).join(", ");
             row("File", said(this.editTlFilePath() || "not saved yet"));
             row("Tracks", said("V1" + ((cut.sound || []).length ? ", A1" : "") + (more ? ", " + more : "")));
+            this._editInspSettings({ cut, el, quiet, row, section, numField, said, tip });
             into = null;
             note("Select a clip, a text or a dissolve on the timeline to change it here.");
         }
@@ -1090,7 +1171,8 @@ export const EditPanelsMixin = {
             return;
         }
         if (fx.type === "solid") {
-            const size = (this._displayedMediaSize && this._displayedMediaSize()) || { w: 1920, h: 1080 };
+            // The timeline's size, else the picture on screen, else HD.
+            const size = (this.editFrameSize && this.editFrameSize()) || (this._displayedMediaSize && this._displayedMediaSize()) || { w: 1920, h: 1080 };
             let made = null, said = "";
             try {
                 const res = await api.fetchApi("/imageviewer/timeline_solid", {

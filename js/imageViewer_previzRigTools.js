@@ -14,6 +14,18 @@ import * as R from "./imageViewer_rigData.js";
 import * as M from "./imageViewer_rigMotion.js";
 import { notice, openExportDialog } from "./imageViewer_exportUI.js";
 
+/** The installer's command line, as rig_routes.install_command spells it (cmd.exe / POSIX, and PowerShell). */
+export function installCommand(python, script, root, only, windows) {
+    const args = [python, "-u", script, "--root", root, ...(only ? ["--only", only] : [])];
+    if (windows) {
+        const cmd = args.map((a) => (a === "" || /[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)).join(" ");
+        const ps = args.map((a) => (a === "" || /\s/.test(a) ? `'${a.replace(/'/g, "''")}'` : a)).join(" ");
+        return { command: cmd, powershell: "& " + ps };
+    }
+    const sh = args.map((a) => (/^[\w@%+=:,./-]+$/.test(a) ? a : `'${a.replace(/'/g, "'\"'\"'")}'`)).join(" ");
+    return { command: sh };
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** The auto-riggers: the server's engine name, the label, the dialog's line about it. */
@@ -166,40 +178,74 @@ export const PrevizRigToolsMixin = {
     // ── Setting the tools up ──────────────────────────────────────────────
 
     /**
-     * The Install dialog: sets UniRig and / or Kimodo up on the machine ComfyUI runs on
-     * (scripts/rig/install_rig_tools.py, as a server job) and then goes on with `then`.
-     * `need` is the tool the user asked for ("unirig" or "kimodo"), or null from the Rig menu.
+     * The Install dialog: the line that sets UniRig, SkinTokens, Kimodo and / or MediaPipe up on the
+     * machine ComfyUI runs on (scripts/rig/install_rig_tools.py), for the user to run in a terminal
+     * there - the viewer does not run it, because a node pack may not install packages through a
+     * subprocess (the Comfy registry's rule). "Check again" asks whether the tool is set up now and
+     * then goes on with `then`. `need` is the tool the user asked for, or null from the Rig menu.
      */
     async previzRigInstallDialog(tools = null, need = null, then = null) {
         tools = tools || await this._previzRigTools();
-        if (!tools.install) { notice("warn", "The character tools cannot be installed from here", "The viewer could not ask the server."); return; }
+        if (!tools.install) { notice("warn", "The character tools cannot be set up from here", "The viewer could not ask the server."); return; }
         const missing = ["unirig", "skintokens", "kimodo", "posetrack"].filter((t) => tools[t] && !tools[t].ready);
-        let folder, both, token;
+        let folder, both, token, cmdBox, psBox;
         const NAMES = { unirig: "auto-rigging (UniRig)", skintokens: "auto-rigging (SkinTokens, 14 GB GPU)",
             kimodo: "AI motion (Kimodo)", posetrack: "motion from video (MediaPipe pose)" };
+        const inst = tools.install;
+        const onlyNow = () => (need && !(both && both.checked) ? need : (!need && missing.length === 1 ? missing[0] : null));
+        const draw = () => {
+            const c = installCommand(inst.python, inst.script, folder.value.trim() || inst.root, onlyNow(), inst.windows);
+            cmdBox.value = c.command;
+            if (psBox) psBox.value = c.powershell;
+        };
+        const copyRow = (el, box) => {
+            const wrap = el("div", "rd-sub");
+            const copy = Object.assign(el("button", "rd-btn"), { type: "button", textContent: "Copy" });
+            copy.addEventListener("click", async () => {
+                try { await navigator.clipboard.writeText(box.value); copy.textContent = "Copied"; }
+                catch (_e) { box.select(); copy.textContent = "Press Ctrl+C"; }
+                setTimeout(() => { copy.textContent = "Copy"; }, 1500);
+            });
+            wrap.append(box, copy);
+            return wrap;
+        };
+        const cmdField = (el) => {
+            const box = Object.assign(el("textarea", "rd-in rd-text rig-install-cmd"), { readOnly: true, rows: 3, spellcheck: false });
+            box.style.width = "100%";
+            box.style.fontFamily = "monospace";
+            box.addEventListener("focus", () => box.select());
+            return box;
+        };
         await openExportDialog(this.container, {
-            title: "Install AI rigging / motion models",
+            title: "Set up AI rigging / motion models",
             kind: "character",
             plain: true,
-            background: true,
             where: false,
             fixed: [{ value: "install", label: "" }],
-            go: tools.install.running ? "Watch the install" : "Install",
+            go: "Check again",
             rows: ({ el, row }) => {
                 const what = need
                     ? `${NAMES[need][0].toUpperCase()}${NAMES[need].slice(1)} is not set up on this machine yet.`
-                    : (missing.length ? `Not set up yet: ${missing.map((t) => NAMES[t]).join(" and ")}.` : "All are set up; installing again updates them.");
+                    : (missing.length ? `Not set up yet: ${missing.map((t) => NAMES[t]).join(" and ")}.` : "All are set up; running it again updates them.");
                 const rows = [el("div", "rd-hint", what)];
-                folder = Object.assign(el("input", "rd-in rd-text"), { value: tools.install.root, spellcheck: false });
+                folder = Object.assign(el("input", "rd-in rd-text"), { value: inst.root, spellcheck: false });
                 folder.style.width = "100%";
+                folder.addEventListener("input", draw);
                 rows.push(row("Folder", folder));
                 const others = missing.filter((t) => t !== need);
                 if (need && others.length) {
                     both = Object.assign(el("input"), { type: "checkbox", checked: true });
+                    both.addEventListener("change", draw);
                     const lb = el("label", "rd-sub"); lb.append(both, ` Also ${others.map((t) => NAMES[t]).join(" and ")}`);
                     rows.push(row("Tools", lb));
                 }
-                if (!tools.install.hf_token) {
+                cmdBox = cmdField(el);
+                rows.push(row(inst.windows ? "Command Prompt" : "Terminal", copyRow(el, cmdBox)));
+                if (inst.windows) { psBox = cmdField(el); rows.push(row("PowerShell", copyRow(el, psBox))); }
+                rows.push(el("div", "rd-hint",
+                    "Run this in a terminal on the machine ComfyUI runs on, and keep the window open until it says it is done. "
+                    + "Then press Check again. The viewer does not run installers itself."));
+                if (!inst.hf_token) {
                     token = Object.assign(el("input", "rd-in rd-text"), { type: "password", placeholder: "hf_…", autocomplete: "off" });
                     token.style.width = "100%";
                     rows.push(row("Hugging Face", token));
@@ -207,52 +253,35 @@ export const PrevizRigToolsMixin = {
                         "AI motion's text encoder is Meta's Llama 3 8B Instruct. With a read token from huggingface.co/settings/tokens "
                         + "whose account has access to meta-llama/Meta-Llama-3-8B-Instruct it comes from Meta; without that access "
                         + "(or a token) from NousResearch's ungated copy of the same weights. "
-                        + "The token is saved where Hugging Face's own tools keep it, on this machine only."));
+                        + "Paste it here and press Check again before running the command: it is saved where Hugging Face's own "
+                        + "tools keep it, on this machine only."));
                 }
+                setTimeout(draw, 0);
                 return rows;
             },
             note: "Each tool gets its own Python environment in the folder (they need versions of PyTorch that ComfyUI's must not get). "
-                + "About 15-20 GB with the models, 20-40 minutes. ComfyUI keeps running and nothing needs a restart; "
-                + "closing this window leaves the install running.",
-            onExport: async (_v, { progress }) => {
-                let job;
-                if (tools.install.running) {
-                    job = { job: tools.install.running, state: "running" };
-                } else {
-                    const only = need && !(both && both.checked) ? need
-                        : (!need && missing.length === 1 ? missing[0] : null);
-                    const res = await fetch(api.apiURL("/imageviewer/rig/install"), {
-                        method: "POST", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ root: folder.value.trim(), only, hf_token: token && token.value.trim() || undefined }),
-                    });
-                    job = await res.json().catch(() => ({}));
-                    if (!res.ok) return { ok: false, message: job.error || `HTTP ${res.status}` };
-                }
-                progress(0.02, 1, "Starting…");
-                const out = await this._previzRigInstallWait(job, progress);
-                if (out.state !== "done") return { ok: false, message: out.state === "cancelled" ? "Cancelled." : (out.error || out.state) };
+                + "About 15-20 GB with the models, 20-40 minutes. ComfyUI keeps running and nothing needs a restart.",
+            onExport: async () => {
+                const res = await fetch(api.apiURL("/imageviewer/rig/install"), {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ root: folder.value.trim(), only: onlyNow(), hf_token: token && token.value.trim() || undefined }),
+                });
+                const out = await res.json().catch(() => ({}));
+                if (!res.ok) return { ok: false, message: out.error || `HTTP ${res.status}` };
+                if (out.command) { cmdBox.value = out.command; if (psBox && out.powershell) psBox.value = out.powershell; }
+                if (token && token.value.trim()) token.value = "";
                 const now = await this._previzRigTools();
-                if (need && !(now[need] && now[need].ready)) return { ok: false, message: (now[need] && now[need].why) || "Still not set up." };
+                const want = need ? [need] : missing;
+                const still = want.filter((t) => !(now[t] && now[t].ready));
+                if (still.length) {
+                    return { ok: false, error: false, message: `Not set up yet: ${still.map((t) => NAMES[t]).join(" and ")}. `
+                        + "Run the command above, wait until it is done, then press Check again." };
+                }
                 notice("success", "Character tools set up", need ? `${NAMES[need]} is ready.` : "Auto-rigging and AI motion are ready.");
                 if (then) setTimeout(() => then(), 0);
                 return { ok: true };
             },
         });
-    },
-
-    /** Follow an install job: the bar follows the commands it has run, the text its last line. */
-    async _previzRigInstallWait(job, progress) {
-        let n = 0;
-        while (job.state === "running") {
-            await sleep(Math.min(2000, 400 + n++ * 200));
-            const r = await fetch(api.apiURL(`/imageviewer/rig/job?job=${encodeURIComponent(job.job)}`));
-            const next = await r.json().catch(() => null);
-            if (!next) continue;           // a missed poll while pip keeps the server busy
-            job = next;
-            const line = (job.log || []).filter((l) => l.trim()).pop() || "";
-            progress(job.share != null ? job.share : 0.5, 1, line.length > 140 ? line.slice(0, 137) + "…" : line);
-        }
-        return job;
     },
 
     // ── Auto-rig ──────────────────────────────────────────────────────────
@@ -560,11 +589,38 @@ export const PrevizRigToolsMixin = {
         return (sel && models.find((m) => m.id === sel)) || (models.length === 1 ? models[0] : null);
     },
 
+    /** Bring the 3D space up for an agent's request when this page is the one in front: the 3D tab
+     *  that is open, else a new empty scene (spaceOpen("3d")). True once its 3D view is up. */
+    async _previzAgentBring3d() {
+        const doc = (this._viewerWindow && this._viewerWindow().document) || this.ownerDocument || document;
+        if (!doc || doc.visibilityState === "hidden" || !this.spaceOpen) return false;
+        if (this._previzAgentBringing) return this._previzAgentBringing;
+        this._previzAgentBringing = (async () => {
+            try {
+                await this.spaceOpen("3d");
+                for (let i = 0; i < 100 && !(this._modelMode && this.isPrevizTab && this.isPrevizTab()); i++) {
+                    await new Promise((r) => setTimeout(r, 100));
+                }
+                return !!(this._modelMode && this.isPrevizTab && this.isPrevizTab());
+            } catch (e) {
+                console.warn("imageViewer: the 3D space did not come up for the agent", e);
+                return false;
+            } finally {
+                setTimeout(() => { this._previzAgentBringing = null; }, 0);
+            }
+        })();
+        return this._previzAgentBringing;
+    },
+
     /** A request from rig_routes' /imageviewer/rig/agent: { id, action, args }. Reported to /rig/agent_done. */
     async previzRigAgentRun(req) {
         if (!req || !req.id) return;
         // One page answers: the one whose 3D scene is up (every open page gets the message).
-        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) return;
+        // A page on another tab that is in front brings its 3D space up first (the open 3D tab,
+        // else a new empty scene), so the agent never needs the user to switch tabs by hand.
+        if (!this._modelMode || !this.isPrevizTab || !this.isPrevizTab()) {
+            if (!(await this._previzAgentBring3d())) return;
+        }
         const report = (body) => fetch(api.apiURL("/imageviewer/rig/agent_done"), {
             method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: req.id, ...body }),
         }).catch(() => {});
