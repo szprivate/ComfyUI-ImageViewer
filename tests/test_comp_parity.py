@@ -389,6 +389,52 @@ def new_node_cases(sources):
     return c
 
 
+def _noisy(u8, seed, amp=14):
+    rng = np.random.default_rng(seed)
+    v = u8.astype(np.int64)
+    v[..., :3] += rng.integers(-amp, amp + 1, v[..., :3].shape)
+    return np.clip(v, 0, 255).astype(np.uint8)
+
+
+PROFILE = {"v": 1, "scale": 1, "levels": 4, "bins": 8, "lo": 0.05, "hi": 0.8,
+           "sigma": [[[0.02 + 0.002 * k + 0.001 * c for k in range(8)] for c in range(3)],
+                     [[0.006 + 0.001 * k for k in range(8)] for c in range(3)],
+                     [[0.003] * 8 for c in range(3)], [[0.001] * 8 for c in range(3)]],
+           "corr": [[1, 0.6, 0.4], [0.6, 1, 0.5], [0.4, 0.5, 1]]}
+
+
+def grain_cases():
+    """Degrain, Regrain and the Grain node with a profile (js/imageViewer_compGrain.js, comp_extra's grain section)."""
+    c = []
+    N = node
+    big = {"w": 40, "h": 32}
+    clean = moving(5, range(0, 9))
+    noisy = {k: _noisy(v, 100 + i) for i, (k, v) in enumerate(sorted(clean.items()))}
+    one = lambda n, srcs, **kw: ({"comp": comp([read(1), read(2), read(3), read(4), n, out(n["id"])], **big), **kw}, srcs)
+    for kw in ({"temporal": 0}, {}, {"temporal": 2, "motion": 2, "strength": 2.5, "coarse": 0}, {"output": "removed", "fine": 0.5}):
+        c.append(one(N("degrain", 1, ["Read1"], **kw), noisy, frame=4))
+    c.append(one(N("degrain", 1, ["Read1"], profile=PROFILE), noisy, frame=4))
+    c.append(one(N("degrain", 1, ["Read1"], profile=PROFILE), noisy, frame=3, scale=0.5))
+    c.append(one(N("degrain", 1, ["Read1", "Read2"], mix=0.6), dict(noisy, Read2=src(31, 40, 32)), frame=4))
+    pl = dict(noisy)
+    pl.update({"Read2": noisy["Read1@4"], "Read3": clean["Read1@4"], "Read4": src(32, 40, 32)})
+    comp_pic = moving(7, [4])["Read1@4"]
+    for f in range(0, 9):
+        pl[f"Read1@{f}"] = comp_pic
+    for kw in ({}, {"fill": "synth", "seed": 3}, {"fill": "plate"}, {"detect": "off"}, {"output": "grain"},
+               {"output": "new areas", "threshold": 0.05, "softness": 0}, {"output": "difference", "cell": 8},
+               {"profile": PROFILE, "animated": "off"}):
+        c.append(one(N("regrain", 1, ["Read1", "Read2", "Read3", None], **kw), pl, frame=4))
+    c.append(one(N("regrain", 1, ["Read1", "Read2", "Read3", "Read4"]), pl, frame=4))
+    c.append(one(N("regrain", 1, ["Read1", "Read2", "Read3", None], cell=20), pl, frame=4, scale=0.5))
+    c.append(one(N("regrain", 1, ["Read1", None, None, None], profile=PROFILE), pl, frame=4))
+    c.append(one(N("regrain", 1, ["Read1", None, None, None]), pl, frame=4))       # nothing to go by: passes
+    for kw in ({"profile": PROFILE, "amount": 1}, {"profile": PROFILE, "amount": 0.5, "seed": 4, "animated": "off"}):
+        c.append(one(N("grain", 1, ["Read1", None], **kw), pl, frame=2))
+    c.append(one(N("grain", 1, ["Read1", None], profile=PROFILE, amount=1), pl, frame=2, scale=0.5))
+    return c
+
+
 def extra_cases(sources):
     """The finishing nodes (src/comp_extra.py, js/imageViewer_compExtra.js): keying, time, colour, filters, AI."""
     c = []
@@ -455,6 +501,7 @@ def extra_cases(sources):
         c.append(one(N("edgedetect", 1, ["Read1"], **kw)))
     for kw in ({}, {"size": 6, "width": 2, "amount": 0.7}):
         c.append(one(N("edgeblur", 1, ["Read1"], **kw)))
+    c.extend(grain_cases())
     # Through a mask (the last input) and a mix, as the other per-pixel nodes.
     c.append(one(N("cdl", 1, ["Read1", "Read2"], slope_r=1.5, saturation=0.4, mix=0.7)))
     c.append(one(N("grain", 1, ["Read1", None, "Read2"], amount=0.4, mask_invert="on"), frame=2))

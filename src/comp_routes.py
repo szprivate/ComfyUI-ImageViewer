@@ -37,6 +37,8 @@ and a render of its Output by the export rule.
                                  the comp's AI node over those frames, saves the comp and reports to
                                  POST /imageviewer/comp_agent_done; GET /imageviewer/comp_agent?id= -> {state, result?}
                                                           the answers as a PNG sequence beside the comp -> {frames}
+    POST /imageviewer/comp_grain {path, comp, node, frames}  a Grain / Degrain / Regrain node's grain measured at
+                                                          full size (comp_grain.analyse) -> {profile, frames, width, height}
     POST /imageviewer/comp_ai_workflows {kind, prompt?}   an AI node's own short list of workflows (comp_ai.workflows_for):
                                                           {kind, action, workflows, choice}
     POST /imageviewer/comp_ai_models {kind, prompt?, workflow?, graph?}  (or {action, ...}: an older page)
@@ -1256,6 +1258,29 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(e)
         return web.json_response(res)
 
+    async def grain(request):
+        from . import comp_grain
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        frames = body.get("frames")
+        if not isinstance(frames, list) or not all(isinstance(f, (int, float)) and not isinstance(f, bool) for f in frames):
+            return err("'frames' must be a list of frame numbers")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_grain.analyse, comp, str(body.get("node") or ""), frames, sources,
+                            ocio=comp_io.ocio_hook(path, path_access.is_allowed))
+        except (comp_grain.GrainError, ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
     # ── An agent's request the open page carries out (edit_comp's run_ai): run an AI node ──
     # The AI nodes' workflows are made into prompts by ComfyUI's own page, and their results are written into the
     # comp by its editor, so the page does it - as rig_routes' /rig/agent does for the 3D space.
@@ -1326,6 +1351,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_agent_done", comp_agent_done)
         add("POST", f"{prefix}/comp_ai_models", ai_models)
         add("POST", f"{prefix}/comp_ai_workflows", ai_workflows)
+        add("POST", f"{prefix}/comp_grain", grain)
         add("POST", f"{prefix}/comp_vfx", vfx_prepare)
         add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)
         add("GET", f"{prefix}/comp", get_comp)

@@ -90,7 +90,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | Tracking | Tracker (1–4 points), PlanarTracker |
 | Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), CDL, LUT, HueCurves, Clamp, Log2Lin, ColorMatch, OCIOColorSpace, OCIODisplay |
 | Keying | Keyer, LumaKeyer, ChromaKeyer, DifferenceKeyer, Despill, CoreEdge, EdgeExtend, LightWrap, Erode/Dilate, Premult, Unpremult |
-| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian, Grain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
+| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian, Grain, Degrain, Regrain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
 | Time | Retime (nearest, mix or vector blend), Vectors (optical flow), FrameHold, FrameRange, TimeOffset, AppendClip, TimeBlur |
 | Channels | Shuffle, AddChannels, Remove |
 | 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |
@@ -116,9 +116,28 @@ Each image keeps its own resolution; images of different sizes are aligned at th
 A few notes on the newer nodes:
 
 - **DifferenceKeyer** keys against a clean plate on its second input. **Despill** pulls the screen colour back and can put a replacement colour in its place. **CoreEdge** splits a matte into a solid core and a soft edge; **EdgeExtend** pushes the colours inside a matte outwards so a soft edge has the right colour under it; **LightWrap** lets the background bleed over the foreground's edge.
-- **Grain** is seeded per frame. With a plate on its second input it measures how strong that plate's grain is and scales its own to match. **Denoise** is an edge-preserving guided filter.
+- **Grain** is seeded per frame. With a plate on its second input it measures how strong that plate's grain is and scales its own to match; with a grain profile (below) it makes grain shaped like the plate's. **Denoise** is an edge-preserving guided filter; for footage grain, **Degrain** is the better tool.
 - **TimeBlur** averages frames across a shutter; **AppendClip** plays one input after the other with an optional dissolve. Retime's **vectors** blend warps the two frames on either side along their optical flow.
 - **CDL** applies slope, offset, power and saturation, forwards or inverse. Its Parameters section reads a `.cc`, `.cdl` or `.ccc` (the first correction) and writes one next to the comp. **LUT** reads a `.cube` file directly; with OpenColorIO on the server it also reads `.3dl`, `.spi3d`, `.csp`, `.clf` and the other formats OCIO knows. **Log2Lin** converts between scene-linear and Cineon, LogC3, S-Log3 or ACEScct.
+
+### Degrain and regrain
+
+The usual way to keep grain right in a comp: take the grain out of the plate, comp on the clean plate, then put the plate's own grain back over the result.
+
+```
+Plate ──► Degrain ──► (your comp work) ──► Regrain ──► Output
+  │           │                               ▲  ▲
+  │           └───────────── degrained ───────┘  │
+  └──────────────────────── plate ───────────────┘
+```
+
+All three nodes work from a **grain profile**: how strong the grain is in each channel, per brightness (eight bins from the plate's darkest to brightest), and per size (1, 2, 4 and 8 pixel detail), plus how alike the three channels' grain is. Without a profile, a node measures one on every frame as it is drawn. That works, but the preview is drawn smaller than the plate, so **Analyse** in Parameters is better. It measures at full size on the server (on this frame, or on five frames spread over the comp with **5 frames**) and keeps the profile on the node. Parameters then shows the grain's strength against brightness as three curves.
+
+- **Degrain** first averages each frame with the frames around it (**temporal**, 0–3 each side). A neighbour only counts where it differs by less than **motion** times the grain, so moving parts are left to the next step. Then it splits each channel into the four detail sizes and removes, in each, what is weaker than **strength** times the grain's spread there. **fine**, **medium** and **coarse** say how much of each size goes. Leaving some coarse grain usually looks more natural. **output: removed** shows what was taken out; it should look like grain and nothing else.
+- **Regrain** takes the comp, the plate and the degrained plate. The plate less the degrained plate is the grain. It is divided by the grain's strength at the plate's brightness, then multiplied by the strength at the comp's brightness, so a part of the comp that is now darker gets weaker grain. Where the comp is new, the plate's grain would carry the old picture's detail. "New" means the **new** input's alpha, or (with **detect** on) wherever the comp differs from the degrained plate by more than **threshold**. In those areas the grain is made again: **scatter** takes the plate's own grain from random other places, in cells of **cell** pixels; **synth** makes it from the profile; **plate** leaves the plate's grain as it is. Use **output: new areas** to check what counts as new, and **difference** (the result less the plate) to check that nothing changed where the comp did not.
+- **Grain** with a profile makes grain shaped like the plate's: the same size, colour and response to brightness. **Analyse** on it measures its plate input. Its first profile sets **amount** to 1, which is as strong as measured.
+
+Over its own degrained plate with nothing changed, Regrain gives the plate back exactly. That is a quick way to check a setup.
 
 ### AI nodes
 
