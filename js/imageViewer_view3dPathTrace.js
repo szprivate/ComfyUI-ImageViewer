@@ -238,9 +238,14 @@ export const View3DPathTraceMixin = {
     _ptContent(cam) {
         const meshes = [];
         const invisible = (m) => (Array.isArray(m) ? m.every((x) => !x || x.visible === false) : !m || m.visible === false);
+        // The tracer reads a material's colour (and emissive) straight off it: a shader of
+        // its own (a sky, a custom ShaderMaterial, normal / depth materials) has none and
+        // stopped the whole tracer ("reading 'r'"). Those stay raster, drawn over the picture.
+        const plain = (x) => !x || x.visible === false || (x.color && x.color.isColor && (!("emissive" in x) || (x.emissive && x.emissive.isColor)));
+        const traceable = (m) => (Array.isArray(m) ? m.every(plain) : plain(m));
         this._ptHidden(this._ptOverlayRoots(), () => {
             this.scene.traverseVisible((o) => {
-                if (!o.isMesh || invisible(o.material)) return;
+                if (!o.isMesh || invisible(o.material) || !traceable(o.material)) return;
                 if (cam && !o.layers.test(cam.layers)) return;
                 meshes.push(o);
             });
