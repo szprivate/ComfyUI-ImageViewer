@@ -107,6 +107,28 @@ class PathTraceTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_a_mesh_with_a_shader_of_its_own_stays_raster_and_the_rest_is_traced(self):
+        # A ShaderMaterial (a sky, a custom shader) has no colour: the tracer read
+        # `material.color.r` and stopped ("Cannot read properties of undefined (reading 'r')").
+        pg = self._page()
+        try:
+            pg.evaluate("""() => { const v = window.__panel._modelView(); const T = v.libs.THREE;
+                const m = new T.Mesh(new T.BoxGeometry(1, 1, 1), new T.ShaderMaterial({
+                    vertexShader: 'void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+                    fragmentShader: 'void main(){ gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0); }' }));
+                m.name = 'customShaderBox'; v.scene.add(m); window.__shaderBox = m;
+                v.setMaterialMode('pathtraced'); v.requestRender(); }""")
+            pg.wait_for_function("() => { const v = window.__panel._modelView(); return v._ptFailed || v.ptSamples() >= 1; }",
+                                 timeout=240000)
+            state = pg.evaluate("""() => { const v = window.__panel._modelView();
+                return { failed: !!v._ptFailed, why: v._ptWhy || '',
+                         traced: v._ptContentNow.includes(window.__shaderBox), n: v._ptContentNow.length }; }""")
+        finally:
+            pg.close()
+        self.assertFalse(state["failed"], state["why"])
+        self.assertFalse(state["traced"])
+        self.assertGreater(state["n"], 0)
+
     def test_the_viewport_traces_and_counts_its_samples(self):
         pg = self._page()
         try:
