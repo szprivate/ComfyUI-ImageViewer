@@ -302,6 +302,28 @@ export function makeGroupItem(name) {
     };
 }
 
+/**
+ * A locator (a null): a transform with nothing in it, drawn as a cross in the
+ * view - to aim at, to parent to, to key, to hang things under. It is a group
+ * with `locator: {size}` (the cross's half length, in scene units), so it
+ * saves, parents, keys and exports (a USD Xform) as a group does.
+ */
+export const LOCATOR_MAX = 1e6;
+
+export function locatorSize(item) {
+    const v = item && item.locator ? Number(item.locator.size) : NaN;
+    return Number.isFinite(v) && v > 0 ? Math.min(LOCATOR_MAX, v) : 1;
+}
+
+export const isLocator = (item) => !!(item && item.kind === "group" && item.locator);
+
+export function makeLocatorItem(name, size = 1) {
+    const item = makeGroupItem(name || "Locator");
+    item.id = newId("l");
+    item.locator = { size: locatorSize({ locator: { size } }) };
+    return item;
+}
+
 export function makeScene(patch = {}) {
     return {
         version: SCENE_VERSION,
@@ -1241,6 +1263,8 @@ export function parseScene(raw) {
         } else if (isGroup) {
             // A group is its transform - and, for a rig's group, which character it rigs.
             readRigFields(item, raw);
+            // A locator is a group drawn as a cross (makeLocatorItem).
+            if (raw.locator && typeof raw.locator === "object") item.locator = { size: locatorSize(raw) };
         } else if (isCtrl) {
             readRigFields(item, raw);
         } else if (isWorld) {

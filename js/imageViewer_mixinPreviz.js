@@ -700,6 +700,15 @@ export const PrevizMixin = {
         this.previzChanged();
     },
 
+    /** Look through camera `id` (null: the free camera) - set, never toggled. */
+    previzLookThroughSet(id) {
+        const scene = this.previzScene();
+        if (!scene || (scene.activeCamera || null) === (id || null)) return;
+        scene.activeCamera = id || null;
+        if (this._model3d) this._model3d.setActiveCamera(scene.activeCamera);
+        this.previzChanged();
+    },
+
     previzLookThrough(id) {
         const scene = this.previzScene();
         if (!scene) return;
@@ -1524,6 +1533,7 @@ export const PrevizMixin = {
             { label: "Camera", cmd: "PrevizAddCamera", run: () => this.previzAddCamera() },
             { label: "Image plane\u2026", cmd: "PrevizAddImagePlane", run: () => this.previzAddImagePlane() },
             { label: "Group", cmd: "PrevizAddGroup", run: () => this.previzAddGroup() },
+            { label: "Locator", cmd: "PrevizAddLocator", run: () => this.previzAddLocator() },
             "-",
         ];
         for (const spec of S.PRIMITIVES) {
@@ -1911,6 +1921,35 @@ export const PrevizMixin = {
         this._previzSelection = item.id;
         this.previzChanged({ reload: true });
         return item;
+    },
+
+    /**
+     * A new locator (a null, Sebastian 2026-11-17): at the world origin, at the
+     * scene's size, selected - to parent to, aim at, key and hang things under.
+     */
+    previzAddLocator() {
+        const scene = this.previzScene();
+        if (!scene) return null;
+        this.previzSnapshot("add locator");
+        const view = this._modelView();
+        const size = Math.max(1, (view && Number(view._gridAutoScale)) || 1);
+        const item = S.makeLocatorItem(S.uniqueName(scene, "Locator"), size);
+        scene.items.push(item);
+        this._previzSelection = item.id;
+        this.previzChanged({ reload: true });
+        return item;
+    },
+
+    /** The selected locators' Size (the cross's half length). */
+    previzSetLocatorSize(size, { live = false } = {}) {
+        const scene = this.previzScene();
+        const items = this._previzIdList(null).map((id) => S.itemById(scene, id)).filter(S.isLocator);
+        const v = Number(size);
+        if (!items.length || !(v > 0)) return;
+        if (live) this.previzBeginDrag("locator size");
+        else if (!this._previzDragging) this.previzSnapshot("locator size");
+        for (const item of items) item.locator = { size: S.locatorSize({ locator: { size: v } }) };
+        this.previzChanged(live ? { light: true, persist: false } : {});
     },
 
     // ── Rendering the shot ───────────────────────────────────────────────────

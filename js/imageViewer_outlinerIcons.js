@@ -18,6 +18,9 @@ export const OUTLINER_ICONS = {
     imageplane: [R(3, 3, 18, 18, 2), C(9, 9, 2), P("m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21")],
     // folder
     group: [P("M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z")],
+    // a locator: three axes through a point (drawn here)
+    locator: [["line", { x1: 12, x2: 12, y1: 3, y2: 21 }], ["line", { x1: 3, x2: 21, y1: 12, y2: 12 }],
+              ["line", { x1: 6, x2: 18, y1: 18, y2: 6 }], C(12, 12, 2)],
     // locate-fixed
     control: [["line", { x1: 2, x2: 5, y1: 12, y2: 12 }], ["line", { x1: 19, x2: 22, y1: 12, y2: 12 }],
               ["line", { x1: 12, x2: 12, y1: 2, y2: 5 }], ["line", { x1: 12, x2: 12, y1: 19, y2: 22 }],

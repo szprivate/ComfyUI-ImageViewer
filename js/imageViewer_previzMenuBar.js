@@ -214,7 +214,7 @@ export const PrevizMenuBarMixin = {
             { label: "Show", sub: [
                 { label: "All", run: () => view.setAllDisplayed(true) },
                 "-",
-                ...DISPLAY_KINDS.map((k, i) => ({ label: tick(view.isDisplayed(k.key), k.label), keys: `Shift+${i + 1}`,
+                ...DISPLAY_KINDS.map((k, i) => ({ label: tick(view.isDisplayed(k.key), k.label), keys: `Shift+${(i + 1) % 10}`,
                                                   run: () => view.setDisplayed(k.key) })),
                 "-",
                 { label: tick(!!view._dispXray, "X-Ray Joints"), run: () => view.setJointXray(!view._dispXray) },

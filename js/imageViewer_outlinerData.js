@@ -10,6 +10,7 @@ export const OUTLINER_KINDS = [
     { key: "camera", label: "Cameras", of: ["camera"] },
     { key: "imageplane", label: "Image planes", of: ["imageplane"] },
     { key: "group", label: "Groups", of: ["group"] },
+    { key: "locator", label: "Locators", of: [] },      // groups with `locator` (outlinerKindOf)
     { key: "control", label: "Rig controls", of: ["control"] },
     { key: "light", label: "Lights", of: ["light"] },
     { key: "world", label: "World", of: ["environment", "terrain", "scatter", "depthmesh"] },
@@ -29,6 +30,7 @@ for (const k of OUTLINER_KINDS) for (const kind of k.of) KIND_KEY.set(kind, k.ke
 
 /** The filter kind of an item ("model" for anything unknown). */
 export function outlinerKindOf(item) {
+    if (item && item.kind === "group" && item.locator) return "locator";
     return (item && KIND_KEY.get(item.kind)) || "model";
 }
 

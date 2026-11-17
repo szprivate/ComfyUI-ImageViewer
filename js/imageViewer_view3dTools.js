@@ -4,7 +4,7 @@
 //
 //   - the Display menu: switch whole kinds of things off and on in the view -
 //     polygons, curves (rig controls are curves), joints, cameras, image
-//     planes, splats, point clouds, the grid (Shift+1 .. Shift+9);
+//     planes, splats, point clouds, the grid, lights, locators (Shift+1 .. Shift+0);
 //   - joints drawn for every model that has bones (a line from each bone to
 //     its parent and a dot at each joint), hidden inside meshes unless X-ray;
 //   - the marquee: a left drag that starts on nothing (or on an object, with
@@ -31,6 +31,7 @@ export const DISPLAY_KINDS = [
     { key: "points",      label: "Point Clouds", layer: 7 },
     { key: "grid",        label: "Grid",         layer: 0 },
     { key: "lights",      label: "Lights",       layer: 8, tip: "The glyphs lights are seen and picked by (they still shine)" },
+    { key: "locators",    label: "Locators",     layer: 9, tip: "Locators (nulls): the crosses they are seen and picked by" },
 ];
 
 const STORE = "imageviewer.viewer.display3d";
@@ -41,6 +42,7 @@ export function displayKindOf(obj, item) {
     if (!obj) return "";
     if (obj.userData && obj.userData.imageViewerJoints) return "joints";
     if (obj.userData && obj.userData.imageViewerLightGlyph) return "lights";
+    if (obj.userData && obj.userData.imageViewerLocator) return "locators";
     if (obj.userData && (obj.userData.imageViewerSplat || obj.userData.imageViewerSplatBounds)) return "splats";
     if (obj.name === "splatbounds") return "splats";
     if (obj.name === "imageplane" || (item && item.kind === "imageplane" && obj.isMesh)) return "imageplanes";
@@ -234,7 +236,7 @@ export const View3DToolsMixin = {
 
     _dispBuildButton(el) {
         const btn = el("button", "model-btn model-display-btn", "Display ▾");
-        btn.title = "Show / hide kinds of things in the view (Shift+1 .. Shift+9)";
+        btn.title = "Show / hide kinds of things in the view (Shift+1 .. Shift+9, Shift+0)";
         btn.onclick = (e) => { e.stopPropagation(); this.toggleDisplayMenu(); };
         return btn;
     },
@@ -275,7 +277,7 @@ export const View3DToolsMixin = {
         all.dataset.kind = "all";
         menu.append(Object.assign(d.createElement("div"), { className: "model-display-sep" }));
         DISPLAY_KINDS.forEach((k, i) => {
-            const box = row(k.label, k.tip || "", () => this.isDisplayed(k.key), (on) => this.setDisplayed(k.key, on), `Shift+${i + 1}`);
+            const box = row(k.label, k.tip || "", () => this.isDisplayed(k.key), (on) => this.setDisplayed(k.key, on), `Shift+${(i + 1) % 10}`);
             box.dataset.kind = k.key;
         });
         menu.append(Object.assign(d.createElement("div"), { className: "model-display-sep" }));
@@ -351,9 +353,10 @@ export const View3DToolsMixin = {
         this._target = center.clone();
         this.controls.target.copy(center);
         this.controls.update();
-        if (cam !== this.camera && this.hooks.onCameraMoved) {
-            const moved = this._entries.get(this.scene3d.activeCamera);
-            this.hooks.onCameraMoved(this.scene3d.activeCamera, this.readTransform(cam, moved && moved.item));
+        const throughId = this.paneThroughId();
+        if (throughId && this.hooks.onCameraMoved) {
+            const moved = this._entries.get(throughId);
+            this.hooks.onCameraMoved(throughId, this.readTransform(cam, moved && moved.item));
         }
         this.requestRender();
         return true;
@@ -437,12 +440,12 @@ export const View3DToolsMixin = {
             if (v.z < -1 || v.z > 1) return null;
             return [(v.x + 1) / 2 * W, (1 - v.y) / 2 * H];
         };
-        const lookingThrough = this.scene3d && this.scene3d.activeCamera;
+        const lookingThrough = this.paneThroughId();
         const found = new Set();
         const candidates = [];
         for (const [id, entry] of this._entries) {
             const item = entry.item;
-            if (!item || item.kind === "group" || id === lookingThrough) continue;
+            if (!item || (item.kind === "group" && !item.locator) || id === lookingThrough) continue;
             // A template or reference layer's items are not picked, by a box either.
             if (this._layerStates && !isPickable(this._layerStates, id)) continue;
             if (entry.isControl ? !(entry.root.visible && this._shownUp(entry.root)) : !this._shownUp(entry.root)) continue;

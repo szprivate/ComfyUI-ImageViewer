@@ -204,6 +204,8 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzAddImagePlane() },
     { key: "PrevizAddGroup",  label: "Previz: Add Group",
       enabled: _previz, run: (p) => p.previzAddGroup() },
+    { key: "PrevizAddLocator", label: "Previz: Add Locator",
+      enabled: _previz, run: (p) => p.previzAddLocator() },
     ...PRIMITIVES.map((spec) => ({
         key: `PrevizAdd${spec.label}`, label: `Previz: Add ${spec.label}`,
         enabled: _previz, run: (p) => p.previzAddPrimitive(spec.type),

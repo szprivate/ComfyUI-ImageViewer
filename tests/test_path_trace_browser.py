@@ -164,7 +164,7 @@ class PathTraceTests(unittest.TestCase):
         self.assertEqual(kept, "1")
         self.assertEqual(self.errors, [])
 
-    def test_a_split_layout_traces_the_active_pane(self):
+    def test_a_split_layout_traces_one_pane(self):
         pg = self._page()
         try:
             pg.evaluate("() => { const v = window.__panel._modelView(); v.setPaneLayout('quad'); v.setMaterialMode('pathtraced'); }")
@@ -184,10 +184,10 @@ class PathTraceTests(unittest.TestCase):
         finally:
             pg.close()
         self.assertFalse(state["failed"])
-        self.assertTrue(state["badge"].startswith("Path traced (active view) · "), state["badge"])
+        self.assertTrue(state["badge"].startswith("Path traced (Persp) · "), state["badge"])
         self.assertEqual((state["w"], state["h"]), (state["pw"], state["ph"]))
         self.assertTrue(state["cam"])
-        self.assertNotIn("active view", single)
+        self.assertNotIn("(Persp)", single)
         self.assertEqual(self.errors, [])
 
     def test_default_lights_off_leaves_only_the_scenes_own_lights(self):
