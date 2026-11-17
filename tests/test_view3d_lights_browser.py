@@ -157,7 +157,7 @@ class LightTests(unittest.TestCase):
         self.assertTrue(got[1]["target"] and got[2]["target"])
         self.assertFalse(studio_after)
         self.assertEqual(set(layer), {1 << 8})
-        self.assertEqual(kinds[-1], "lights")
+        self.assertEqual(kinds[8], "lights")       # Shift+9; locators came after it (Shift+0)
         self.assertEqual(self.errors, [])
 
     def test_the_channel_box_shows_the_rows_of_the_lights_type(self):
