@@ -110,7 +110,8 @@ export function boneRows(bones, { needle = "", isClosed = () => false } = {}) {
  *   isSelected  - (id) => bool, for the "selected" state
  *   isAnimated  - (item) => bool, for the "animated" state
  *   bonesOf     - (item) => [bone names] of a loaded model (searched too)
- *   contentsOf  - (item) => [prim names] inside a model's asset, its Contents rows (searched too)
+ *   contentsOf  - (item) => [prim names] inside a model's asset as far as known (searched)
+ *   hasContents - (item) => bool, it has a Contents row (default: contentsOf is not empty)
  *
  * Returns [{ item, depth, hasKids, open, match, context }]:
  *   hasKids - it has rows below it as the filter stands (the arrow shows)
@@ -129,6 +130,7 @@ export function outlinerRows(scene, opts = {}) {
     const isAnimated = opts.isAnimated || (() => false);
     const bonesOf = opts.bonesOf || (() => []);
     const contentsOf = opts.contentsOf || (() => []);
+    const hasContents = opts.hasContents || ((it) => (contentsOf(it) || []).length > 0);
     const ids = new Set(items.map((it) => it.id));
     const kids = new Map();
     for (const it of items) {
@@ -185,7 +187,7 @@ export function outlinerRows(scene, opts = {}) {
             const next = new Set(seen).add(it.id);
             const under = visibleKids(it.id, new Set(next));
             const skeleton = it.kind === "model" && !hidden.has("bones") && (bonesOf(it) || []).length > 0;
-            const contents = it.kind === "model" && (contentsOf(it) || []).length > 0;
+            const contents = it.kind === "model" && !!hasContents(it);
             const hasKids = under.length > 0 || skeleton || contents;
             const open = hasKids && (needle ? true : !collapsed.has(it.id));
             const match = !!needle && !!matchRange(it.name, needle);

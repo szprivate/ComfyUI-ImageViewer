@@ -22,10 +22,15 @@ const TREE_TTL_MS = 30000;
 export const PrevizUsdMixin = {
     // ── what is inside a model ───────────────────────────────────────────────
 
-    /** The prims inside a model's asset: [{rel, name, parent, type, variants, visible}] or null (not known yet). */
-    previzUsdContents(item) {
+    /**
+     * The prims inside a model's asset: [{rel, name, parent, type, variants, visible}] or null (not known yet).
+     * A USD asset's are asked of the server only with `ask` (a Contents row opened): a layout
+     * opened as a scene is hundreds of models of one file, and asking for every one at each
+     * redraw took the page down (Pixar's Kitchen Set, 425 models).
+     */
+    previzUsdContents(item, { ask = true } = {}) {
         if (!item || item.kind !== "model" || !item.src) return null;
-        if (U.isUsdSrc(item.src) && item.src.path) return this._previzUsdTree(item);
+        if (U.isUsdSrc(item.src) && item.src.path) return this._previzUsdTree(item, ask);
         const view = this._model3d;
         return view && view.usdContentsOf ? view.usdContentsOf(item.id) : null;
     },
@@ -43,12 +48,13 @@ export const PrevizUsdMixin = {
     },
 
     /** A USD asset's prim tree from the server, cached; the panel redraws when it arrives. */
-    _previzUsdTree(item) {
+    _previzUsdTree(item, ask = true) {
         const trees = this._usdTrees || (this._usdTrees = new Map());
         const key = this._previzUsdTreeKey(item);
         const got = trees.get(key);
         const now = Date.now();
-        if (got && (got.pending || now - got.at < TREE_TTL_MS)) return got.tree ? got.tree.prims : null;
+        if (got && (!ask || got.pending || now - got.at < TREE_TTL_MS)) return got.tree ? got.tree.prims : null;
+        if (!ask) return null;
         const entry = { pending: true, at: now, tree: got ? got.tree : null };
         trees.set(key, entry);
         if (trees.size > 64) trees.delete(trees.keys().next().value);
@@ -64,15 +70,31 @@ export const PrevizUsdMixin = {
             .finally(() => {
                 entry.pending = false;
                 entry.at = Date.now();
-                if (this._previzRenderPanel) this._previzRenderPanel();
+                this._previzUsdRedrawSoon();
             });
         return entry.tree ? entry.tree.prims : null;
     },
 
-    /** Names inside a model, for the Outliner's search and its fold arrow. */
+    /** Several trees arriving together redraw the panel once. */
+    _previzUsdRedrawSoon() {
+        if (this._usdRedrawTimer) return;
+        this._usdRedrawTimer = setTimeout(() => {
+            this._usdRedrawTimer = null;
+            if (this._previzRenderPanel) this._previzRenderPanel();
+        }, 60);
+    },
+
+    /** Names inside a model as far as they are known, for the Outliner's search (asks nothing). */
     previzUsdContentNames(item) {
-        const list = this.previzUsdContents(item);
+        const list = this.previzUsdContents(item, { ask: false });
         return list ? list.map((p) => p.name) : [];
+    },
+
+    /** Whether a model has a Contents row: a USD asset always (read when it is opened), else its loaded nodes. */
+    previzUsdHasContents(item) {
+        if (!item || item.kind !== "model" || !item.src || U.isUnloaded(item)) return false;
+        if (U.isUsdSrc(item.src) && item.src.path) return true;
+        return (this.previzUsdContents(item) || []).length > 0;
     },
 
     // ── edits ───────────────────────────────────────────────────────────────
@@ -131,17 +153,21 @@ export const PrevizUsdMixin = {
      * prims inside its asset as a tree, each with its eye and, with variant sets, a picker.
      */
     _previzContentsRows(model, depth, doc, scene, list, needle = "") {
-        const prims = this.previzUsdContents(model);
-        const usd = U.isUsdSrc(model.src) && !!model.src.path;
-        const rootVariants = this.previzUsdRootVariants(model);
         if (U.isUnloaded(model)) return;
-        if (!prims || (!prims.length && !Object.keys(rootVariants).length)) return;
+        const usd = U.isUsdSrc(model.src) && !!model.src.path;
         const open = this._previzContentsOpen || (this._previzContentsOpen = new Set());
         const closed = this._previzContentsClosed || (this._previzContentsClosed = new Set());
         const key = `${model.id}:contents`;
-        const searching = !!needle && prims.some((p) => matchRange(p.name, needle));
+        // A USD asset's prims are read from the server only once its Contents row is opened.
+        const prims = this.previzUsdContents(model, { ask: !usd || open.has(key) });
+        const rootVariants = this.previzUsdRootVariants(model);
+        if (!usd && (!prims || (!prims.length && !Object.keys(rootVariants).length))) return;
+        if (usd && prims && !prims.length && !Object.keys(rootVariants).length) return;
+        const searching = !!needle && !!prims && prims.some((p) => matchRange(p.name, needle));
         const isOpen = searching || open.has(key);
-        const head = this._previzUsdRow(doc, depth, `Contents (${prims.length} prim${prims.length === 1 ? "" : "s"})`,
+        const label = prims ? `Contents (${prims.length} prim${prims.length === 1 ? "" : "s"})`
+                            : (isOpen ? "Contents (reading…)" : "Contents");
+        const head = this._previzUsdRow(doc, depth, label,
             { icon: "contents",
               title: usd ? `The prims of ${model.src.path.split(/[\\/]/).pop()}; changes here are saved as overrides in the scene`
                          : "The model's node tree; hidden nodes are saved as overrides in the scene",
@@ -150,7 +176,7 @@ export const PrevizUsdMixin = {
         // The asset root's variant sets sit on the Contents row itself.
         this._previzUsdVariantPickers(doc, head, model, "", rootVariants);
         list.append(head);
-        if (!isOpen) return;
+        if (!isOpen || !prims) return;
         const rows = U.contentRows(prims, { needle: searching ? needle : "",
                                             isClosed: (rel) => closed.has(`${model.id}:prim:${rel}`) });
         for (const r of rows) {
