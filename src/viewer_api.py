@@ -67,6 +67,11 @@ try:
 except Exception:  # pragma: no cover
     usd_io = None
 
+try:
+    from . import usd_scene
+except Exception:  # pragma: no cover
+    usd_scene = None
+
 _MODEL_EXTS = {".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply",
                ".usd", ".usda", ".usdc", ".usdz", ".abc", ".spz", ".splat", ".ksplat", ".sog"}
 
@@ -133,7 +138,18 @@ def _decode_image_upload(dataurl, force_png=False):
     return buf.getvalue(), ("png" if fmt == "PNG" else "jpg")
 
 
-def _usd_display_path(path, prim=None, frame=0):
+def _usd_edits(raw):
+    """The `usd` query: the Outliner's edits inside a USD asset, as JSON."""
+    if not raw:
+        return None
+    try:
+        edits = json.loads(raw)
+    except Exception:
+        return None
+    return edits if isinstance(edits, dict) else None
+
+
+def _usd_display_path(path, prim=None, frame=0, edits=None):
     """The GLB standing in for a USD stage or an Alembic cache — or the path
     itself, when it is neither.
 
@@ -148,7 +164,7 @@ def _usd_display_path(path, prim=None, frame=0):
         if abc_io is not None and abc_io.is_abc(path):
             return abc_io.display_proxy(path, sample=frame, obj_path=prim) or path
         if usd_io is not None and usd_io.is_usd(path):
-            return usd_io.display_proxy(path, prim) or path
+            return usd_io.display_proxy(path, prim, edits) or path
     except Exception as e:
         print(f"[ImageViewer] could not build a preview of {os.path.basename(path)}: {e}")
     return path
@@ -162,7 +178,7 @@ def _frame_arg(request):
         return 0
 
 
-def _file_response(path, prim=None, frame=0, cs=None, ev=None):
+def _file_response(path, prim=None, frame=0, cs=None, ev=None, edits=None):
     """Serve an image/video file, swapping in a browser-renderable PNG proxy for
     formats an <img> can't decode (exr / tiff / dpx / ...).
 
@@ -176,7 +192,7 @@ def _file_response(path, prim=None, frame=0, cs=None, ev=None):
     from it to sRGB instead of getting the proxy's fixed treatment. `ev` is the
     viewer's exposure, applied in linear light before that conversion.
     """
-    path = _usd_display_path(path, prim, frame)
+    path = _usd_display_path(path, prim, frame, edits)
     if media_resolve is not None:
         proxy, done = None, False
         if cs:
@@ -386,11 +402,11 @@ try:
             """
             return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
-        async def _serve(path, prim=None, frame=0, cs=None, ev=None):
+        async def _serve(path, prim=None, frame=0, cs=None, ev=None, edits=None):
             """_file_response off the event loop: decoding and converting a
             frame takes long enough to hold up every other request."""
             return await asyncio.get_running_loop().run_in_executor(
-                None, _file_response, path, prim, frame, cs, ev)
+                None, _file_response, path, prim, frame, cs, ev, edits)
 
         async def _imageviewer_colorspaces(request):
             """The input colourspaces the viewer's selector offers, which of
@@ -1568,7 +1584,8 @@ try:
             if status == 404:
                 return web.Response(status=404, text="file not found")
 
-            return await _serve(cand, cs=params.get("cs"), ev=params.get("ev"))
+            return await _serve(cand, params.get("prim"), _frame_arg(request), cs=params.get("cs"),
+                                ev=params.get("ev"), edits=_usd_edits(params.get("usd")))
 
         async def _imageviewer_probe_paths(request):
             """Report which of the given paths this server can no longer serve.
@@ -2563,7 +2580,7 @@ try:
             # how a layout arrives as separate items the viewer can place; a
             # cache also takes `frame`, since it holds geometry per frame.
             return await _serve(path, params.get("prim"), _frame_arg(request),
-                                params.get("cs"), params.get("ev"))
+                                params.get("cs"), params.get("ev"), _usd_edits(params.get("usd")))
 
         async def _imageviewer_thumb(request):
             """Serve a small cached stand-in for an image, for the thumbnail strips.
@@ -3122,15 +3139,19 @@ try:
             if raw:
                 # A scene picked in the file picker: anywhere the viewer may read.
                 path = os.path.abspath(raw)
-                if os.path.splitext(path)[1].lower() != ".json":
-                    return web.json_response({"error": "a scene is a .json file"}, status=400)
+                is_usd = os.path.splitext(path)[1].lower() in previz.SCENE_USD_EXTS
+                if os.path.splitext(path)[1].lower() != ".json" and not is_usd:
+                    return web.json_response({"error": "a scene is a .usda, .usdc or .json file"}, status=400)
                 if not path_access.is_allowed(path):
                     return web.json_response({"error": path_access.refusal(path)}, status=403)
                 if not os.path.isfile(path):
                     return web.json_response({"error": "no such scene"}, status=404)
+                if is_usd and (usd_scene is None or not usd_io.available()):
+                    return web.json_response({"error": "this install has no USD (pip install usd-core)"},
+                                             status=501)
                 try:
-                    return web.json_response({"name": os.path.basename(path), "path": path,
-                                              "scene": previz.load_scene_at(path)})
+                    scene = await _off_loop(usd_scene.load, path) if is_usd else previz.load_scene_at(path)
+                    return web.json_response({"name": os.path.basename(path), "path": path, "scene": scene})
                 except Exception as e:
                     return web.json_response({"error": str(e)}, status=400)
             name = request.query.get("name", "")
@@ -3154,8 +3175,8 @@ try:
             if not raw:
                 return web.json_response({"error": "missing path"}, status=400)
             path = os.path.abspath(raw)
-            if os.path.splitext(path)[1].lower() != ".json":
-                return web.json_response({"error": "a scene is a .json file"}, status=400)
+            if not previz.is_scene_file(path):
+                return web.json_response({"error": "a scene is a .usda, .usdc or .json file"}, status=400)
             if not path_access.is_allowed(path):
                 return web.json_response({"error": path_access.refusal(path)}, status=403)
             found = previz.resolve_reference(path, follow)
@@ -3164,7 +3185,12 @@ try:
             if not path_access.is_allowed(found["path"]):
                 return web.json_response({"error": path_access.refusal(found["path"])}, status=403)
             try:
-                scene = previz.load_scene_at(found["path"])
+                if os.path.splitext(found["path"])[1].lower() in previz.SCENE_USD_EXTS:
+                    if usd_scene is None or not usd_io.available():
+                        raise ValueError("this install has no USD (pip install usd-core)")
+                    scene = await _off_loop(usd_scene.load, found["path"])
+                else:
+                    scene = previz.load_scene_at(found["path"])
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=400)
             return web.json_response({**found, "name": os.path.basename(found["path"]), "scene": scene})
@@ -3179,6 +3205,29 @@ try:
             if not isinstance(data, dict) or not isinstance(data.get("scene"), dict):
                 return web.json_response({"error": "bad request"}, status=400)
             name = data.get("name") or "scene"
+            fmt = str(data.get("format") or "json").lower()
+            if fmt in ("usda", "usdc"):
+                # The scene as USD: meshes referenced from assets/ beside it (usd_scene).
+                if usd_scene is None or not usd_io.available():
+                    return web.json_response({"error": "this install has no USD (pip install usd-core)"},
+                                             status=501)
+                from . import export_rules
+                try:
+                    where = export_rules.target("scene", name, fmt,
+                                                folder_paths.get_output_directory(), data.get("context"))
+                    os.makedirs(os.path.dirname(where["path"]), exist_ok=True)
+                    geo = data.get("geometry") if isinstance(data.get("geometry"), dict) else None
+                    baked = data.get("baked") if isinstance(data.get("baked"), dict) else None
+                    out = await _off_loop(usd_scene.save, data["scene"], where["path"], baked, geo)
+                except ValueError as e:
+                    return web.json_response({"error": str(e)}, status=400)
+                except OSError as e:
+                    return web.json_response({"error": str(e)}, status=500)
+                except Exception as e:
+                    return web.json_response({"error": f"could not write the stage: {e}"}, status=500)
+                return web.json_response({"ok": True, "name": os.path.basename(out["path"]), "path": out["path"],
+                                          "relative": where["relative"], "version": where["version"],
+                                          "assets": out["assets"], "notes": out["notes"]})
             if data.get("rule"):
                 # Saved where every export goes, as the next version (export_rules).
                 from . import export_rules
@@ -3340,7 +3389,14 @@ try:
                 folder = previz.scenes_dir(create=True) if previz else folder_paths.get_output_directory()
                 target = os.path.join(folder, f"{name}.{ext}")
             try:
-                written = usd_io.export_scene(data["scene"], target)
+                if usd_scene is not None:
+                    # The same stage a saved scene is: meshes converted beside it and referenced.
+                    geo = data.get("geometry") if isinstance(data.get("geometry"), dict) else None
+                    kept = data.get("kept") if isinstance(data.get("kept"), dict) else None
+                    out = await _off_loop(usd_scene.save, kept or data["scene"], target, data["scene"], geo)
+                    written = out["path"]
+                else:
+                    written = usd_io.export_scene(data["scene"], target)
             except Exception as e:
                 return web.json_response({"error": str(e)}, status=400)
             root = os.path.abspath(folder_paths.get_output_directory())
@@ -3397,6 +3453,29 @@ try:
                     out.append({"name": n, "path": os.path.join(folder, n)})
             return web.json_response({"stages": out, "dir": folder,
                                       "available": bool(usd_io and usd_io.available())})
+
+        async def _imageviewer_usd_tree(request):
+            """The prims inside a USD asset, for the Outliner (usd_scene.prim_tree),
+            with the Outliner's edits (`usd`, JSON) applied."""
+            if usd_scene is None or usd_io is None or not usd_io.available():
+                return web.json_response({"error": "this install has no USD (pip install usd-core)"},
+                                         status=501)
+            raw = request.query.get("path") or ""
+            if not raw:
+                return web.json_response({"error": "missing path"}, status=400)
+            path = os.path.abspath(raw)
+            if not usd_io.is_usd(path):
+                return web.json_response({"error": "not a USD file"}, status=400)
+            if not path_access.is_allowed(path):
+                return web.json_response({"error": path_access.refusal(path)}, status=403)
+            if not os.path.isfile(path):
+                return web.json_response({"error": "no such stage"}, status=404)
+            try:
+                tree = await _off_loop(usd_scene.prim_tree, path, request.query.get("prim") or None,
+                                       _usd_edits(request.query.get("usd")))
+            except Exception as e:
+                return web.json_response({"error": str(e)}, status=400)
+            return web.json_response({"ok": True, "path": path, **tree})
 
         async def _imageviewer_roots(request):
             """The folders the viewer may open, for Settings → ComfyUI Image Viewer,
@@ -3486,6 +3565,7 @@ try:
         _safe_add("GET", "/imageviewer/usd_import", _imageviewer_usd_import)
         _safe_add("GET", "/api/imageviewer/usd_import", _imageviewer_usd_import)
         _safe_add("GET", "/imageviewer/usd_stages", _imageviewer_usd_stages)
+        _safe_add("GET", "/imageviewer/usd_tree", _imageviewer_usd_tree)
         _safe_add("GET", "/api/imageviewer/usd_stages", _imageviewer_usd_stages)
         _safe_add("POST", "/api/imageviewer/model_thumb", _imageviewer_model_thumb)
         _safe_add("GET", "/imageviewer/timeline", _imageviewer_timeline)

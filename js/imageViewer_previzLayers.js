@@ -242,7 +242,7 @@ export const PrevizLayersMixin = {
             id: "scene",
             title: "Reference scene",
             kind: "scene",
-            exts: [".json"],
+            exts: [".usda", ".usdc", ".usd", ".json"],
             go: "Reference",
             note: "Brings the scene in under a namespace and keeps it linked: a newer version saved "
                 + "of that file is picked up here. Pick it again for a second copy.",

@@ -110,6 +110,7 @@ export function boneRows(bones, { needle = "", isClosed = () => false } = {}) {
  *   isSelected  - (id) => bool, for the "selected" state
  *   isAnimated  - (item) => bool, for the "animated" state
  *   bonesOf     - (item) => [bone names] of a loaded model (searched too)
+ *   contentsOf  - (item) => [prim names] inside a model's asset, its Contents rows (searched too)
  *
  * Returns [{ item, depth, hasKids, open, match, context }]:
  *   hasKids - it has rows below it as the filter stands (the arrow shows)
@@ -127,6 +128,7 @@ export function outlinerRows(scene, opts = {}) {
     const isSelected = opts.isSelected || (() => false);
     const isAnimated = opts.isAnimated || (() => false);
     const bonesOf = opts.bonesOf || (() => []);
+    const contentsOf = opts.contentsOf || (() => []);
     const ids = new Set(items.map((it) => it.id));
     const kids = new Map();
     for (const it of items) {
@@ -151,6 +153,8 @@ export function outlinerRows(scene, opts = {}) {
         if (it.kind === "model" && !hidden.has("bones")) {
             for (const b of bonesOf(it) || []) if (matchRange(b, needle)) return true;
         }
+        // ... and so is one with a prim of that name inside its asset.
+        if (it.kind === "model") for (const c of contentsOf(it) || []) if (matchRange(c, needle)) return true;
         return false;
     };
     // Does an item, or anything below it, pass? Memoised; cycles guarded.
@@ -181,10 +185,11 @@ export function outlinerRows(scene, opts = {}) {
             const next = new Set(seen).add(it.id);
             const under = visibleKids(it.id, new Set(next));
             const skeleton = it.kind === "model" && !hidden.has("bones") && (bonesOf(it) || []).length > 0;
-            const hasKids = under.length > 0 || skeleton;
+            const contents = it.kind === "model" && (contentsOf(it) || []).length > 0;
+            const hasKids = under.length > 0 || skeleton || contents;
             const open = hasKids && (needle ? true : !collapsed.has(it.id));
             const match = !!needle && !!matchRange(it.name, needle);
-            const context = !own(it) || (!!needle && !match && !(it.kind === "model" && skeleton));
+            const context = !own(it) || (!!needle && !match && !(it.kind === "model" && (skeleton || contents)));
             rows.push({ item: it, depth, hasKids, open, match, context });
             if (open) walk(it.id, depth + 1, next);
         }

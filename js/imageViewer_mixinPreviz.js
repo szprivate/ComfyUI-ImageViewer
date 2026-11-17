@@ -22,6 +22,7 @@ import "./imageViewer_animLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
+import { PrevizUsdMixin } from "./imageViewer_previzUsd.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 /** The scale that makes an FBX in `unitScaleFactor` cm units metres (1 when it already is, or says nothing). */
@@ -1610,6 +1611,7 @@ export const PrevizMixin = {
             "-",
             { label: many ? `Duplicate ${count}` : "Duplicate", run: () => this.previzDuplicate(ids) },
             { label: many ? `Delete ${count}` : "Delete", run: () => this.previzDelete(ids) },
+            ...this._previzUsdMenuEntries(ids),
         ], ev.clientX, ev.clientY);
     },
 
@@ -1983,7 +1985,29 @@ export const PrevizMixin = {
 
     // ── Scene files ──────────────────────────────────────────────────────────
 
-    /** Save the scene as a file: a new version each time, where every export goes. */
+    /**
+     * What the server needs to write the scene as USD (usd_scene.save): the scene
+     * as kept, the same with constraints and clips baked into keys (what other
+     * applications see move), and the meshes only the page has - a terrain, a
+     * scatter, a depth mesh, an image plane's card, a model the server cannot
+     * read (imageViewer_view3dUsd.js).
+     */
+    _previzUsdBody(scene) {
+        const view = this._model3d;
+        let geometry = {}, skipped = [];
+        if (view && view.usdCollectGeometry) {
+            const ids = scene.items.filter((it) => view.usdNeedsPageMesh(it)).map((it) => it.id);
+            ({ geometry, skipped } = view.usdCollectGeometry(ids));
+        }
+        return { body: { scene, baked: bakedCopy(Q.withClipsBaked(scene)), geometry }, skipped };
+    },
+
+    /**
+     * Save the scene as a file: a new version each time, where every export goes.
+     * A USD scene by default (Sebastian 2026-11-17): every mesh referenced from it,
+     * converted into assets/ beside it when it is not USD already; the older JSON
+     * is still offered and still opens.
+     */
     async previzSaveSceneFile() {
         const scene = this.previzScene();
         if (!scene) return;
@@ -1991,19 +2015,27 @@ export const PrevizMixin = {
             title: "Save scene",
             kind: "scene",
             name: this.previzRenderName(),
-            fixed: [{ value: "json", label: "Scene (.json)" }],
+            fixed: [{ value: "usda", label: "USD scene (.usda)" }, { value: "usdc", label: "USD scene, binary (.usdc)" },
+                    { value: "json", label: "Older JSON scene (.json, no meshes)" }],
+            values: this._previzSaveFormat,
             go: "Save",
             note: "Each save is a new version, so an earlier one is never written over. "
-                + "Open scene\u2026 reads any of them back.",
+                + "Meshes are referenced from the scene, never written into it: one that is not USD is converted "
+                + "once into assets/ beside it. Open scene\u2026 reads any of them back.",
             onExport: async (v) => {
+                this._previzSaveFormat = { format: v.format };
+                const usd = v.format === "usda" || v.format === "usdc";
+                const extra = usd ? this._previzUsdBody(scene) : { body: { scene }, skipped: [] };
                 const res = await fetch(api.apiURL("/imageviewer/scene"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ name: v.name, scene, rule: true, context: v.context }),
+                    body: JSON.stringify({ ...extra.body, name: v.name, format: v.format, rule: true, context: v.context }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) return { ok: false, message: `Could not save: ${data.error || res.status}` };
                 notice("success", "Scene saved", "output/" + (data.relative || data.name));
+                const notes = [...(data.notes || []), ...extra.skipped.map((n) => `${n}: too big to send, kept as a path only`)];
+                if (notes.length) notice("info", "Saved, with notes", notes.join("\n"));
                 return { ok: true };
             },
         });
@@ -2025,7 +2057,7 @@ export const PrevizMixin = {
             id: "scene",
             title: "Open scene",
             kind: "scene",
-            exts: [".json"],
+            exts: [".usda", ".usdc", ".usd", ".json"],
             go: "Open",
             note: "Replaces the scene in this tab.",
             onPick: async ([file]) => {
@@ -2054,11 +2086,14 @@ export const PrevizMixin = {
             values: this._previzUsdExport,
             onExport: async (v) => {
                 this._previzUsdExport = { format: v.format };
+                // The stage carries keys, not constraints or clips: those are baked into a copy first;
+                // the scene as kept rides along, and the meshes only the page has.
+                const { body } = this._previzUsdBody(scene);
                 const res = await fetch(api.apiURL("/imageviewer/usd_export"), {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    // The stage carries keys, not constraints or clips: those are baked into a copy first.
-                    body: JSON.stringify({ scene: bakedCopy(Q.withClipsBaked(scene)), name: v.name, format: v.format, rule: true, context: v.context }),
+                    body: JSON.stringify({ scene: body.baked, kept: scene, geometry: body.geometry,
+                                           name: v.name, format: v.format, rule: true, context: v.context }),
                 });
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) return { ok: false, message: `Could not export the stage: ${data.error || res.status}` };
@@ -2206,3 +2241,4 @@ export const PrevizMixin = {
 
 // The Outliner's tree, search and filter live in their own file.
 Object.assign(PrevizMixin, PrevizOutlinerMixin);
+Object.assign(PrevizMixin, PrevizUsdMixin);

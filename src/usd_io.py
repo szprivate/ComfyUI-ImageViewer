@@ -457,10 +457,293 @@ def _in_tree_order(items):
     return out
 
 
-def export_scene(scene, path, bake=True):
-    """Write a previz scene to `path` as a USD stage. Returns the path."""
+def _color3(hex_color, default=(0.6, 0.6, 0.6)):
+    try:
+        return tuple(int(hex_color[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+    except Exception:
+        return default
+
+
+def _asset_target(asset, layer_dir, always_relative=False):
+    """An asset path as a layer should spell it: relative to the stage when the
+    two can move together, else absolute. A sidecar this viewer wrote always
+    lives beside the stage's folder, so it is always relative."""
+    try:
+        rel = os.path.relpath(asset, layer_dir).replace("\\", "/")
+    except ValueError:
+        return asset.replace("\\", "/")
+    if always_relative or not rel.startswith(".."):
+        return rel if rel.startswith(".") else "./" + rel
+    return asset.replace("\\", "/")
+
+
+# The viewer's lights shine along their item's -Y; UsdLux lights along their
+# own -Z. A child turned -90 degrees about X makes the two the same direction.
+_LIGHT_TURN = -90.0
+
+
+def _define_light(stage, parent_path, item):
+    """A UsdLux light under an item's Xform, from the viewer's light settings."""
+    Gf, Sdf, _Usd, UsdGeom, _Vt = _pxr()
+    from pxr import UsdLux
+    light = item.get("light") or {}
+    kind = light.get("type") or "point"
+    path = parent_path.AppendChild("Light")
+    if kind == "directional":
+        prim = UsdLux.DistantLight.Define(stage, path)
+        prim.CreateAngleAttr(0.53)
+    elif kind == "area":
+        prim = UsdLux.RectLight.Define(stage, path)
+        prim.CreateWidthAttr(float(light.get("width") or 2.0))
+        prim.CreateHeightAttr(float(light.get("height") or 2.0))
+    elif kind == "dome":
+        prim = UsdLux.DomeLight.Define(stage, path)
+    else:
+        prim = UsdLux.SphereLight.Define(stage, path)
+        prim.CreateRadiusAttr(0.05)
+        prim.CreateTreatAsPointAttr(True)
+        if kind == "spot":
+            shaping = UsdLux.ShapingAPI.Apply(prim.GetPrim())
+            shaping.CreateShapingConeAngleAttr(float(light.get("angle") or 30.0))
+            shaping.CreateShapingConeSoftnessAttr(float(light.get("penumbra") or 0.0))
+    prim.CreateIntensityAttr(float(light.get("intensity") if light.get("intensity") is not None else 1.0))
+    prim.CreateColorAttr(Gf.Vec3f(*_color3(light.get("color") or "#ffffff", (1, 1, 1))))
+    if kind in ("spot", "directional", "area"):
+        UsdGeom.Xformable(prim).AddRotateXOp().Set(_LIGHT_TURN)
+    shadow = UsdLux.ShadowAPI.Apply(prim.GetPrim())
+    shadow.CreateShadowEnableAttr(bool(light.get("shadows")))
+    return prim
+
+
+def _define_dome(stage, parent_path, item, layer_dir, resolve):
+    """An environment's panorama as a DomeLight, when it has a file to show."""
+    _Gf, Sdf, _Usd, _UsdGeom, _Vt = _pxr()
+    from pxr import UsdLux
+    sky = (item.get("sky") or {}) if isinstance(item.get("sky"), dict) else {}
+    src = sky.get("src")
+    picture = resolve(src) if (resolve and src) else None
+    if sky.get("mode") != "panorama" or not picture:
+        return None
+    dome = UsdLux.DomeLight.Define(stage, parent_path.AppendChild("Sky"))
+    dome.CreateTextureFileAttr(Sdf.AssetPath(_asset_target(picture, layer_dir)))
+    dome.CreateTextureFormatAttr("latlong")
+    dome.CreateIntensityAttr(float(sky.get("intensity") or 1.0))
+    return dome
+
+
+_PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".exr", ".hdr", ".tif", ".tiff", ".webp", ".bmp", ".tga"}
+
+
+def _define_card(stage, parent_path, item, geo, layer_dir, resolve):
+    """An image plane: its card as a mesh, its picture as the texture."""
+    Gf, Sdf, _Usd, UsdGeom, _Vt = _pxr()
+    from pxr import UsdShade
+    meshes = (geo or {}).get("meshes") or []
+    if not meshes:
+        return None
+    card = write_mesh(stage, parent_path.AppendChild("Card"), meshes[0])
+    card.CreateDoubleSidedAttr(((item.get("plane") or {}).get("doubleSided")) is not False)
+    picture = resolve(item.get("src")) if resolve else None
+    mat = UsdShade.Material.Define(stage, parent_path.AppendChild("Look"))
+    shader = UsdShade.Shader.Define(stage, parent_path.AppendPath(Sdf.Path("Look/Surface")))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+    opacity = (item.get("plane") or {}).get("opacity")
+    if opacity is not None and float(opacity) < 1:
+        shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(float(opacity))
+    if picture and os.path.splitext(picture)[1].lower() in _PICTURE_EXTS:
+        reader = UsdShade.Shader.Define(stage, parent_path.AppendPath(Sdf.Path("Look/st")))
+        reader.CreateIdAttr("UsdPrimvarReader_float2")
+        reader.CreateInput("varname", Sdf.ValueTypeNames.Token).Set("st")
+        tex = UsdShade.Shader.Define(stage, parent_path.AppendPath(Sdf.Path("Look/picture")))
+        tex.CreateIdAttr("UsdUVTexture")
+        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(_asset_target(picture, layer_dir))
+        tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(reader.ConnectableAPI(), "result")
+        tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3)
+        for name in ("diffuseColor", "emissiveColor"):
+            shader.CreateInput(name, Sdf.ValueTypeNames.Color3f).ConnectToSource(tex.ConnectableAPI(), "rgb")
+    UsdShade.MaterialBindingAPI.Apply(card.GetPrim()).Bind(mat)
+    return card
+
+
+# ── meshes handed over as arrays (what the page sends for what it built) ────
+
+def _array(value, dtype, width=None):
+    """A base64 string or a plain list as a numpy array (rows of `width`)."""
+    import base64
+    import numpy as np
+    if value is None:
+        return None
+    if isinstance(value, str):
+        arr = np.frombuffer(base64.b64decode(value), dtype=dtype)
+    else:
+        arr = np.asarray(value, dtype=dtype)
+    if width:
+        if arr.size % width:
+            raise ValueError("a mesh array does not divide into rows")
+        arr = arr.reshape(-1, width)
+    return arr
+
+
+def _matrix(values):
+    """Sixteen numbers in three.js order as a Gf.Matrix4d (the same numbers)."""
+    Gf, _Sdf, _Usd, _UsdGeom, _Vt = _pxr()
+    if not isinstance(values, (list, tuple)) or len(values) != 16:
+        return None
+    return Gf.Matrix4d(*[float(v) for v in values])
+
+
+def write_mesh(stage, path, mesh):
+    """One mesh, as the page sends it: positions, optional normals, uvs,
+    per-vertex colours and triangle indices, plus a colour for the whole."""
+    Gf, Sdf, _Usd, UsdGeom, Vt = _pxr()
+    import numpy as np
+    pts = _array(mesh.get("positions"), np.float32, 3)
+    if pts is None or not len(pts):
+        raise ValueError("a mesh without points")
+    idx = _array(mesh.get("indices"), np.uint32)
+    if idx is None or not len(idx):
+        idx = np.arange(len(pts), dtype=np.uint32)
+    if len(idx) % 3 or (len(idx) and int(idx.max()) >= len(pts)):
+        raise ValueError("a mesh whose triangles do not fit its points")
+    m = UsdGeom.Mesh.Define(stage, path)
+    m.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(pts))
+    m.CreateFaceVertexCountsAttr(Vt.IntArray([3] * (len(idx) // 3)))
+    m.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(idx.astype(np.int32)))
+    m.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
+    lo, hi = pts.min(axis=0), pts.max(axis=0)
+    m.CreateExtentAttr(Vt.Vec3fArray([Gf.Vec3f(*map(float, lo)), Gf.Vec3f(*map(float, hi))]))
+    nrm = _array(mesh.get("normals"), np.float32, 3)
+    if nrm is not None and len(nrm) == len(pts):
+        m.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(nrm))
+        m.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
+    pv = UsdGeom.PrimvarsAPI(m)
+    uv = _array(mesh.get("uvs"), np.float32, 2)
+    if uv is not None and len(uv) == len(pts):
+        pv.CreatePrimvar("st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex) \
+          .Set(Vt.Vec2fArray.FromNumpy(uv))
+    col = _array(mesh.get("colors"), np.float32, 3)
+    if col is not None and len(col) == len(pts):
+        pv.CreatePrimvar("displayColor", Sdf.ValueTypeNames.Color3fArray, UsdGeom.Tokens.vertex) \
+          .Set(Vt.Vec3fArray.FromNumpy(col))
+    elif mesh.get("color"):
+        m.CreateDisplayColorAttr([Gf.Vec3f(*_color3(mesh["color"]))])
+    return m
+
+
+def write_geometry_layer(path, geo):
+    """A layer of meshes the page built itself (a terrain, a scatter, a depth
+    mesh, a model only the page could read): one prim per mesh under /Geo, in
+    the item's own space; a mesh drawn many times becomes a PointInstancer."""
+    Gf, Sdf, Usd, UsdGeom, Vt = _pxr()
+    import numpy as np
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path):
+        os.remove(path)
+    stage = Usd.Stage.CreateNew(path)
+    UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.y)
+    UsdGeom.SetStageMetersPerUnit(stage, 1.0)
+    root = UsdGeom.Xform.Define(stage, "/Geo")
+    stage.SetDefaultPrim(root.GetPrim())
+    Usd.ModelAPI(root.GetPrim()).SetKind("component")
+    used = set()
+    for mesh in (geo or {}).get("meshes") or []:
+        # A mesh's place below the item: "Rocks/Rock_3" keeps the page's own tree.
+        parts = [p for p in str(mesh.get("path") or mesh.get("name") or "mesh").split("/") if p]
+        at = Sdf.Path("/Geo")
+        for part in parts[:-1]:
+            at = at.AppendChild(_prim_name(part, set()))
+            if not stage.GetPrimAtPath(at):
+                UsdGeom.Xform.Define(stage, at)
+        name = _prim_name(parts[-1] if parts else "mesh", used)
+        prim_path = at.AppendChild(name)
+        matrix = _matrix(mesh.get("matrix"))
+        inst = _array(mesh.get("instances"), np.float32, 16)
+        if inst is not None and len(inst):
+            pi = UsdGeom.PointInstancer.Define(stage, prim_path)
+            proto = write_mesh(stage, prim_path.AppendPath(Sdf.Path("Prototypes/mesh")), mesh)
+            pi.CreatePrototypesRel().SetTargets([proto.GetPath()])
+            positions, orients, scales = [], [], []
+            for row in inst:
+                xf = Gf.Transform(Gf.Matrix4d(*[float(v) for v in row]))
+                t, s, q = xf.GetTranslation(), xf.GetScale(), xf.GetRotation().GetQuat()
+                positions.append(Gf.Vec3f(*t))
+                scales.append(Gf.Vec3f(*s))
+                im = q.GetImaginary()
+                orients.append(Gf.Quath(q.GetReal(), Gf.Vec3h(im[0], im[1], im[2])))
+            pi.CreateProtoIndicesAttr(Vt.IntArray([0] * len(positions)))
+            pi.CreatePositionsAttr(Vt.Vec3fArray(positions))
+            pi.CreateOrientationsAttr(Vt.QuathArray(orients))
+            pi.CreateScalesAttr(Vt.Vec3fArray(scales))
+            target = pi
+        else:
+            target = write_mesh(stage, prim_path, mesh)
+        if matrix is not None:
+            UsdGeom.Xformable(target).AddTransformOp().Set(matrix)
+    stage.GetRootLayer().Save()
+    return path
+
+
+# ── edits inside an asset: what the Outliner changes below an item ───────────
+
+def apply_edits(stage, base, edits):
+    """Author `edits` under the prim at `base` in the stage's current edit
+    target: {"overs": {rel: {"visible": bool, "active": bool}},
+    "variants": {rel: {set: choice}}}. `rel` is a prim path below `base`
+    ("" is `base` itself). Over prims, so the asset itself is never touched."""
+    _Gf, Sdf, _Usd, UsdGeom, _Vt = _pxr()
+    base = Sdf.Path(str(base))
+    edits = edits if isinstance(edits, dict) else {}
+
+    def at(rel):
+        rel = str(rel or "").strip("/")
+        if not rel:
+            return base
+        try:
+            return base.AppendPath(Sdf.Path(rel))
+        except Exception:
+            return None
+
+    for rel, choices in (edits.get("variants") or {}).items():
+        path = at(rel)
+        if path is None or not isinstance(choices, dict):
+            continue
+        prim = stage.OverridePrim(path)
+        for vset, choice in choices.items():
+            if vset and isinstance(choice, str):
+                prim.GetVariantSets().AddVariantSet(str(vset)).SetVariantSelection(choice)
+    for rel, over in (edits.get("overs") or {}).items():
+        path = at(rel)
+        if path is None or not isinstance(over, dict):
+            continue
+        prim = stage.OverridePrim(path)
+        if over.get("visible") is False:
+            UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+        if over.get("active") is False:
+            prim.SetActive(False)
+
+
+def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json=None,
+                 scene_data=None, resolve=None, sidecars=(), edits=None):
+    """Write a previz scene to `path` as a USD stage. Returns the path.
+
+    The extras are what a saved scene adds to a plain export: `payloads`
+    ({item id: layer}) is the file each item's geometry comes from when it is
+    not the item's own (a mesh converted beside the stage); `geometry`
+    ({item id: meshes}) what the page built for an image plane; `item_json`
+    the items as they are kept (the export's own `scene` may be a baked
+    copy); `scene_data` what the scene holds beside its items, on the root;
+    `resolve(src)` the file a src names; `sidecars` the layers that are this
+    stage's own and so always addressed relatively; `edits` ({item id: edits,
+    apply_edits' shape}) the Outliner's changes inside each asset, when they
+    differ from the item's own (a converted mesh names its prims anew).
+    """
     Gf, Sdf, Usd, UsdGeom, _Vt = _pxr()
     scene = scene or {}
+    payloads = payloads or {}
+    geometry = geometry or {}
+    item_json = item_json or {}
+    sidecars = {os.path.normcase(os.path.abspath(p)) for p in sidecars or ()}
     fps = float(scene.get("fps") or 24.0)
     length = max(1, int(scene.get("length") or 120))
     path = os.path.abspath(path)
@@ -478,10 +761,13 @@ def export_scene(scene, path, bake=True):
 
     root = UsdGeom.Xform.Define(stage, "/previz")
     stage.SetDefaultPrim(root.GetPrim())
+    Usd.ModelAPI(root.GetPrim()).SetKind("assembly")
     root.GetPrim().SetCustomDataByKey(f"{_CUSTOM_KEY}:fps", fps)
     root.GetPrim().SetCustomDataByKey(f"{_CUSTOM_KEY}:length", length)
     if scene.get("activeCamera"):
         root.GetPrim().SetCustomDataByKey(f"{_CUSTOM_KEY}:activeCamera", str(scene["activeCamera"]))
+    if scene_data is not None:
+        root.GetPrim().SetCustomDataByKey(f"{_CUSTOM_KEY}:scene", json.dumps(scene_data))
 
     used, layer_dir = set(), os.path.dirname(path)
     # Parents before their children, so a child's prim path can be built from
@@ -494,6 +780,8 @@ def export_scene(scene, path, bake=True):
         prim_path = Sdf.Path(f"{parent_path}/{name}")
         paths[item.get("id")] = str(prim_path)
         kind = item.get("kind")
+        item_path = prim_path
+        own = payloads.get(item.get("id"))
 
         if kind == "group":
             # A group is an Xform and nothing else: it holds the others, and
@@ -511,35 +799,57 @@ def export_scene(scene, path, bake=True):
             xformable = cam
         elif kind == "primitive":
             xformable = _define_shape(stage, prim_path, item)
+        elif kind == "light":
+            xformable = UsdGeom.Xform.Define(stage, prim_path)
+            _define_light(stage, prim_path, item)
+        elif kind == "environment":
+            xformable = UsdGeom.Xform.Define(stage, prim_path)
+            _define_dome(stage, prim_path, item, layer_dir, resolve)
+        elif kind == "imageplane":
+            xformable = UsdGeom.Xform.Define(stage, prim_path)
+            _define_card(stage, prim_path, item, geometry.get(item.get("id")), layer_dir, resolve)
+        elif kind in ("terrain", "scatter", "depthmesh") or (kind != "model" and own):
+            # Geometry the page built: a layer of its own beside the stage.
+            xformable = UsdGeom.Xform.Define(stage, prim_path)
+            if own:
+                xformable.GetPrim().GetPayloads().AddPayload(_asset_target(own, layer_dir, True))
         else:
             xformable = UsdGeom.Xform.Define(stage, prim_path)
             src = item.get("src") or {}
-            asset = src.get("asset") or src.get("path")
-            prim_path = src.get("prim")
+            asset = own or src.get("asset") or src.get("path")
+            src_prim = None if own else src.get("prim")
             if asset and is_usd(asset):
                 # A payload, so opening the stage costs nothing until the asset
                 # is actually wanted. Relative when it can be, so the stage and
                 # its assets can move together.
-                try:
-                    rel = os.path.relpath(asset, layer_dir).replace("\\", "/")
-                    target = rel if not rel.startswith("..") else asset.replace("\\", "/")
-                except ValueError:
-                    target = asset.replace("\\", "/")
+                ours = os.path.normcase(os.path.abspath(asset)) in sidecars
+                target = _asset_target(asset, layer_dir, ours)
                 # With a prim path the payload points INTO the stage, which is
                 # how an item taken from someone else's layout keeps pointing at
                 # the thing it came from rather than at a whole shot.
-                if prim_path and not src.get("asset"):
-                    xformable.GetPrim().GetPayloads().AddPayload(target, Sdf.Path(prim_path))
+                if src_prim and not src.get("asset"):
+                    xformable.GetPrim().GetPayloads().AddPayload(target, Sdf.Path(src_prim))
                 else:
                     xformable.GetPrim().GetPayloads().AddPayload(target)
+                if own and (src.get("path") or src.get("filename")):
+                    # The file it was converted from, for anyone who wants that.
+                    original = resolve(src) if resolve else src.get("path")
+                    if original:
+                        xformable.GetPrim().SetCustomDataByKey(
+                            f"{_CUSTOM_KEY}:source", str(original).replace("\\", "/"))
             elif asset:
                 # Not a USD layer, so it can't be payloaded: other packages see
                 # an empty xform, and this viewer reads the path back out.
                 xformable.GetPrim().SetCustomDataByKey(
                     f"{_CUSTOM_KEY}:asset", asset.replace("\\", "/"))
+            inside = (edits or {}).get(item.get("id"))
+            if inside is None:
+                inside = (item_json.get(item.get("id")) or item).get("usd") or {}
+            if asset and is_usd(asset) and (inside.get("overs") or inside.get("variants")):
+                apply_edits(stage, item_path, inside)
 
         prim = xformable.GetPrim()
-        prim.SetCustomDataByKey(f"{_CUSTOM_KEY}:item", json.dumps(item))
+        prim.SetCustomDataByKey(f"{_CUSTOM_KEY}:item", json.dumps(item_json.get(item.get("id")) or item))
         if item.get("visible") is False:
             UsdGeom.Imageable(prim).CreateVisibilityAttr(UsdGeom.Tokens.invisible)
 
@@ -711,6 +1021,37 @@ def _mark_external(scene):
     return scene
 
 
+def src_file(src):
+    """The file an item's src names, or None: an absolute `path`, or ComfyUI's
+    own filename / subfolder / type (a blob: URL names no file)."""
+    if not isinstance(src, dict):
+        return None
+    if src.get("path"):
+        return os.path.abspath(str(src["path"]))
+    if src.get("filename"):
+        try:
+            import folder_paths
+            base = folder_paths.get_directory_by_type(src.get("type") or "output")
+        except Exception:
+            base = None
+        if not base:
+            return None
+        base = os.path.abspath(base)
+        cand = os.path.abspath(os.path.join(base, str(src.get("subfolder") or ""), str(src["filename"])))
+        try:
+            if os.path.commonpath([os.path.normcase(base), os.path.normcase(cand)]) != os.path.normcase(base):
+                return None
+        except ValueError:
+            return None
+        return cand
+    return None
+
+
+def _src_exists(src):
+    f = src_file(src)
+    return bool(f and os.path.isfile(f))
+
+
 def import_scene(path, load_payloads=True):
     """Read a USD stage into a previz scene dict.
 
@@ -722,7 +1063,10 @@ def import_scene(path, load_payloads=True):
     """
     _Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
     path = os.path.abspath(path)
-    stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll if load_payloads else Usd.Stage.LoadNone)
+    # Opened without its payloads first: a stage this viewer wrote keeps all
+    # it needs on its own prims, and composing every asset to read that would
+    # make opening a big shot as slow as loading all of it.
+    stage = Usd.Stage.Open(path, load=Usd.Stage.LoadNone)
     if stage is None:
         raise ValueError(f"{os.path.basename(path)} is not a stage this build can open")
     layer_dir = os.path.dirname(path)
@@ -745,6 +1089,16 @@ def import_scene(path, load_payloads=True):
         if prim.IsValid() and prim.IsActive() and prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:item"):
             ours.append(prim)
     if ours:
+        # A saved scene keeps what it holds beside its items on the root.
+        kept = root.GetCustomDataByKey(f"{_CUSTOM_KEY}:scene") if root else None
+        if kept:
+            try:
+                extra = json.loads(kept)
+            except Exception:
+                extra = None
+            if isinstance(extra, dict):
+                extra.pop("items", None)
+                scene.update(extra)
         for prim in ours:
             try:
                 item = json.loads(prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:item"))
@@ -752,12 +1106,30 @@ def import_scene(path, load_payloads=True):
                 continue
             asset = _asset_of(prim, layer_dir)
             if asset and item.get("kind") == "model":
-                item.setdefault("src", {})
-                item["src"]["path"] = asset
+                src = item.setdefault("src", {})
+                if prim.GetCustomDataByKey(f"{_CUSTOM_KEY}:source") or src.get("usdAsset") is not None:
+                    # The mesh was converted beside the stage: the item still
+                    # shows the file it came from, and the copy is there for
+                    # when that file is gone.
+                    src["usdAsset"] = asset
+                    if not _src_exists(src):
+                        item["src"] = {"path": asset, "name": src.get("name") or os.path.basename(asset),
+                                       "format": "usd", "usdAsset": asset}
+                else:
+                    src["path"] = asset
             scene["items"].append(item)
+        order = scene.pop("order", None)
+        if isinstance(order, list):
+            rank = {ident: i for i, ident in enumerate(order)}
+            scene["items"].sort(key=lambda it: rank.get(it.get("id"), len(rank)))
         if active_id and any(it.get("id") == active_id for it in scene["items"]):
             scene["activeCamera"] = active_id
         return _mark_external(scene)
+
+    if load_payloads:
+        stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll)
+        default = stage.GetDefaultPrim()
+        root = default if default and default.IsValid() else stage.GetPseudoRoot()
 
     # Anyone else's stage: take the layout, and the geometry under it.
     objects, cameras, instancers = _object_prims(stage, root)
@@ -946,7 +1318,7 @@ def _triangulate(counts, indices):
     return tris
 
 
-def stage_to_mesh(path, time=None, prim_path=None):
+def stage_to_mesh(path, time=None, prim_path=None, edits=None):
     """Visible meshes flattened into (vertices, faces, colors).
 
     With `prim_path`, only that subtree is taken and it comes back in that
@@ -959,6 +1331,12 @@ def stage_to_mesh(path, time=None, prim_path=None):
     stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll)
     if stage is None:
         raise ValueError(f"could not open {os.path.basename(path)}")
+    if edits:
+        # The Outliner's changes inside the asset (usd_scene): in the session
+        # layer, so the file is read as it is and shown as it is edited.
+        base = prim_path or (str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else "/")
+        stage.SetEditTarget(stage.GetSessionLayer())
+        apply_edits(stage, base, edits)
     when = Usd.TimeCode(time) if time is not None else Usd.TimeCode.EarliestTime()
 
     vertices, faces, colors = [], [], []
@@ -1012,7 +1390,7 @@ def stage_to_mesh(path, time=None, prim_path=None):
     return vertices, faces, colors
 
 
-def _cache_path(src, prim_path=None):
+def _cache_path(src, prim_path=None, edits_key=""):
     """Where a stage's display copy lives: the temp dir, keyed on the file (and
     the prim, when only part of it is wanted) so a changed stage lands on a new
     entry rather than a stale one."""
@@ -1020,14 +1398,22 @@ def _cache_path(src, prim_path=None):
     import folder_paths
     tmp = folder_paths.get_temp_directory()
     os.makedirs(tmp, exist_ok=True)
-    key = os.path.normcase(os.path.abspath(src)) + "|" + (prim_path or "")
+    key = os.path.normcase(os.path.abspath(src)) + "|" + (prim_path or "") + "|" + (edits_key or "")
     digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     stem = "".join(c for c in os.path.splitext(os.path.basename(src))[0]
                    if c.isalnum() or c in "-_")[:40] or "stage"
     return os.path.join(tmp, f"ImageViewer_usd_{stem}_{digest}.glb")
 
 
-def display_proxy(path, prim_path=None):
+def _edits_key(edits):
+    import hashlib
+    if not edits or not (edits.get("overs") or edits.get("variants")):
+        return ""
+    blob = json.dumps({"o": edits.get("overs") or {}, "v": edits.get("variants") or {}}, sort_keys=True)
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def display_proxy(path, prim_path=None, edits=None):
     """A GLB standing in for a USD file (or one prim of it), built once and
     reused until the stage changes.
 
@@ -1036,7 +1422,8 @@ def display_proxy(path, prim_path=None):
     """
     if not available() or not is_usd(path):
         return None
-    dst = _cache_path(path, prim_path)
+    key = _edits_key(edits)
+    dst = _cache_path(path, prim_path, key)
     try:
         if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
             return dst
@@ -1045,7 +1432,7 @@ def display_proxy(path, prim_path=None):
 
     import numpy as np
     import torch
-    vertices, faces, colors = stage_to_mesh(path, prim_path=prim_path)
+    vertices, faces, colors = stage_to_mesh(path, prim_path=prim_path, edits=edits if key else None)
 
     from comfy_extras.nodes_save_3d import save_glb
     save_glb(

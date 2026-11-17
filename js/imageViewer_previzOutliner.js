@@ -244,6 +244,8 @@ export const PrevizOutlinerMixin = {
             isSelected: (id) => this.previzIsSelected(id),
             isAnimated: (it) => S.allKeyframeFrames(it).length > 0,
             bonesOf: (it) => (it.kind === "model" ? this._previzBonesOf(it.id).map((b) => b.name) : []),
+            // The prims inside a model's asset (imageViewer_previzUsd.js).
+            contentsOf: (it) => (it.kind === "model" && this.previzUsdContentNames ? this.previzUsdContentNames(it) : []),
         });
     },
 
@@ -281,10 +283,13 @@ export const PrevizOutlinerMixin = {
         const rows = this._olRows();
         const needle = searchNeedle(this._olQuery);
         const hiddenBones = this.previzOutlinerFilter().hidden.includes("bones");
+        // The prim each row is in the saved scene, for its tooltip.
+        this._olPrimPaths = this.previzUsdPrimPaths ? this.previzUsdPrimPaths(scene) : null;
         rows.forEach((r) => {
             const row = this._previzOutlinerRow(r.item, r.depth, doc, scene, r, needle);
             ui.list.append(row);
             if (r.open && r.item.kind === "model" && !hiddenBones) this._previzSkeletonRows(r.item, r.depth + 1, doc, scene, ui.list, needle);
+            if (r.open && r.item.kind === "model" && this._previzContentsRows) this._previzContentsRows(r.item, r.depth + 1, doc, scene, ui.list, needle);
         });
         if (!rows.length) {
             const empty = doc.createElement("div");
@@ -362,7 +367,8 @@ export const PrevizOutlinerMixin = {
             + (this.previzIsSelected(item.id) ? " selected" : "")
             + (item.id === this._previzSelection ? " primary" : "")
             + (info && info.context ? " context" : "")
-            + (item.visible === false ? " hidden-item" : "");
+            + (item.visible === false ? " hidden-item" : "")
+            + (item.usd && item.usd.unloaded ? " unloaded" : "");
         row.dataset.itemId = item.id;
         row.dataset.selectId = item.id;
         row.dataset.kind = outlinerKindOf(item);
@@ -410,6 +416,8 @@ export const PrevizOutlinerMixin = {
         name.className = "previz-name";
         this._olName(doc, name, item.name, needle);
         name.title = item.kind === "model" && item.src ? (item.src.path || item.src.filename || "") : item.name;
+        const primPath = this._olPrimPaths && this._olPrimPaths.get(item.id);
+        if (primPath) name.title = `${primPath}\n${name.title}`;
         if (item.ref) {
             const ref = L.referenceById(scene, item.ref.id);
             name.classList.add("ref");
@@ -430,6 +438,16 @@ export const PrevizOutlinerMixin = {
             warn.textContent = "!";
             warn.title = `This file could not be loaded:\n${failed}`;
             end.append(warn);
+        }
+        // Its mesh comes in as a payload in the saved scene (P); unloaded, it is dimmed.
+        if (item.kind === "model" && item.src) {
+            const arc = doc.createElement("span");
+            arc.className = "ol-arc" + (item.usd && item.usd.unloaded ? " unloaded" : "");
+            arc.textContent = "P";
+            arc.title = item.usd && item.usd.unloaded
+                ? "Payload, unloaded: in the scene and the file, not drawn (right-click: Load)"
+                : "Payload: the mesh is referenced from its file, not written into the scene";
+            end.append(arc);
         }
         const keys = S.allKeyframeFrames(item).length;
         if (keys) {
