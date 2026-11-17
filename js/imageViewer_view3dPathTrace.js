@@ -43,6 +43,24 @@ function loadPathTracer() {
 
 const round = (v) => Math.round(v * 1e4) / 1e4;
 
+/**
+ * Why the path tracer cannot run on this WebGL context, in words, or "" when
+ * it can: it needs WebGL2 and float render targets (EXT_color_buffer_float).
+ */
+export function ptMissing(gl) {
+    if (!gl) return "no WebGL context";
+    if (typeof gl.texStorage3D !== "function") return "the browser offers WebGL 1 only (WebGL 2 is needed)";
+    if (gl.isContextLost && gl.isContextLost()) return "the WebGL context was lost";
+    if (!gl.getExtension("EXT_color_buffer_float")) return "the browser cannot draw into float textures (EXT_color_buffer_float)";
+    return "";
+}
+
+/** A short line out of an error, for the badge. */
+function errorLine(e) {
+    const text = String((e && (e.message || e)) || "unknown error").split("\n")[0].trim();
+    return text.length > 140 ? text.slice(0, 137) + "…" : text;
+}
+
 export const View3DPathTraceMixin = {
 
     /** Whether the viewport is drawn by the path tracer right now. */
@@ -114,15 +132,24 @@ export const View3DPathTraceMixin = {
             lib = await loadPathTracer();
         } catch (e) {
             console.warn("[ImageViewer] the path tracer could not be loaded", e);
-            this._ptFailed = true;
-            this._ptBadge();
-            return null;
+            return this._ptFail(`its files could not be loaded (${errorLine(e)})`);
         }
         if (!this.renderer) return null;
         if (this._pt && this._ptFor === this.renderer) return this._pt;
         this._ptDispose();
+        const missing = ptMissing(this.renderer.getContext && this.renderer.getContext());
+        if (missing) {
+            console.warn("[ImageViewer] the path tracer cannot run here:", missing);
+            return this._ptFail(missing);
+        }
         this._ptLib = lib;
-        const pt = new lib.WebGLPathTracer(this.renderer);
+        let pt;
+        try {
+            pt = new lib.WebGLPathTracer(this.renderer);
+        } catch (e) {
+            console.warn("[ImageViewer] the path tracer could not start", e);
+            return this._ptFail(errorLine(e));
+        }
         pt.bounces = PT_VIEW_BOUNCES;
         pt.filterGlossyFactor = 0.5;
         pt.tiles.set(2, 2);
@@ -139,6 +166,14 @@ export const View3DPathTraceMixin = {
         this._ptFor = this.renderer;
         this._ptSig = null;
         return pt;
+    },
+
+    /** Give up tracing on this view, keeping why for the badge; answers null. */
+    _ptFail(why) {
+        this._ptFailed = true;
+        this._ptWhy = why || "";
+        this._ptBadge();
+        return null;
     },
 
     _ptDispose() {
@@ -449,8 +484,7 @@ export const View3DPathTraceMixin = {
             this._ptDrawOverlays(cam);
         } catch (e) {
             console.warn("[ImageViewer] path tracing failed; back to raster", e);
-            this._ptFailed = true;
-            this._ptBadge();
+            this._ptFail(errorLine(e));
             return null;
         }
         this._ptBadge();
@@ -470,7 +504,7 @@ export const View3DPathTraceMixin = {
         }
         b.style.display = "";
         if (text) b.textContent = text;
-        else if (this._ptFailed) b.textContent = "Path tracing is not available on this graphics card - shown raster";
+        else if (this._ptFailed) b.textContent = `Path tracing cannot run here${this._ptWhy ? `: ${this._ptWhy}` : ""} - shown raster`;
         else if (!this._pt) b.textContent = "Loading the path tracer…";
         else if (this._pt.isCompiling) b.textContent = "Path traced · compiling…";
         else {

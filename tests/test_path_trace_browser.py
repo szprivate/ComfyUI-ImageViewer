@@ -93,6 +93,20 @@ class PathTraceTests(unittest.TestCase):
         pg.wait_for_timeout(200)
         return pg
 
+    def test_a_browser_without_float_targets_says_why_it_draws_raster(self):
+        pg = self._page()
+        try:
+            pg.evaluate("""() => { const v = window.__panel._modelView(); const gl = v.renderer.getContext();
+                const get = gl.getExtension.bind(gl);
+                gl.getExtension = (n) => n === 'EXT_color_buffer_float' ? null : get(n);
+                v.setMaterialMode('pathtraced'); v.requestRender(); }""")
+            pg.wait_for_function("() => !!window.__panel._modelView()._ptFailed", timeout=60000)
+            badge = pg.evaluate("() => window.__panel._modelView()._ptBadgeEl.textContent")
+            self.assertIn("EXT_color_buffer_float", badge)
+            self.assertIn("shown raster", badge)
+        finally:
+            pg.close()
+
     def test_the_viewport_traces_and_counts_its_samples(self):
         pg = self._page()
         try:
