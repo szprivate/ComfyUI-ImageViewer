@@ -227,47 +227,44 @@ def prim_tree(path, prim=None, edits=None, limit=4000):
     [{rel, name, parent, type, kind, arcs, variants: {set: {choices, selection}},
       visible, active}], parents first. `truncated` says the list was cut."""
     from pxr import Usd, UsdGeom
-    stage = Usd.Stage.Open(os.path.abspath(path), load=Usd.Stage.LoadAll)
-    if stage is None:
-        raise ValueError(f"could not open {os.path.basename(path)}")
-    base = stage.GetPrimAtPath(prim) if prim else stage.GetDefaultPrim()
-    if not base or not base.IsValid():
-        base = stage.GetPseudoRoot()
-    if edits:
-        stage.SetEditTarget(stage.GetSessionLayer())
-        usd_io.apply_edits(stage, base.GetPath(), edits)
-    rows, cut = [], False
-    it = iter(Usd.PrimRange.AllPrims(base))
-    for p in it:
-        if p == base:
-            continue
-        if len(rows) >= limit:
-            cut = True
-            break
-        variants = {}
-        vsets = p.GetVariantSets()
+    with usd_io.shared_stage(path, prim, edits) as stage:
+        base = stage.GetPrimAtPath(prim) if prim else stage.GetDefaultPrim()
+        if not base or not base.IsValid():
+            base = stage.GetPseudoRoot()
+        rows, cut = [], False
+        for p in usd_io._all_prims(Usd, base):
+            if p == base:
+                continue
+            if len(rows) >= limit:
+                cut = True
+                break
+            variants = {}
+            vsets = p.GetVariantSets()
+            for name in vsets.GetNames():
+                vs = vsets.GetVariantSet(name)
+                variants[name] = {"choices": list(vs.GetVariantNames()), "selection": vs.GetVariantSelection()}
+            img = UsdGeom.Imageable(p)
+            model = Usd.ModelAPI(p)
+            row = {
+                "rel": _rel(p, base),
+                "name": p.GetName(),
+                "parent": _rel(p.GetParent(), base) if p.GetParent() != base else "",
+                "type": p.GetTypeName() or "",
+                "kind": (model.GetKind() if model else "") or "",
+                "arcs": _arcs(p),
+                "variants": variants,
+                "visible": (img.GetVisibilityAttr().Get() != UsdGeom.Tokens.invisible) if img else True,
+                "active": p.IsActive(),
+            }
+            if p.IsInstanceProxy():
+                row["proxy"] = True         # inside an instance: shown, not editable
+            rows.append(row)
+        root_variants = {}
+        vsets = base.GetVariantSets()
         for name in vsets.GetNames():
             vs = vsets.GetVariantSet(name)
-            variants[name] = {"choices": list(vs.GetVariantNames()), "selection": vs.GetVariantSelection()}
-        img = UsdGeom.Imageable(p)
-        model = Usd.ModelAPI(p)
-        rows.append({
-            "rel": _rel(p, base),
-            "name": p.GetName(),
-            "parent": _rel(p.GetParent(), base) if p.GetParent() != base else "",
-            "type": p.GetTypeName() or "",
-            "kind": (model.GetKind() if model else "") or "",
-            "arcs": _arcs(p),
-            "variants": variants,
-            "visible": (img.GetVisibilityAttr().Get() != UsdGeom.Tokens.invisible) if img else True,
-            "active": p.IsActive(),
-        })
-    root_variants = {}
-    vsets = base.GetVariantSets()
-    for name in vsets.GetNames():
-        vs = vsets.GetVariantSet(name)
-        root_variants[name] = {"choices": list(vs.GetVariantNames()), "selection": vs.GetVariantSelection()}
-    return {"root": str(base.GetPath()), "prims": rows, "truncated": cut, "variants": root_variants}
+            root_variants[name] = {"choices": list(vs.GetVariantNames()), "selection": vs.GetVariantSelection()}
+        return {"root": str(base.GetPath()), "prims": rows, "truncated": cut, "variants": root_variants}
 
 
 def edits_key(edits):

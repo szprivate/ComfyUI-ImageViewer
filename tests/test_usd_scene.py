@@ -248,6 +248,62 @@ class UsdSceneTests(unittest.TestCase):
         self.assertFalse(next(p for p in edited["prims"] if p["rel"] == "Back")["visible"])
         self.assertEqual(edited["variants"]["look"]["selection"], "metal")
 
+    def _instanced_layout(self, n=40, name="layout"):
+        """A layout of n instanced copies of one referenced mesh (as Pixar's Kitchen Set
+        instanced): its meshes are instance proxies."""
+        folder = os.path.join(self.tmp, name)
+        os.makedirs(folder, exist_ok=True)
+        part = os.path.join(folder, "spoon.usda")
+        st = Usd.Stage.CreateNew(part)
+        root = UsdGeom.Xform.Define(st, "/Spoon")
+        st.SetDefaultPrim(root.GetPrim())
+        m = UsdGeom.Mesh.Define(st, "/Spoon/Geom")
+        m.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+        m.CreateFaceVertexCountsAttr([4])
+        m.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        st.GetRootLayer().Save()
+        path = os.path.join(folder, "layout.usda")
+        st = Usd.Stage.CreateNew(path)
+        top = UsdGeom.Xform.Define(st, "/Set")
+        st.SetDefaultPrim(top.GetPrim())
+        for i in range(n):
+            x = UsdGeom.Xform.Define(st, f"/Set/Spoon_{i}")
+            x.AddTranslateOp().Set((float(i) * 2, 0.0, 0.0))
+            x.GetPrim().GetReferences().AddReference("./spoon.usda")
+            x.GetPrim().SetInstanceable(True)
+        st.GetRootLayer().Save()
+        return path, n
+
+    def test_an_instanced_layout_draws_and_its_prims_are_listed(self):
+        path, n = self._instanced_layout()
+        verts, faces, _colors = self.uio.stage_to_mesh(path)
+        self.assertEqual(len(verts), 4 * n)
+        self.assertEqual(len(faces), 2 * n)
+        self.assertAlmostEqual(float(verts[:, 0].max()), 2 * (n - 1) + 1)
+        # One copy alone, in its own space.
+        one, _f, _c = self.uio.stage_to_mesh(path, prim_path="/Set/Spoon_7")
+        self.assertAlmostEqual(float(one[:, 0].max()), 1.0)
+        tree = self.us.prim_tree(path, "/Set/Spoon_3")
+        self.assertEqual([p["rel"] for p in tree["prims"]], ["Geom"])
+        self.assertTrue(tree["prims"][0]["proxy"])
+        # An override inside an instance cannot be authored; it is left out, not an error.
+        edited = self.us.prim_tree(path, "/Set/Spoon_3", edits={"overs": {"Geom": {"visible": False}}})
+        self.assertEqual(len(edited["prims"]), 1)
+
+    def test_the_models_of_one_layout_share_one_open_stage(self):
+        path, n = self._instanced_layout(30, "layout_shared")
+        self.uio._STAGES.clear()
+        seen = set()
+        for i in range(n):
+            self.uio.stage_to_mesh(path, prim_path=f"/Set/Spoon_{i}")
+            with self.uio.shared_stage(path, f"/Set/Spoon_{i}") as stage:
+                seen.add(id(stage))
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(len(self.uio._STAGES), 1)
+        # Edits are a stage of their own; the plain one is not touched by them.
+        with self.uio.shared_stage(path, "/Set/Spoon_1", {"overs": {"": {"visible": False}}}) as edited:
+            self.assertNotIn(id(edited), seen)
+
     def test_an_old_json_scene_still_opens_and_saves_as_usd(self):
         old = {"fps": 24, "length": 10, "items": [
             {"id": "b", "kind": "primitive", "name": "Box", "primitive": {"type": "box"}, "color": "#ff0000",

@@ -246,6 +246,7 @@ export const PrevizOutlinerMixin = {
             bonesOf: (it) => (it.kind === "model" ? this._previzBonesOf(it.id).map((b) => b.name) : []),
             // The prims inside a model's asset (imageViewer_previzUsd.js).
             contentsOf: (it) => (it.kind === "model" && this.previzUsdContentNames ? this.previzUsdContentNames(it) : []),
+            hasContents: (it) => (it.kind === "model" && this.previzUsdHasContents ? this.previzUsdHasContents(it) : false),
         });
     },
 

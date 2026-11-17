@@ -21,9 +21,13 @@ expects to read. The scene's own keys ride along in customData, so re-importing
 a stage this viewer wrote gives back the exact keys rather than a baked mess.
 """
 
+import contextlib
 import json
 import math
 import os
+import threading
+import time as _time
+from collections import OrderedDict
 
 USD_EXTS = {".usd", ".usda", ".usdc", ".usdz"}
 
@@ -708,19 +712,25 @@ def apply_edits(stage, base, edits):
         path = at(rel)
         if path is None or not isinstance(choices, dict):
             continue
-        prim = stage.OverridePrim(path)
-        for vset, choice in choices.items():
-            if vset and isinstance(choice, str):
-                prim.GetVariantSets().AddVariantSet(str(vset)).SetVariantSelection(choice)
+        try:
+            prim = stage.OverridePrim(path)
+            for vset, choice in choices.items():
+                if vset and isinstance(choice, str):
+                    prim.GetVariantSets().AddVariantSet(str(vset)).SetVariantSelection(choice)
+        except Exception:
+            continue                # inside an instance: nothing may be authored there
     for rel, over in (edits.get("overs") or {}).items():
         path = at(rel)
         if path is None or not isinstance(over, dict):
             continue
-        prim = stage.OverridePrim(path)
-        if over.get("visible") is False:
-            UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
-        if over.get("active") is False:
-            prim.SetActive(False)
+        try:
+            prim = stage.OverridePrim(path)
+            if over.get("visible") is False:
+                UsdGeom.Imageable(prim).CreateVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+            if over.get("active") is False:
+                prim.SetActive(False)
+        except Exception:
+            continue                # inside an instance: nothing may be authored there
 
 
 def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json=None,
@@ -1318,6 +1328,75 @@ def _triangulate(counts, indices):
     return tris
 
 
+# Opened stages, shared for a while. A layout stage opened as a scene becomes
+# one item per model prim, and each asks for its own display copy and its own
+# Outliner tree - hundreds of requests for ONE file (Pixar's Kitchen Set: 425
+# items). Opening the whole stage with its payloads for each took seconds
+# apiece; they now share one open stage per file and set of edits.
+_STAGES = OrderedDict()
+_STAGES_LOCK = threading.Lock()
+STAGE_KEEP = 3          # stages kept open
+STAGE_TTL = 60.0        # seconds: a sublayer changed on disk is seen after this
+
+
+def _file_stamp(path):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+@contextlib.contextmanager
+def shared_stage(path, base=None, edits=None):
+    """The stage at `path`, all payloads loaded, with `edits` authored in its
+    session layer under `base` (a prim path; else the default prim), held for
+    the caller alone while inside the `with`. Reused while the file is unchanged
+    and for at most STAGE_TTL seconds; never written to disk."""
+    _Gf, _Sdf, Usd, _UsdGeom, _Vt = _pxr()
+    path = os.path.abspath(path)
+    ekey = _edits_key(edits)
+    key = (os.path.normcase(path), _file_stamp(path), (base or "") if ekey else "", ekey)
+    now = _time.monotonic()
+    with _STAGES_LOCK:
+        for k in [k for k, v in _STAGES.items() if now - v["at"] > STAGE_TTL and not v["lock"].locked()]:
+            _STAGES.pop(k, None)
+        slot = _STAGES.get(key)
+        if slot is None:
+            slot = {"stage": None, "lock": threading.Lock(), "at": now, "error": None}
+            _STAGES[key] = slot
+            while len(_STAGES) > STAGE_KEEP:
+                _STAGES.popitem(last=False)
+        else:
+            _STAGES.move_to_end(key)
+    with slot["lock"]:
+        if slot["stage"] is None:
+            stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll)
+            if stage is None:
+                with _STAGES_LOCK:
+                    if _STAGES.get(key) is slot:
+                        _STAGES.pop(key, None)
+                raise ValueError(f"could not open {os.path.basename(path)}")
+            if ekey:
+                # The Outliner's changes inside the asset (usd_scene): in the session
+                # layer, so the file is read as it is and shown as it is edited.
+                root = base or (str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else "/")
+                stage.SetEditTarget(stage.GetSessionLayer())
+                apply_edits(stage, root, edits)
+            slot["stage"] = stage
+        yield slot["stage"]
+
+
+def _all_prims(Usd, root=None, stage=None):
+    """Every prim below `root` (or of `stage`), INSIDE instances too: an
+    instanced asset's meshes are instance proxies, which a plain traversal
+    leaves out (an instanced stage drew nothing)."""
+    pred = Usd.TraverseInstanceProxies(Usd.PrimAllPrimsPredicate)
+    if root is not None:
+        return Usd.PrimRange(root, pred)
+    return Usd.PrimRange.Stage(stage, pred)
+
+
 def stage_to_mesh(path, time=None, prim_path=None, edits=None):
     """Visible meshes flattened into (vertices, faces, colors).
 
@@ -1326,68 +1405,63 @@ def stage_to_mesh(path, time=None, prim_path=None, edits=None):
     must not both apply it. Meshes tagged `guide` are skipped.
 
     Triangles, one buffer: a preview of the stage, not a faithful copy of it.
+    Numpy arrays: vertices (N, 3) float, faces (M, 3) int, colors (N, 3) float.
     """
+    import numpy as np
     Gf, _Sdf, Usd, UsdGeom, _Vt = _pxr()
-    stage = Usd.Stage.Open(path, load=Usd.Stage.LoadAll)
-    if stage is None:
-        raise ValueError(f"could not open {os.path.basename(path)}")
-    if edits:
-        # The Outliner's changes inside the asset (usd_scene): in the session
-        # layer, so the file is read as it is and shown as it is edited.
-        base = prim_path or (str(stage.GetDefaultPrim().GetPath()) if stage.GetDefaultPrim() else "/")
-        stage.SetEditTarget(stage.GetSessionLayer())
-        apply_edits(stage, base, edits)
-    when = Usd.TimeCode(time) if time is not None else Usd.TimeCode.EarliestTime()
+    with shared_stage(path, prim_path, edits) as stage:
+        when = Usd.TimeCode(time) if time is not None else Usd.TimeCode.EarliestTime()
+        xform_cache = UsdGeom.XformCache(when)
 
-    vertices, faces, colors = [], [], []
-    xform_cache = UsdGeom.XformCache(when)
+        subtree_root = None
+        to_local = None
+        if prim_path:
+            subtree_root = stage.GetPrimAtPath(prim_path)
+            if not subtree_root or not subtree_root.IsValid():
+                raise ValueError(f"{prim_path} is not in {os.path.basename(path)}")
+            to_local = xform_cache.GetLocalToWorldTransform(subtree_root).GetInverse()
 
-    subtree_root = None
-    to_local = None
-    if prim_path:
-        subtree_root = stage.GetPrimAtPath(prim_path)
-        if not subtree_root or not subtree_root.IsValid():
-            raise ValueError(f"{prim_path} is not in {os.path.basename(path)}")
-        to_local = xform_cache.GetLocalToWorldTransform(subtree_root).GetInverse()
+        verts, tris, cols = [], [], []
+        offset = 0
+        for prim in _all_prims(Usd, subtree_root, stage):
+            mesh = UsdGeom.Mesh(prim)
+            if not mesh or not prim.IsActive():
+                continue
+            imageable = UsdGeom.Imageable(prim)
+            if imageable.ComputeVisibility(when) == UsdGeom.Tokens.invisible:
+                continue
+            if imageable.ComputePurpose() == UsdGeom.Tokens.guide:
+                continue
 
-    prims = Usd.PrimRange(subtree_root) if subtree_root else stage.TraverseAll()
-    for prim in prims:
-        mesh = UsdGeom.Mesh(prim)
-        if not mesh or not prim.IsActive():
-            continue
-        imageable = UsdGeom.Imageable(prim)
-        if imageable.ComputeVisibility(when) == UsdGeom.Tokens.invisible:
-            continue
-        purpose = imageable.ComputePurpose()
-        if purpose == UsdGeom.Tokens.guide:
-            continue
+            points = mesh.GetPointsAttr().Get(when)
+            counts = mesh.GetFaceVertexCountsAttr().Get(when)
+            indices = mesh.GetFaceVertexIndicesAttr().Get(when)
+            if not points or not counts or not indices:
+                continue
 
-        points = mesh.GetPointsAttr().Get(when)
-        counts = mesh.GetFaceVertexCountsAttr().Get(when)
-        indices = mesh.GetFaceVertexIndicesAttr().Get(when)
-        if not points or not counts or not indices:
-            continue
+            matrix = xform_cache.GetLocalToWorldTransform(prim)
+            if to_local is not None:
+                matrix = matrix * to_local
+            # Gf matrices act on row vectors: world = [p, 1] . M
+            m = np.array(matrix, dtype=np.float64).reshape(4, 4)
+            pts = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+            world = pts @ m[:3, :3] + m[3, :3]
+            verts.append(world)
 
-        matrix = xform_cache.GetLocalToWorldTransform(prim)
-        if to_local is not None:
-            matrix = matrix * to_local
-        offset = len(vertices)
-        for p in points:
-            world = matrix.Transform(Gf.Vec3d(p[0], p[1], p[2]))
-            vertices.append((world[0], world[1], world[2]))
+            rgb = (0.6, 0.6, 0.6)
+            display = UsdGeom.Gprim(prim).GetDisplayColorAttr().Get(when)
+            if display:
+                rgb = (display[0][0], display[0][1], display[0][2])
+            cols.append(np.tile(np.asarray(rgb, dtype=np.float64), (len(pts), 1)))
 
-        rgb = (0.6, 0.6, 0.6)
-        display = UsdGeom.Gprim(prim).GetDisplayColorAttr().Get(when)
-        if display:
-            rgb = (display[0][0], display[0][1], display[0][2])
-        colors.extend([rgb] * len(points))
+            faces = _triangulate(list(counts), list(indices))
+            if faces:
+                tris.append(np.asarray(faces, dtype=np.int64).reshape(-1, 3) + offset)
+            offset += len(pts)
 
-        for tri in _triangulate(list(counts), list(indices)):
-            faces.append((tri[0] + offset, tri[1] + offset, tri[2] + offset))
-
-    if not vertices or not faces:
+    if not verts or not tris:
         raise ValueError(f"{os.path.basename(path)} has no visible geometry to show")
-    return vertices, faces, colors
+    return np.concatenate(verts), np.concatenate(tris), np.concatenate(cols)
 
 
 def _cache_path(src, prim_path=None, edits_key=""):
@@ -1424,15 +1498,25 @@ def display_proxy(path, prim_path=None, edits=None):
         return None
     key = _edits_key(edits)
     dst = _cache_path(path, prim_path, key)
-    try:
-        if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
-            return dst
-    except OSError:
-        pass
+    with _BUILD_LOCK:
+        lock = _BUILDS.setdefault(dst, threading.Lock())
+    with lock:                      # the same copy asked for twice is built once
+        try:
+            if os.path.isfile(dst) and os.path.getmtime(dst) >= os.path.getmtime(path):
+                return dst
+        except OSError:
+            pass
+        return _build_proxy(path, prim_path, edits if key else None, dst)
 
+
+_BUILDS = {}
+_BUILD_LOCK = threading.Lock()
+
+
+def _build_proxy(path, prim_path, edits, dst):
     import numpy as np
     import torch
-    vertices, faces, colors = stage_to_mesh(path, prim_path=prim_path, edits=edits if key else None)
+    vertices, faces, colors = stage_to_mesh(path, prim_path=prim_path, edits=edits)
 
     from comfy_extras.nodes_save_3d import save_glb
     save_glb(
