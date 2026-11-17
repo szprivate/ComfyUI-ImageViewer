@@ -86,6 +86,15 @@ export const ModelMixin = {
                 // The menu bar over the canvas (imageViewer_previzMenuBar.js) and the panes' menus.
                 buildMenuBar: (host) => this.previzBuildMenuBar(host),
                 openMenu: (entries, x, y, anchor) => this._previzOpenMenu(entries, x, y, anchor),
+                // A pane looks through a camera dragged onto it from the Outliner (imageViewer_view3dPanes.js).
+                draggedCamera: () => {
+                    const id = this._previzDragItem;
+                    const scene = id && this.previzScene && this.previzScene();
+                    const it = scene && (scene.items || []).find((i) => i.id === id);
+                    return it && it.kind === "camera" ? id : null;
+                },
+                // The main perspective view looks through a camera: the scene's own, as Look through.
+                onLookThrough: (id) => this.previzLookThroughSet(id),
             });
         }
         return this._model3d;

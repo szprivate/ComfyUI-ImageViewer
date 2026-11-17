@@ -14,12 +14,25 @@
 // gizmo and the view's own picking then work in that pane unchanged.
 //
 // A flat view does not tumble: Alt + left pans it, the wheel zooms it.
+//
+// Several perspective views (Sebastian 2026-11-17): besides "persp" - the
+// free camera, or the scene camera looked through - "persp2" .. "persp4" are
+// perspective views of their own, each with its own free camera, or looking
+// through a scene camera of its own (the pane menu's Look through, or a
+// camera dragged from the Outliner onto the pane). Each pane also has its own
+// shading (`shading[slot]`): the toolbar's Shading, the View menu and the keys
+// set the ACTIVE pane's, the pane menu any pane's. Path traced shading traces
+// one pane at a time (the active one when it is path traced, else the one it
+// traced last), the others draw raster.
 // Clean-room: written from how the layouts behave, no code from any program.
 
 const KEY = "imageviewer.viewer.view3dPanes";
 
 export const PANE_VIEWS = [
     ["persp", "Perspective"],
+    ["persp2", "Perspective 2"],
+    ["persp3", "Perspective 3"],
+    ["persp4", "Perspective 4"],
     ["top", "Top"],
     ["front", "Front"],
     ["right", "Right"],
@@ -47,6 +60,17 @@ export const PANE_LAYOUTS = [
 ];
 
 const SLOTS = { single: 1, "2h": 2, "2v": 2, "3": 3, quad: 4 };
+
+/** Whether a view kind is a perspective one ("persp", "persp2" ...). Pure. */
+export const isPerspKind = (kind) => /^persp\d?$/.test(String(kind || ""));
+
+/** The perspective views that have a camera of their own (not the scene's free camera). */
+export const EXTRA_PERSP = ["persp2", "persp3", "persp4"];
+
+// Where an extra perspective view looks from at first, from the scene's middle.
+const PERSP_FROM = { persp2: [-1, 0.55, 1], persp3: [1, 0.55, -1], persp4: [-1, 0.55, -1] };
+
+const finite3 = (v) => Array.isArray(v) && v.length === 3 && v.every((x) => Number.isFinite(Number(x)));
 const GAP = 2;      // px between panes: the divider you drag
 
 /**
@@ -79,11 +103,34 @@ export function paneRects(layout, split, W, H, focus = 0) {
     }
 }
 
-/** The state as it is kept, made whole. Pure. */
-export function cleanPaneState(s) {
+/**
+ * The state as it is kept, made whole. Pure. `modes`: the shading modes there
+ * are (a pane's shading is kept only when it is one of them; null = not set).
+ * `shading[slot]`: a pane's shading; `through[kind]`: the scene camera an extra
+ * perspective view looks through; `cams[kind]`: where its own camera stands.
+ */
+export function cleanPaneState(s, modes = null) {
     const kinds = PANE_VIEWS.map(([k]) => k);
-    const out = { layout: "single", split: [0.5, 0.5], views: ["top", "persp", "front", "right"], focus: 1 };
+    const out = { layout: "single", split: [0.5, 0.5], views: ["top", "persp", "front", "right"], focus: 1,
+                  shading: [null, null, null, null], through: {}, cams: {} };
     if (!s || typeof s !== "object") return out;
+    if (Array.isArray(s.shading) && s.shading.length === 4) {
+        out.shading = s.shading.map((m) => (typeof m === "string" && (!modes || modes.includes(m)) ? m : null));
+    }
+    if (s.through && typeof s.through === "object") {
+        for (const k of EXTRA_PERSP) {
+            const id = s.through[k];
+            if (typeof id === "string" && id && id.length < 200) out.through[k] = id;
+        }
+    }
+    if (s.cams && typeof s.cams === "object") {
+        for (const k of EXTRA_PERSP) {
+            const c = s.cams[k];
+            if (!c || !finite3(c.position) || !finite3(c.target)) continue;
+            out.cams[k] = { position: c.position.map(Number), target: c.target.map(Number) };
+            if (Number.isFinite(Number(c.fov)) && c.fov > 1 && c.fov < 179) out.cams[k].fov = Number(c.fov);
+        }
+    }
     if (SLOTS[s.layout]) out.layout = s.layout;
     if (Array.isArray(s.split) && s.split.length === 2) {
         out.split = s.split.map((v) => Math.min(0.9, Math.max(0.1, Number(v) || 0.5)));
@@ -93,6 +140,16 @@ export function cleanPaneState(s) {
     if (!out.views.includes("persp")) out.views[0] = "persp";
     if (Number.isInteger(s.focus) && s.focus >= 0 && s.focus < 4) out.focus = s.focus;
     return out;
+}
+
+/**
+ * The perspective view a camera dropped on pane `slot` goes into: the pane's
+ * own when it is a perspective one, else the first extra perspective view not
+ * on screen (`shown`: the views of the panes on screen), else "persp2". Pure.
+ */
+export function perspForDrop(views, slot, shown) {
+    if (isPerspKind(views[slot])) return views[slot];
+    return EXTRA_PERSP.find((k) => !shown.includes(k)) || EXTRA_PERSP[0];
 }
 
 /** Show `kind` in `slot`: a view is in one pane only, so the pane that had it takes this one's. Pure. */
@@ -141,17 +198,136 @@ export const View3DPanesMixin = {
         if (!this._panes) {
             let saved = null;
             try { saved = JSON.parse(this.win.localStorage.getItem(KEY) || "null"); } catch (_) { /* none */ }
-            this._panes = cleanPaneState(saved);
-            this._panes.active = this._panes.focus;
+            const modes = this.materialModes ? this.materialModes().map(([m]) => m) : null;
+            const s = this._panes = cleanPaneState(saved, modes);
+            s.active = s.focus;
+            // Each pane's shading: what it had, else the viewer's. One view on its own
+            // starts as the Settings say, as it always did.
+            s.shading = s.shading.map((m) => m || this.materialMode);
+            if (s.layout === "single") s.shading[s.focus] = this.materialMode;
+            else if (s.shading[s.active] !== this.materialMode) {
+                // Made before anything is drawn (_buildDom): the looks go on as the meshes come.
+                this.materialMode = s.shading[s.active];
+            }
         }
         return this._panes;
     },
 
     _paneSave() {
         const s = this._paneState();
+        this._paneKeepCams();
         try {
-            this.win.localStorage.setItem(KEY, JSON.stringify({ layout: s.layout, split: s.split, views: s.views, focus: s.focus }));
+            this.win.localStorage.setItem(KEY, JSON.stringify({ layout: s.layout, split: s.split, views: s.views, focus: s.focus,
+                                                                shading: s.shading, through: s.through, cams: s.cams }));
         } catch (_) { /* private window */ }
+    },
+
+    /** Where the extra perspective views' own cameras stand, into the state (kept with it). */
+    _paneKeepCams() {
+        const s = this._paneState();
+        if (!this._paneCams || !this.controls) return;
+        const kind = this.paneActiveKind();
+        if (this._paneCams[kind] && this.controls.object === this._paneCams[kind].cam) this._paneCams[kind].target.copy(this.controls.target);
+        for (const k of EXTRA_PERSP) {
+            const c = this._paneCams[k];
+            if (!c) continue;
+            s.cams[k] = { position: c.cam.position.toArray(), target: c.target.toArray(), fov: c.cam.fov };
+        }
+    },
+
+    /** The navigation ended in an extra perspective view: keep where its camera stands. */
+    _paneCamMoved() {
+        if (EXTRA_PERSP.includes(this.paneActiveKind()) && !this.paneThroughId()) this._paneSave();
+    },
+
+    /**
+     * The scene camera the pane showing `kind` looks through (the active pane's by
+     * default), or null: the free camera, a flat view, or a camera that is gone.
+     */
+    paneThroughId(kind = this.paneActiveKind()) {
+        if (this._walk) return null;
+        if (kind === "persp") return (this.scene3d && this.scene3d.activeCamera) || null;
+        if (!EXTRA_PERSP.includes(kind)) return null;
+        const id = this._paneState().through[kind];
+        const entry = id && this._entries && this._entries.get(id);
+        return entry && entry.camera ? id : null;
+    },
+
+    /** The shading of pane `slot`. */
+    paneShading(slot) {
+        const s = this._paneState();
+        return s.shading[slot] || this.materialMode;
+    },
+
+    /** Set pane `slot`'s shading; the active pane's is the viewer's own (setMaterialMode). */
+    setPaneShading(slot, mode) {
+        const s = this._paneState();
+        if (slot === s.active) { this.setMaterialMode(mode); return; }
+        if (this.materialModes && !this.materialModes().some(([m]) => m === mode)) return;
+        s.shading[slot] = mode;
+        this._paneSave();
+        if (mode === "pathtraced" && this._ptModeChanged) this._ptModeChanged();
+        // The "Path traced" note goes when no pane is traced any more.
+        if (this._ptBadge) this._ptBadge();
+        this._panePlace();
+        this.requestRender();
+    },
+
+    /** Called by setMaterialMode: the active pane takes the mode. */
+    _paneShadeSet(mode) {
+        const s = this._paneState();
+        if (s.shading[s.active] === mode) return;
+        s.shading[s.active] = mode;
+        this._paneSave();
+        this._panePlace();
+    },
+
+    /** Put `mode`'s look on every mesh (for drawing one pane); cheap when it is on already. */
+    _paneLook(mode) {
+        if ((this._lookApplied || this.materialMode) === mode || !this._originals) return;
+        for (const [mesh, original] of this._originals) this._lookOn(mesh, original, mode);
+        this._lookApplied = mode;
+    },
+
+    /**
+     * The pane path traced shading traces now, or -1: the active pane when it is
+     * path traced, else the one traced last while it still is, else the first.
+     */
+    _paneTracedSlot() {
+        const s = this._paneState();
+        const on = this._paneRects().filter((p) => p.w >= 2 && p.h >= 2).map((p) => p.slot);
+        const traced = (slot) => on.includes(slot) && this.paneShading(slot) === "pathtraced";
+        if (traced(s.active)) return (this._ptPane = s.active);
+        if (Number.isInteger(this._ptPane) && traced(this._ptPane)) return this._ptPane;
+        const first = on.find(traced);
+        return (this._ptPane = first === undefined ? -1 : first);
+    },
+
+    /**
+     * Let pane `slot` look through scene camera `id` (null: its own free camera).
+     * A flat pane becomes a perspective view for it; the main perspective view
+     * looks through it as Look through does (the scene's camera, hooks.onLookThrough).
+     */
+    paneLookThrough(slot, id) {
+        const s = this._paneState();
+        const entry = id ? this._entries.get(id) : null;
+        if (id && !(entry && entry.camera)) return false;
+        const shown = this._paneRects().map((p) => p.kind);
+        const kind = perspForDrop(s.views, slot, shown);
+        if (s.views[slot] !== kind) this.setPaneView(slot, kind);
+        this._paneActivate(slot);
+        if (kind === "persp") {
+            if (this.hooks.onLookThrough) this.hooks.onLookThrough(id || null);
+            else this.setActiveCamera(id || null);
+        } else {
+            if (id) s.through[kind] = id;
+            else delete s.through[kind];
+            this._paneSave();
+            this._paneBindControls();
+        }
+        this._panePlace();
+        this.requestRender();
+        return true;
     },
 
     /** The view in the active pane: "persp", "top", ... */
@@ -160,7 +336,13 @@ export const View3DPanesMixin = {
         return s.views[s.active] || "persp";
     },
 
+    /** The active pane is a flat view (top, front ...). */
     _paneOrthoActive() {
+        return !this._walk && !this._rendering && !isPerspKind(this.paneActiveKind());
+    },
+
+    /** The active pane draws through a camera of its own (a flat view, an extra perspective view). */
+    _paneOwnCamActive() {
         return !this._walk && !this._rendering && this.paneActiveKind() !== "persp";
     },
 
@@ -199,9 +381,92 @@ export const View3DPanesMixin = {
         return c;
     },
 
+    /**
+     * The own camera of an extra perspective view: made on first use, where it
+     * stood last time or framed on the scene from its own side.
+     */
+    _panePersp(kind) {
+        if (!this._paneCams) this._paneCams = {};
+        let c = this._paneCams[kind];
+        if (c) return c;
+        const { THREE } = this.libs;
+        const base = this.camera;
+        const cam = new THREE.PerspectiveCamera(base ? base.fov : 35, 1, base ? base.near : 0.01, base ? base.far : 1e5);
+        c = { cam, target: new THREE.Vector3(), persp: true };
+        this._paneCams[kind] = c;
+        const kept = this._paneState().cams[kind];
+        if (kept) {
+            cam.position.fromArray(kept.position);
+            c.target.fromArray(kept.target);
+            if (kept.fov) cam.fov = kept.fov;
+            cam.far = Math.max(cam.far, cam.position.distanceTo(c.target) * 100);
+            cam.lookAt(c.target);
+        } else {
+            const box = new THREE.Box3();
+            const subject = this._sceneBoundsSubject && this._sceneBoundsSubject();
+            if (subject) box.setFromObject(subject);
+            if (box.isEmpty()) box.set(new THREE.Vector3(-1, 0, -1), new THREE.Vector3(1, 2, 1));
+            const size = box.getSize(new THREE.Vector3());
+            const maxDim = Math.max(size.x, size.y, size.z) || 1;
+            const center = box.getCenter(new THREE.Vector3());
+            const dir = new THREE.Vector3(...(PERSP_FROM[kind] || [1, 0.55, 1])).normalize();
+            cam.position.copy(center).addScaledVector(dir, maxDim * 2.4);
+            cam.near = Math.min(0.01, maxDim / 1000);
+            cam.far = Math.max(10000, maxDim * 100);
+            c.target.copy(center);
+            cam.lookAt(center);
+        }
+        cam.updateProjectionMatrix();
+        return c;
+    },
+
     /** The camera a pane draws through. */
     _paneCamera(kind) {
-        return kind === "persp" ? this._perspCameraObject() : this._paneOrtho(kind).cam;
+        if (kind === "persp") return this._perspCameraObject();
+        if (EXTRA_PERSP.includes(kind)) {
+            const id = this.paneThroughId(kind);
+            return id ? this._entries.get(id).camera : this._panePersp(kind).cam;
+        }
+        return this._paneOrtho(kind).cam;
+    },
+
+    /** Where the orbit controls circle in the pane showing `kind`. */
+    _paneTarget(kind) {
+        if (kind === "persp") return this._perspTarget || this.controls.target;
+        if (EXTRA_PERSP.includes(kind)) {
+            const id = this.paneThroughId(kind);
+            if (id) {
+                // Looking through a scene camera: in front of it, as Look through puts it.
+                const { THREE } = this.libs;
+                const entry = this._entries.get(id);
+                if (entry.aimTarget) return entry.aimTarget.clone();
+                const cam = entry.camera;
+                const pos = cam.getWorldPosition(new THREE.Vector3());
+                const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+                const d = Math.max(1, this.controls.target.distanceTo(pos));
+                return pos.addScaledVector(fwd, d);
+            }
+            return this._panePersp(kind).target;
+        }
+        return this._paneOrtho(kind).target;
+    },
+
+    /** Remember where the controls circle for the view `kind` before they go to another pane. */
+    _paneKeepTarget(kind) {
+        if (!this.controls) return;
+        if (kind === "persp") this._perspTarget = this.controls.target.clone();
+        else if (this._paneCams && this._paneCams[kind] && !this.paneThroughId(kind)) this._paneCams[kind].target.copy(this.controls.target);
+    },
+
+    /** A pane's name on its label: the camera it looks through, Persp, Persp 2, Top ... */
+    _paneName(kind) {
+        if (isPerspKind(kind)) {
+            const id = this.paneThroughId(kind);
+            const entry = id && this._entries.get(id);
+            if (entry && entry.item) return entry.item.name;
+            return kind === "persp" ? "Persp" : `Persp ${kind.slice(5)}`;
+        }
+        return (PANE_VIEWS.find(([k]) => k === kind) || [kind, kind])[1];
     },
 
     /** Fit a flat view onto `box` (keeps its direction). */
@@ -255,12 +520,12 @@ export const View3DPanesMixin = {
         const s = this._paneState();
         if (slot === s.active || slot < 0) return;
         const before = this.paneActiveKind();
-        if (this.controls) {
-            if (before === "persp") this._perspTarget = this.controls.target.clone();
-            else if (this._paneCams && this._paneCams[before]) this._paneCams[before].target.copy(this.controls.target);
-        }
+        this._paneKeepTarget(before);
         s.active = slot;
         if (s.layout !== "single") s.focus = slot;
+        // The viewer's shading is the active pane's.
+        const mode = this.paneShading(slot);
+        if (mode !== this.materialMode && this.setMaterialMode) this.setMaterialMode(mode);
         this._paneBindControls();
         this._panePlace();
     },
@@ -270,10 +535,10 @@ export const View3DPanesMixin = {
         if (!this.controls || !this.libs) return;
         const kind = this.paneActiveKind();
         const cam = this.activeCameraObject();
-        const target = kind === "persp" ? (this._perspTarget || this.controls.target) : this._paneOrtho(kind).target;
+        const target = this._paneTarget(kind);
         this.controls.object = cam;
         this.controls.target.copy(target);
-        this.controls.enableRotate = kind === "persp";
+        this.controls.enableRotate = isPerspKind(kind);
         this.controls.update();
         this._paneGizmoFit(cam, this._paneActiveBox());
         this._applyNavButtons(false);
@@ -378,10 +643,18 @@ export const View3DPanesMixin = {
         r.clear();
         r.setClearColor(cc, ca);
         r.setScissorTest(true);
-        const active = this._paneState().active;
+        const tracedSlot = this._paneTracedSlot();
+        // A camera's frustum is drawn in every pane but the one looking through it.
+        const helpers = [];
+        for (const e of this._entries.values()) if (e.camera && e.helper) helpers.push(e);
+        const showHelpers = (throughId) => {
+            for (const e of helpers) e.helper.visible = e.helperShown !== false && e.item.id !== throughId;
+        };
         for (const p of this._paneRects()) {
             if (p.w < 2 || p.h < 2) continue;
             const cam = this._paneCamera(p.kind);
+            showHelpers(this.paneThroughId(p.kind));
+            this._paneLook(this.paneShading(p.slot));
             this._paneFitCam(cam, p.kind, p.w, p.h);
             r.setViewport(p.x, H - p.y - p.h, p.w, p.h);
             r.setScissor(p.x, H - p.y - p.h, p.w, p.h);
@@ -394,13 +667,17 @@ export const View3DPanesMixin = {
             this._paneGizmoFit(cam, p);
             this._dispApply(cam);
             // Path traced shading traces the active pane (imageViewer_view3dPathTrace.js); null = raster.
-            const traced = p.slot === active && this._ptViewportTick ? this._ptViewportTick(cam, p) : null;
+            if (p.slot === tracedSlot) this._ptPaneName = this._paneName(p.kind);
+            const traced = p.slot === tracedSlot && this._ptViewportTick ? this._ptViewportTick(cam, p) : null;
             if (traced === null) r.render(this.scene, cam);
             else if (traced) this._ptMore = true;
         }
         r.setScissorTest(false);
         r.setViewport(0, 0, W, H);
         if (grid && rot) grid.rotation.copy(rot);
+        // Back to the active pane's look and frustums: what picking and the rest of the frame see.
+        this._paneLook(this.materialMode);
+        showHelpers(this.paneThroughId());
         // The perspective camera's aspect goes back to the active pane's, which picking reads,
         // and the gizmos' handles to how that pane drew them, which the hover and press test.
         const act = this._paneActiveBox();
@@ -436,11 +713,7 @@ export const View3DPanesMixin = {
     setPaneView(slot, kind) {
         const s = this._paneState();
         if (!PANE_VIEWS.some(([k]) => k === kind)) return;
-        const before = this.paneActiveKind();
-        if (this.controls) {
-            if (before === "persp") this._perspTarget = this.controls.target.clone();
-            else if (this._paneCams && this._paneCams[before]) this._paneCams[before].target.copy(this.controls.target);
-        }
+        this._paneKeepTarget(this.paneActiveKind());
         s.views = setSlotView(s.views, slot, kind);
         this._paneSave();
         this._paneBindControls();
@@ -502,9 +775,12 @@ export const View3DPanesMixin = {
             label.onclick = (e) => { e.stopPropagation(); this._paneMenu(p.slot, label); };
             label.addEventListener("pointerdown", (e) => e.stopPropagation());
             const axes = this._paneAxesBuild(p.slot);
-            box.append(label, axes.svg);
+            const shade = d.createElement("span");
+            shade.className = "model-pane-shade";
+            shade.style.display = "none";
+            box.append(label, shade, axes.svg);
             layer.append(box);
-            this._paneEls[p.slot] = { box, label, axes };
+            this._paneEls[p.slot] = { box, label, shade, axes };
         }
         const dividers = [];
         if (s.layout === "2h" || s.layout === "3" || s.layout === "quad") dividers.push("x");
@@ -540,6 +816,34 @@ export const View3DPanesMixin = {
             this.stage.addEventListener("pointerdown", pick, true);
             this.stage.addEventListener("pointermove", pick, true);
             this.stage.addEventListener("wheel", pick, { capture: true, passive: true });
+            // A camera dragged from the Outliner onto a pane: that pane looks through it (Sebastian 2026-11-17).
+            const camOf = () => (this.hooks.draggedCamera ? this.hooks.draggedCamera() : null);
+            const mark = (slot) => {
+                for (const [k, el] of Object.entries(this._paneEls || {})) el.box.classList.toggle("drop-camera", Number(k) === slot);
+            };
+            this.stage.addEventListener("dragover", (e) => {
+                if (!camOf()) return;
+                const slot = this._paneAt(e.clientX, e.clientY);
+                if (slot < 0) { mark(-1); return; }
+                e.preventDefault();
+                e.stopPropagation();
+                // "move": what the Outliner's rows allow (another effect would refuse the drop).
+                try { e.dataTransfer.dropEffect = "move"; } catch (_) { /* read-only */ }
+                mark(slot);
+            });
+            this.stage.addEventListener("dragleave", (e) => {
+                if (!e.relatedTarget || !this.stage.contains(e.relatedTarget)) mark(-1);
+            });
+            this.stage.addEventListener("drop", (e) => {
+                const id = camOf();
+                mark(-1);
+                if (!id) return;
+                const slot = this._paneAt(e.clientX, e.clientY);
+                if (slot < 0) return;
+                e.preventDefault();
+                e.stopPropagation();
+                this.paneLookThrough(slot, id);
+            });
         }
         this._panePlace();
     },
@@ -550,13 +854,10 @@ export const View3DPanesMixin = {
         const s = this._paneState();
         const px = (v) => `${Math.round(v)}px`;
         const many = s.layout !== "single";
-        const name = (kind) => {
-            if (kind === "persp") {
-                const id = this.scene3d && this.scene3d.activeCamera;
-                const entry = id && this._entries.get(id);
-                return entry && entry.item ? entry.item.name : "Persp";
-            }
-            return (PANE_VIEWS.find(([k]) => k === kind) || [kind, kind])[1];
+        const name = (kind) => this._paneName(kind);
+        const shadeLabel = (m) => {
+            const row = this.materialModes ? this.materialModes().find(([v]) => v === m) : null;
+            return row ? row[1] : m;
         };
         for (const p of this._paneRects()) {
             const el = this._paneEls && this._paneEls[p.slot];
@@ -565,6 +866,14 @@ export const View3DPanesMixin = {
             el.box.classList.toggle("active", many && p.slot === s.active);
             el.box.dataset.kind = p.kind;
             el.label.textContent = `${name(p.kind)} ▾`;
+            // Each pane's own shading, said on it when the panes do not all look alike.
+            const mode = this.paneShading(p.slot);
+            el.box.dataset.shading = mode;
+            if (el.shade) {
+                const differs = many && this._paneRects().some((q) => this.paneShading(q.slot) !== mode);
+                el.shade.textContent = differs ? shadeLabel(mode) : "";
+                el.shade.style.display = differs ? "" : "none";
+            }
         }
         const W = this.stage.clientWidth, H = this.stage.clientHeight;
         const dx = this._paneDividers && this._paneDividers.x;
@@ -667,7 +976,7 @@ export const View3DPanesMixin = {
         const g = e.target.closest && e.target.closest("[data-axis]");
         const axis = g && g.dataset.axis;
         const win = this.win;
-        const persp = this.paneActiveKind() === "persp";
+        const persp = isPerspKind(this.paneActiveKind());
         const start = { x: e.clientX, y: e.clientY };
         let dragging = false;
         const id = e.pointerId;
@@ -697,7 +1006,7 @@ export const View3DPanesMixin = {
     lookAlongAxis(axis, slot = this._paneState().active) {
         if (!this.libs || !this.controls) return;
         this._paneActivate(slot);
-        if (this.paneActiveKind() !== "persp") {
+        if (!isPerspKind(this.paneActiveKind())) {
             this.setPaneView(slot, AXIS_VIEW[axis]);
             return;
         }
@@ -743,9 +1052,27 @@ export const View3DPanesMixin = {
         this._paneActivate(slot);
         const s = this._paneState();
         const kind = s.views[slot];
-        const entries = PANE_VIEWS.map(([k, label]) => ({
-            label: (k === kind ? "✓ " : "") + label, run: () => this.setPaneView(slot, k),
+        const tick = (on, label) => (on ? "✓ " : "") + label;
+        const entries = PANE_VIEWS.map(([k, label], i) => ({
+            label: tick(k === kind, label), run: () => this.setPaneView(slot, k),
         }));
+        // Perspective views first, then the flat ones.
+        entries.splice(PANE_VIEWS.findIndex(([k]) => !isPerspKind(k)), 0, "-");
+        entries.push("-");
+        if (isPerspKind(kind)) {
+            const through = this.paneThroughId(kind);
+            const cams = ((this.scene3d && this.scene3d.items) || []).filter((it) => it.kind === "camera" && this._entries.get(it.id));
+            entries.push({ label: "Look through", sub: [
+                { label: tick(!through, kind === "persp" ? "Free camera" : "Own camera"), run: () => this.paneLookThrough(slot, null) },
+                ...(cams.length ? ["-"] : []),
+                ...cams.map((it) => ({ label: tick(through === it.id, it.name), run: () => this.paneLookThrough(slot, it.id) })),
+            ] });
+        }
+        if (this.materialModes) {
+            const mode = this.paneShading(slot);
+            entries.push({ label: "Shading", sub: this.materialModes().map(([m, label]) => ({
+                label: tick(mode === m, label), run: () => this.setPaneShading(slot, m) })) });
+        }
         entries.push("-");
         entries.push({ label: s.layout === "single" ? "Show all views" : "Maximise this view",
                        run: () => this.togglePaneMaximised(slot) });

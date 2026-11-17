@@ -17,7 +17,7 @@
 import { api } from "../../scripts/api.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { app } from "../../scripts/app.js";
-import { evaluateIn, cameraResolution, offsetOf, planeSettings } from "./imageViewer_scene3d.js";
+import { evaluateIn, cameraResolution, offsetOf, planeSettings, locatorSize } from "./imageViewer_scene3d.js";
 // The clip sequencer registers itself with the scene model on import (evaluateIn plays its clips).
 import "./imageViewer_clipSeqData.js";
 // Animation layers register their blend with the scene model on import.
@@ -142,6 +142,10 @@ export function modelFormatOf(frame) {
 // textures) are requested under this prefix; the view's resolver maps them to
 // a real URL next to the model.
 const RES_PREFIX = "imageviewer-res/";
+
+// A locator's cross, and the same while it is selected.
+const LOCATOR_COLOR = 0x6fd0ff;
+const LOCATOR_SELECTED = 0xffffff;
 
 export const MATERIAL_MODES = [
     ["original", "Original"], ["clay", "Clay"], ["normal", "Normal"], ["wireframe", "Wireframe"],
@@ -466,9 +470,9 @@ export class Model3DView {
         // follow the tumble) and the full update — panel, node widget, saved
         // state — lands once the drag ends.
         const reportCamera = (live) => {
-            const id = this.scene3d && this.scene3d.activeCamera;
-            // A flat view's camera is its own, not the scene's.
-            if (!id || !this.hooks.onCameraMoved || this._paneOrthoActive()) return;
+            // The scene camera the active pane looks through; a flat view's camera is its own.
+            const id = this.paneThroughId();
+            if (!id || !this.hooks.onCameraMoved) return;
             const entry = this._entries.get(id);
             this.hooks.onCameraMoved(id, this._aimReported(id, this.readTransform(this.activeCameraObject(),
                                                             entry && entry.item)), live);
@@ -487,6 +491,7 @@ export class Model3DView {
         controls.addEventListener("end", () => {
             this._navigating = false;
             reportCamera(false);
+            if (this._paneCamMoved) this._paneCamMoved();
         });
         controls.update();
         this.controls = controls;
@@ -855,7 +860,8 @@ export class Model3DView {
      * own, imageViewer_view3dPanes.js), else the perspective one.
      */
     activeCameraObject() {
-        if (this.libs && this._paneOrthoActive && this._paneOrthoActive()) return this._paneOrtho(this.paneActiveKind()).cam;
+        // A flat view's, or an extra perspective view's (its own, or the scene camera it looks through).
+        if (this.libs && this._paneOwnCamActive && this._paneOwnCamActive()) return this._paneCamera(this.paneActiveKind());
         return this._perspCameraObject();
     }
 
@@ -1147,12 +1153,13 @@ export class Model3DView {
         cam.updateProjectionMatrix();
         // Reframing through a scene camera moves that camera, so the scene has
         // to hear about it.
-        if (cam !== this.camera && this.hooks.onCameraMoved) {
-            const moved = this._entries.get(this.scene3d.activeCamera);
+        const throughId = this.paneThroughId();
+        if (throughId && this.hooks.onCameraMoved) {
+            const moved = this._entries.get(throughId);
             const t = this.readTransform(cam, moved && moved.item);
             // A camera with a look-at target now looks at the middle of the scene.
             if (moved && moved.aimTarget) t.aimTarget = center.toArray();
-            this.hooks.onCameraMoved(this.scene3d.activeCamera, t);
+            this.hooks.onCameraMoved(throughId, t);
         }
 
         // ComfyUI's grid is a fixed 20 units. Scaled by powers of ten here, so a
@@ -1170,9 +1177,17 @@ export class Model3DView {
         this.requestRender();
     }
 
+    /** The shading modes, as [value, label] (the panes' menus read them). */
+    materialModes() {
+        return MATERIAL_MODES;
+    }
+
     setMaterialMode(mode) {
         this.materialMode = MATERIAL_MODES.some(([v]) => v === mode) ? mode : "original";
         for (const [mesh, original] of this._originals) this._lookOn(mesh, original);
+        this._lookApplied = this.materialMode;
+        // In a split layout this is the active pane's shading (imageViewer_view3dPanes.js).
+        if (this._paneShadeSet) this._paneShadeSet(this.materialMode);
         if (this._ptModeChanged) this._ptModeChanged();
         this._syncToolbar();
         this.requestRender();
@@ -1188,14 +1203,14 @@ export class Model3DView {
         this._lookOn(mesh, material);
     }
 
-    _lookOn(mesh, original) {
+    _lookOn(mesh, original, mode = this.materialMode) {
         // An image plane keeps its picture: clay or normals would show
         // something that is not the picture, which is the whole point of it.
         // A splat's bounds box stays unseen whatever the look.
         if (mesh.name === "imageplane" || mesh.name === "splatbounds") return;
         // A templated item keeps its wire, whatever the look of the rest.
         if (this._templated && this._templated.has(mesh)) return;
-        const look = this.materials && this.materials[this.materialMode];
+        const look = this.materials && this.materials[mode];
         mesh.material = look || original;      // original, path traced, or no look made yet
     }
 
@@ -1452,6 +1467,13 @@ export class Model3DView {
         }
         this._entries.set(item.id, entry);
         this._reparent(entry);
+
+        if (item.kind === "group" && item.locator) {
+            // A locator: a cross of three lines to see and to click, sized by
+            // its Size (applyFrame) and not by its scale, which its children take.
+            this._buildLocator(entry, item);
+            return entry;
+        }
 
         if (item.kind === "group") {
             // Something to see and to grab: a small set of axes, the size of
@@ -1816,6 +1838,7 @@ export class Model3DView {
             }
             // A camera with its look-at on faces its target (imageViewer_cameraAim3d.js).
             if (entry.camera) this._aimApply(entry);
+            if (entry.locator) entry.locator.scale.setScalar(locatorSize(item));
             const shownByLayer = !(layers.get(item.id) && !layers.get(item.id).visible);
             entry.root.visible = item.visible !== false && this._visibleInTree(item) && shownByLayer;
             if (entry.camera) {
@@ -1824,7 +1847,9 @@ export class Model3DView {
                 // frustum lines across the shot.
                 const active = item.id === activeId;
                 if (entry.helper) {
-                    entry.helper.visible = !active && item.visible !== false && shownByLayer;
+                    // Split panes show it in every pane but the one looking through it (_paneRenderAll).
+                    entry.helperShown = item.visible !== false && shownByLayer;
+                    entry.helper.visible = !active && entry.helperShown;
                     entry.helper.update();
                 }
             }
@@ -2371,12 +2396,40 @@ export class Model3DView {
         this.gizmoHelper = helper;
     }
 
+    /** A locator's cross: three lines through its middle, a short tick on each positive end. */
+    _buildLocator(entry, item) {
+        const { THREE } = this.libs;
+        const pts = [];
+        const seg = (a, b) => pts.push(new THREE.Vector3(...a), new THREE.Vector3(...b));
+        seg([-1, 0, 0], [1, 0, 0]);
+        seg([0, -1, 0], [0, 1, 0]);
+        seg([0, 0, -1], [0, 0, 1]);
+        // A small diamond round the middle, so it reads as a point from any side.
+        const d = 0.18;
+        for (const [a, b] of [[[d, 0, 0], [0, d, 0]], [[0, d, 0], [-d, 0, 0]], [[-d, 0, 0], [0, -d, 0]], [[0, -d, 0], [d, 0, 0]],
+                              [[0, 0, d], [0, d, 0]], [[0, d, 0], [0, 0, -d]], [[0, 0, -d], [0, -d, 0]], [[0, -d, 0], [0, 0, d]]]) seg(a, b);
+        const geo = new THREE.BufferGeometry().setFromPoints(pts);
+        const mat = new THREE.LineBasicMaterial({ color: LOCATOR_COLOR, toneMapped: false, fog: false });
+        const glyph = new THREE.LineSegments(geo, mat);
+        glyph.name = "locator";
+        glyph.userData.imageViewerItemId = item.id;
+        glyph.userData.imageViewerLocator = true;
+        glyph.userData.imageViewerNoShadow = true;
+        glyph.scale.setScalar(locatorSize(item));
+        this._bodyOf(entry).add(glyph);
+        entry.object = glyph;
+        entry.locator = glyph;
+        entry.stats = { format: "locator" };
+    }
+
     _syncSelection() {
         const entry = this.selected ? this._entries.get(this.selected) : null;
         // A group has nothing to draw, so its axes stand in for it — and only
         // while it is the thing being moved.
         for (const e of this._entries.values()) {
             if (e.axes) e.axes.visible = (e === entry);
+            // A locator lights up while it is selected.
+            if (e.locator) e.locator.material.color.set(e === entry ? LOCATOR_SELECTED : LOCATOR_COLOR);
         }
         this._rigSyncHighlight();
         // No scene, or nothing selected: no gizmo to show.
@@ -2591,6 +2644,8 @@ export class Model3DView {
             for (const entry of this._entries.values()) {
                 hide(entry.helper);
                 hide(entry.axes);
+                // A locator is a handle: only in a render that keeps the helpers.
+                hide(entry.locator);
                 // A light's glyph is for finding it; its light is what the picture gets.
                 if (entry.item && entry.item.kind === "light" && entry.object) {
                     for (const c of entry.object.children) if (c.userData.imageViewerLightGlyph) hide(c);

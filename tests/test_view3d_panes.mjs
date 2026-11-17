@@ -41,3 +41,29 @@ test("the axes turn with the camera", () => {
     assert.ok(turned.x.depth > 0.99);
     assert.ok(turned["-z"].x > 69);
 });
+
+test("any pane can be a perspective view: four of them, each its own", async () => {
+    const { PANE_VIEWS, isPerspKind, perspForDrop } = await import("../js/imageViewer_view3dPanes.js");
+    const persp = PANE_VIEWS.map(([k]) => k).filter(isPerspKind);
+    assert.deepEqual(persp, ["persp", "persp2", "persp3", "persp4"]);
+    assert.equal(isPerspKind("top"), false);
+    // A quad of four perspective views is a state that is kept.
+    const s = cleanPaneState({ layout: "quad", views: ["persp2", "persp", "persp3", "persp4"] });
+    assert.deepEqual(s.views, ["persp2", "persp", "persp3", "persp4"]);
+    // A camera dropped on a flat pane makes it a perspective view that is not on screen yet.
+    assert.equal(perspForDrop(["top", "persp", "front", "persp2"], 0, ["top", "persp", "front", "persp2"]), "persp3");
+    assert.equal(perspForDrop(["top", "persp2", "front", "right"], 1, ["top", "persp2"]), "persp2");
+});
+
+test("each pane keeps its own shading, camera and look-through", () => {
+    const modes = ["original", "clay", "normal", "wireframe", "pathtraced"];
+    const s = cleanPaneState({
+        layout: "quad", shading: ["clay", "pathtraced", "bogus", null],
+        through: { persp2: "c1", persp9: "c2", persp3: 5 },
+        cams: { persp2: { position: [1, 2, 3], target: [0, 0, 0], fov: 50 }, persp3: { position: [1, 2] } },
+    }, modes);
+    assert.deepEqual(s.shading, ["clay", "pathtraced", null, null]);
+    assert.deepEqual(s.through, { persp2: "c1" });
+    assert.deepEqual(s.cams, { persp2: { position: [1, 2, 3], target: [0, 0, 0], fov: 50 } });
+    assert.deepEqual(cleanPaneState(null).shading, [null, null, null, null]);
+});

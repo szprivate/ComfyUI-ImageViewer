@@ -301,6 +301,27 @@ export const PrevizChannelsMixin = {
             // 1 follows this IK control, 0 the limb's FK controls; keyable.
             const t = shape(`${item.name}Shape`);
             numberRow("ikfk", "ikfk", null, "IK Blend", 0.1, t);
+        } else if (S.isLocator(item)) {
+            // A locator's Size: the cross's half length (not its scale, which its children take).
+            const t = shape(`${item.name}Shape`);
+            const row = doc.createElement("div");
+            row.className = "cb-row";
+            row.dataset.ch = "locatorSize";
+            const tag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Size" });
+            const inp = doc.createElement("input");
+            inp.className = "cb-val";
+            inp.type = "number"; inp.min = "0.001"; inp.step = "0.1";
+            inp.addEventListener("keydown", (e) => e.stopPropagation());
+            inp.onchange = () => this.previzSetLocatorSize(Number(inp.value));
+            this._cbScrub(tag, {
+                step: 0.01,
+                read: () => S.locatorSize(this.previzSelectedItem() || item),
+                write: (v) => this.previzSetLocatorSize(Math.max(0.001, Math.round(v * 1000) / 1000), { live: true }),
+                end: () => { this.previzEndDrag(); this.previzChanged(); },
+            });
+            row.append(tag, inp);
+            t.append(row);
+            ui.rows.set("locatorSize", { row, input: inp, kind: "locator" });
         } else if (item.kind === "imageplane") {
             const t = shape(`${item.name}Shape`);
             const row = doc.createElement("div");
@@ -413,6 +434,8 @@ export const PrevizChannelsMixin = {
                 if (focused !== r.input) r.input.value = item.color || S.DEFAULT_COLOR;
             } else if (r.kind === "world") {
                 this._cbWorldFill(r, item, focused);
+            } else if (r.kind === "locator") {
+                if (focused !== r.input) r.input.value = fmt(S.locatorSize(item));
             } else if (r.kind === "plane") {
                 const opts = S.planeSettings(item);
                 if (focused !== r.input) {

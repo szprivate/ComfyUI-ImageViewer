@@ -47,7 +47,16 @@ export const View3DPathTraceMixin = {
 
     /** Whether the viewport is drawn by the path tracer right now. */
     ptActive() {
-        return this.materialMode === "pathtraced" && !this._ptFailed;
+        return this._ptWanted() && !this._ptFailed;
+    },
+
+    /**
+     * Whether something on screen is to be traced: the view's shading, or in
+     * a split layout any pane's (each pane has its own, imageViewer_view3dPanes.js).
+     */
+    _ptWanted() {
+        if (this._panePlain && !this._panePlain() && this._paneTracedSlot && !this._rendering) return this._paneTracedSlot() >= 0;
+        return this.materialMode === "pathtraced";
     },
 
     /** Samples the viewport's traced picture holds (0 when not tracing). */
@@ -452,7 +461,7 @@ export const View3DPathTraceMixin = {
     _ptBadge(text) {
         if (!this.stage) return;
         let b = this._ptBadgeEl;
-        const on = this.materialMode === "pathtraced" && !this._rendering;
+        const on = this._ptWanted() && !this._rendering;
         if (!on) { if (b) b.style.display = "none"; return; }
         if (!b) {
             b = this._ptBadgeEl = this.doc.createElement("div");
@@ -466,7 +475,7 @@ export const View3DPathTraceMixin = {
         else if (this._pt.isCompiling) b.textContent = "Path traced · compiling…";
         else {
             const n = Math.floor(this._pt.samples);
-            b.textContent = `Path traced${this._ptSplit ? " (active view)" : ""} · ${n} sample${n === 1 ? "" : "s"}${n >= PT_VIEW_MAX ? " (done)" : ""}`;
+            b.textContent = `Path traced${this._ptSplit ? ` (${this._ptPaneName || "one view"})` : ""} · ${n} sample${n === 1 ? "" : "s"}${n >= PT_VIEW_MAX ? " (done)" : ""}`;
         }
         b.dataset.samples = this._pt ? String(Math.floor(this._pt.samples)) : "0";
     },

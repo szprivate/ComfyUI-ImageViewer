@@ -8,7 +8,7 @@
 //   S       key every channel of the selection; Shift+S the channels selected
 //           in the Channel Box (all of them when none is); Shift+W / E / R as before
 //   K       held, with the left button dragged in the view: scrub the timeline
-//   Shift+1 .. Shift+8   the Display menu's kinds on / off
+//   Shift+1 .. Shift+0   the Display menu's kinds on / off (0 is the tenth)
 //
 // Clicks and boxes in the view come through previzSelectMany with Maya's
 // modifiers: plain replaces, Shift toggles, Ctrl takes out, Ctrl+Shift adds.
@@ -116,9 +116,9 @@ export const PrevizHotkeysMixin = {
             return true;
         }
         // By the key's place, not its letter: Shift+1 is "!" on one keyboard and "!" or "+" on others.
-        const m = /^Digit([1-9])$/.exec(e.code || "");
+        const m = /^Digit([0-9])$/.exec(e.code || "");
         if (m && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            const kind = DISPLAY_KINDS[Number(m[1]) - 1];
+            const kind = DISPLAY_KINDS[(Number(m[1]) + 9) % 10];
             if (!kind) return false;
             this.previzToggleDisplay(kind.key);
             e.preventDefault();

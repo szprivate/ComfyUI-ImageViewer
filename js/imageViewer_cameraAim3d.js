@@ -229,7 +229,7 @@ export const CameraAim3DMixin = {
     /** The scene camera being looked through, as its entry, or null (the free camera, a flat pane). */
     _aimNavEntry() {
         if (this._walk || (this._paneOrthoActive && this._paneOrthoActive())) return null;
-        const id = this.scene3d && this.scene3d.activeCamera;
+        const id = this.paneThroughId ? this.paneThroughId() : this.scene3d && this.scene3d.activeCamera;
         const entry = id ? this._entries.get(id) : null;
         return entry && entry.camera && this.controls && this.controls.object === entry.camera ? entry : null;
     },
