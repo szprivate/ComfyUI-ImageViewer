@@ -79,6 +79,15 @@ def list_scenes():
     return out
 
 
+# A scene file: USD (what Save scene writes now, usd_scene) or the older JSON.
+SCENE_USD_EXTS = (".usda", ".usdc", ".usd")
+SCENE_EXTS = SCENE_USD_EXTS + (".json",)
+
+
+def is_scene_file(path):
+    return os.path.splitext(str(path or ""))[1].lower() in SCENE_EXTS
+
+
 def save_scene_at(path, scene):
     """Write a scene as JSON to a path the caller has already decided on."""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -95,8 +104,8 @@ def load_scene_at(path):
     return scene
 
 
-_PLAIN_V = re.compile(r"^(?P<name>.+?)_v(?P<v>\d{3,})\.json$", re.I)
-_SHOT_V = re.compile(r"^(?P<shot>.+?)_v(?P<v>\d{3,})_(?P<name>.+)\.json$", re.I)
+_PLAIN_V = re.compile(r"^(?P<name>.+?)_v(?P<v>\d{3,})\.(?P<ext>json|usda|usdc|usd)$", re.I)
+_SHOT_V = re.compile(r"^(?P<shot>.+?)_v(?P<v>\d{3,})_(?P<name>.+)\.(?P<ext>json|usda|usdc|usd)$", re.I)
 _VDIR = re.compile(r"^v(\d{3,})$", re.I)
 
 
@@ -112,7 +121,8 @@ def scene_versions(path):
     shot = _SHOT_V.match(base)
     if shot and _VDIR.match(os.path.basename(folder)):
         root = os.path.dirname(folder)
-        want = re.compile(re.escape(shot.group("shot")) + r"_v(\d{3,})_" + re.escape(shot.group("name")) + r"\.json$", re.I)
+        want = re.compile(re.escape(shot.group("shot")) + r"_v(\d{3,})_" + re.escape(shot.group("name"))
+                          + r"\.(?:json|usda|usdc|usd)$", re.I)
         found = []
         try:
             for vdir in os.listdir(root):
@@ -133,7 +143,7 @@ def scene_versions(path):
             return sorted(found)
     plain = _PLAIN_V.match(base)
     if plain:
-        want = re.compile(re.escape(plain.group("name")) + r"_v(\d{3,})\.json$", re.I)
+        want = re.compile(re.escape(plain.group("name")) + r"_v(\d{3,})\.(?:json|usda|usdc|usd)$", re.I)
         found = []
         try:
             for n in os.listdir(folder):

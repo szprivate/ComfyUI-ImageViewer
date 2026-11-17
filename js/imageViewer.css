@@ -1267,6 +1267,14 @@ textarea.param-input {
 /* Animated: a small key diamond. */
 .previz-anim { color: #f60; }
 .ol-keys { width: 6px; height: 6px; margin: 0 4px; background: #f60; transform: rotate(45deg); border-radius: 1px; flex: 0 0 auto; }
+/* The scene as USD (imageViewer_previzUsd.js): a payload's mark, an unloaded model, a variant picker. */
+.ol-arc { font: 600 9px/14px sans-serif; min-width: 14px; height: 14px; padding: 0 2px; margin: 0 3px; border-radius: 3px;
+          text-align: center; color: #9fc3e8; border: 1px solid rgba(159, 195, 232, 0.45); flex: 0 0 auto; box-sizing: border-box; }
+.ol-arc.unloaded { color: #888; border-style: dashed; border-color: #666; }
+.ol-row.unloaded > .previz-name { opacity: 0.5; font-style: italic; }
+.ol-variant { height: 18px; max-width: 96px; margin: 0 3px; font-size: 11px; padding: 0 2px; border-radius: 4px;
+              background: rgba(0, 0, 0, 0.25); color: inherit; border: 1px solid rgba(255, 255, 255, 0.16); flex: 0 1 auto; }
+.ol-kind[data-kind="contents"] { color: #9fc3e8; }
 .previz-empty { padding: 14px 8px; color: #777; text-align: center; }
 .previz-props { display: flex; flex-direction: column; gap: 4px; }
 .previz-label { width: 42px; color: #999; flex: 0 0 auto; }

@@ -51,9 +51,9 @@ export const PrevizShotMixin = {
             // Never film a model that is not the one the scene names: every file item must hold an
             // object loaded from ITS path (a stale or missing one ends the job here, in error).
             const wrong = (view.scene3d.items || []).filter((it) => {
-                if (it.kind !== "model" || !it.src) return false;
+                if (it.kind !== "model" || !it.src || (it.usd && it.usd.unloaded)) return false;
                 const e = view._entries.get(it.id);
-                return !e || !e.object || e.key !== view._srcKey(it.src);
+                return !e || !e.object || e.key !== (view._modelKey ? view._modelKey(it) : view._srcKey(it.src));
             }).map((it) => it.name || it.id);
             if (wrong.length) throw new Error("the scene's model is not the one loaded: " + wrong.join("; "));
             await report({ state: "rendering", done: 0 });

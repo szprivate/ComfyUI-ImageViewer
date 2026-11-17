@@ -30,6 +30,7 @@ import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
 import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
 import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
+import { View3DUsdMixin } from "./imageViewer_view3dUsd.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
@@ -1282,9 +1283,12 @@ export class Model3DView {
             this._reparent(entry);
             // A model whose file changed is reloaded; everything else is a
             // transform, which applyFrame picks up.
-            if (item.kind === "model" && entry.key !== this._srcKey(item.src)) {
+            if (item.kind === "model" && entry.key !== this._modelKey(item)) {
                 this._disposeEntry(entry, false);
+                entry.oversKey = null;
                 pending.push(this._tracked(this._loadEntry(entry, item)));
+            } else if (item.kind === "model") {
+                this.usdSyncOvers(entry, item);
             } else if (this._isWorldKind(item)) {
                 // A world item rebuilds when its settings change; a scatter
                 // also when the ground it grows on does.
@@ -1616,8 +1620,10 @@ export class Model3DView {
      */
     _srcUrlFor(item) {
         if (!this.hooks.srcUrl || !item.src) return null;
+        // An unloaded payload (the Outliner's Unload) draws nothing.
+        if (item.kind === "model" && item.usd && item.usd.unloaded) return null;
         if (!this._isCache(item)) {
-            const url = this.hooks.srcUrl(item.src);
+            const url = this.hooks.srcUrl(item.kind === "model" ? this._usdSrcForUrl(item) : item.src);
             const entry = this._entries.get(item.id);
             return entry && entry.bust ? bustUrl(url, entry.bust) : url;
         }
@@ -1681,7 +1687,7 @@ export class Model3DView {
         // model on top of the new one, so a render showed both - or the old one alone.
         const seq = entry.loadSeq = (entry.loadSeq || 0) + 1;
         const url = this._srcUrlFor(item);
-        entry.key = this._srcKey(item.src);
+        entry.key = this._modelKey(item);
         entry.cacheFrame = this._isCache(item) ? Math.max(0, Math.round(this.sceneFrame || 0)) : null;
         if (!url) return entry;
         const format = modelFormatOf(item.src) || "glb";
@@ -1696,6 +1702,9 @@ export class Model3DView {
             // Its bones as the file has them: the rest pose a rig is built on.
             this._rigCapture(entry);
             loaded.object.traverse((c) => { if (c.isMesh) this._keepOriginal(c, c.material); });
+            // The nodes the Outliner hid inside it (imageViewer_view3dUsd.js).
+            entry.oversKey = null;
+            this.usdSyncOvers(entry, item);
             if (loaded.animations && loaded.animations.length) {
                 const { THREE } = this.libs;
                 entry.mixer = new THREE.AnimationMixer(loaded.object);
@@ -2865,6 +2874,7 @@ Object.assign(Model3DView.prototype, Rig3DExtrasMixin);
 Object.assign(Model3DView.prototype, View3DToolsMixin);
 Object.assign(Model3DView.prototype, View3DPanesMixin);
 Object.assign(Model3DView.prototype, View3DGridMixin);
+Object.assign(Model3DView.prototype, View3DUsdMixin);
 Object.assign(Model3DView.prototype, Atlas3DMixin);
 Object.assign(Model3DView.prototype, View3DPathTraceMixin);
 Object.assign(Model3DView.prototype, CameraAim3DMixin);

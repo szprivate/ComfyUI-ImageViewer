@@ -78,6 +78,7 @@ import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
 import { readDrivers } from "./imageViewer_rigDrivers.js";
 import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.js";
+import { readUsdFields } from "./imageViewer_usdData.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -1280,6 +1281,9 @@ export function parseScene(raw) {
             item.plane = planeSettings(raw);
         } else {
             item.src = raw.src && typeof raw.src === "object" ? raw.src : null;
+            // What the Outliner changed inside its asset (imageViewer_usdData.js).
+            const usd = readUsdFields(raw.usd);
+            if (usd) item.usd = usd;
             // An Atlas world set upright: with how many of its cameras (imageViewer_previzAtlasOrient.js).
             if (raw.atlasOrient && Number.isFinite(Number(raw.atlasOrient.frames))) {
                 item.atlasOrient = { frames: Math.max(0, Math.round(Number(raw.atlasOrient.frames))) };
