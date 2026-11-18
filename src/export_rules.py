@@ -115,6 +115,7 @@ KINDS = {
     "paint": "paint",                              # a picture in layers (.ora) and what is exported of it
     "comp": "comps",                               # a comp (.comp.json) and what is rendered of it
     "character": "characters",                     # a rigged character exported from the 3D space (FBX, Alembic)
+    "matchmove": "matchmove",                      # a matchmove (.mm.json): tracks, lens, solve
 }
 FALLBACK_ROOT = "imageviewer"
 _VERSION = re.compile(r"v(\d{3,})$", re.I)

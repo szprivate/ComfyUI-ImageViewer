@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import math
 import os
+import re
 import secrets
 import threading
 import time
@@ -23,6 +25,29 @@ from . import matchmove_solve as MS
 
 MAX_JOBS = 16
 MAX_SIDE = 4096           # the frame route's largest picture
+MM_SUFFIX = ".mm.json"
+MM_MAX_BYTES = 64 * 1024 * 1024
+
+
+_FRAME_NO = re.compile(r"^(.*?)(\d{3,})(\.[A-Za-z0-9]+)$")
+_STILL_EXTS = {".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".webp", ".bmp"}
+
+
+def as_sequence(path):
+    """One frame of a numbered sequence (shot.1001.exr, with shot.1002.exr beside it) as the sequence's pattern
+    (shot.####.exr); anything else as it is."""
+    if not path or comp_io.is_sequence(path):
+        return path
+    folder, name = os.path.split(path)
+    m = _FRAME_NO.match(name)
+    if not m or m.group(3).lower() not in _STILL_EXTS:
+        return path
+    head, digits, ext = m.group(1), m.group(2), m.group(3)
+    n = int(digits)
+    for other in (n + 1, n - 1):
+        if other >= 0 and os.path.isfile(os.path.join(folder, f"{head}{other:0{len(digits)}d}{ext}")):
+            return os.path.join(folder, f"{head}{'#' * len(digits)}{ext}")
+    return path
 
 
 def _read_node(path):
@@ -91,7 +116,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
 
     def plate_of(raw):
         """(Plate, None) or (None, (why, status))."""
-        path = abspath(raw)
+        path = as_sequence(abspath(raw))
         if not path:
             return None, ("no plate named", 400)
         probe = comp_io.frame_path(path, comp_io.sequence_numbers(path)[0]) if comp_io.is_sequence(path) and comp_io.sequence_numbers(path) else path
@@ -456,6 +481,64 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         threading.Thread(target=run_proxy, args=(job, p, spec), daemon=True, name=f"mm-proxy-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
+    # ── the matchmove's own file ─────────────────────────────────────────────
+
+    def mm_file_ok(path):
+        return path.lower().endswith(MM_SUFFIX) and path_access.is_allowed(path)
+
+    async def save_route(request):
+        """POST {data, path?, name?, context?}: a matchmove (.mm.json) written over `path` when that is one,
+        else a new file by the export rule (kind "matchmove", the next version)."""
+        body = await body_of(request)
+        data = body.get("data")
+        if not isinstance(data, dict):
+            return err("data is the matchmove")
+        text = json.dumps(data, separators=(",", ":"))
+        if len(text) > MM_MAX_BYTES:
+            return err("the matchmove is too big to save", 413)
+        path = abspath(body.get("path"))
+        version = None
+        if path:
+            if not mm_file_ok(path):
+                return err("not a matchmove file this viewer may write", 403)
+        else:
+            if export_rules is None or folder_paths is None:
+                return err("saving is not available here", 500)
+            name = body.get("name") or "matchmove"
+            try:
+                t = export_rules.target("matchmove", name, "json", folder_paths.get_output_directory(), body.get("context"))
+            except ValueError as e:
+                return err(e)
+            path, version = t["path"][: -len(".json")] + MM_SUFFIX, t.get("version")
+
+        def write():
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.part-{secrets.token_hex(4)}"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            os.replace(tmp, path)
+        try:
+            await off(write)
+        except OSError as e:
+            return err(f"not written: {e}", 500)
+        return web.json_response({"path": path, "version": version})
+
+    async def load_route(request):
+        """GET ?path= a matchmove file."""
+        path = abspath(request.query.get("path"))
+        if not path or not mm_file_ok(path):
+            return err("not a matchmove file this viewer may read", 403)
+        if not os.path.isfile(path):
+            return err("no such file", 404)
+        try:
+            if os.path.getsize(path) > MM_MAX_BYTES:
+                return err("too big", 413)
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError) as e:
+            return err(f"not read: {e}", 400)
+        return web.json_response({"path": path, "data": data}, headers={"Cache-Control": "no-cache"})
+
     # ── the lens into Comp ───────────────────────────────────────────────────
 
     async def to_comp_route(request):
@@ -572,3 +655,5 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         add("POST", f"{prefix}/mm_to_comp", to_comp_route)
         add("GET", f"{prefix}/mm_from_comp", from_comp_route)
         add("POST", f"{prefix}/mm_stmap", stmap_route)
+        add("POST", f"{prefix}/mm_save", save_route)
+        add("GET", f"{prefix}/mm_load", load_route)

@@ -313,6 +313,33 @@ class Routes(unittest.TestCase):
             self.assertEqual((back["k1"], back["k2"]), (-0.04, 0.01))
         self.run_c(go)
 
+    def test_one_frame_of_a_sequence_is_the_sequence(self):
+        async def go(c):
+            one = os.path.join(self.dirs["output"], "plate.1003.png")
+            d = await (await c.get("/imageviewer/mm_plate", params={"path": one})).json()
+            self.assertEqual(d["frames"], 6)
+            self.assertTrue(d["path"].endswith("plate.####.png"))
+        self.run_c(go)
+
+    def test_a_matchmove_is_saved_by_the_rule_then_over_itself(self):
+        async def go(c):
+            data = {"v": 1, "tracks": [{"id": "t1", "keys": [[0, 1, 2, 1]]}]}
+            r = await c.post("/imageviewer/mm_save", json={"data": data, "name": "shot010"})
+            d = await r.json()
+            self.assertEqual(r.status, 200, d)
+            self.assertTrue(d["path"].endswith(".mm.json"))
+            self.assertIn("matchmove", d["path"])
+            data["step"] = "track"
+            r = await c.post("/imageviewer/mm_save", json={"data": data, "path": d["path"]})
+            self.assertEqual((await r.json())["path"], d["path"])
+            back = await (await c.get("/imageviewer/mm_load", params={"path": d["path"]})).json()
+            self.assertEqual(back["data"], data)
+            r = await c.post("/imageviewer/mm_save", json={"data": data, "path": os.path.join(self.dirs["output"], "x.json")})
+            self.assertEqual(r.status, 403)
+            r = await c.get("/imageviewer/mm_load", params={"path": "/etc/passwd"})
+            self.assertEqual(r.status, 403)
+        self.run_c(go)
+
     def test_a_plate_outside_the_allowed_folders_is_refused(self):
         async def go(c):
             r = await c.get("/imageviewer/mm_plate", params={"path": "/etc/hostname"})
