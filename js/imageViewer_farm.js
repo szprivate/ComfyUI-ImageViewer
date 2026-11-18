@@ -427,7 +427,7 @@ export const FarmMixin = {
             ["max_usd_per_hour", "Most per hour ($)", "number", "Offers dearer than this are not rented."],
             ["idle_stop_minutes", "Stop when idle (minutes)", "number", "A rented machine with nothing to render is stopped after this. 0 = never."],
             ["eu_only", "EU machines only", "checkbox", "Offers outside the EU (and Norway, Switzerland, the UK) are left out."],
-            ["gpu", "GPU to look for", "text", "As the providers name it, e.g. RTX 5090, RTX PRO 6000, H100."],
+            ["gpu", "GPU to look for", "text", "Part of the name, any case (5090), or with * as a wildcard (RTX 50*, *PRO 6000*). Empty = every GPU."],
             ["image", "Machine image", "text", "The Docker image every machine starts from: ComfyUI with your custom nodes and bepic_templates."],
             ["disk_gb", "Disk (GB)", "number", "Room for the models the workflows need."],
             ["retries", "Retries on another machine", "number", "A render that fails is tried this many more times."],
@@ -531,7 +531,8 @@ export const FarmMixin = {
             const row = h("div", "fm-row");
             const gpu = h("input", "fm-gpu");
             gpu.value = st.gpu || "";
-            gpu.placeholder = "GPU, e.g. RTX 5090";
+            gpu.placeholder = "GPU, e.g. 5090 or RTX 50*";
+            gpu.title = "Part of the GPU name (any case), or * as a wildcard: RTX 50*, *PRO 6000*. Empty = every GPU.";
             const go = h("button", "fm-btn fm-primary", "Find offers");
             const where = h("span", "fm-sec-text", st.eu_only ? "EU only" : "Any region");
             row.append(gpu, go, where);
