@@ -20,7 +20,7 @@ const POLL_MS = 2000;
 const STATE_LABEL = { ready: "Ready", starting: "Starting", stopped: "Stopped", gone: "Gone", unreachable: "Not answering",
     busy: "Rendering" };
 const PROVIDER_LABEL = { vast: "vast.ai", runpod: "RunPod", url: "By address" };
-const TASK_LABEL = { queued: "waiting", uploading: "sending", running: "rendering", done: "done", failed: "failed",
+const TASK_LABEL = { queued: "waiting", models: "getting models", uploading: "sending", running: "rendering", done: "done", failed: "failed",
     cancelled: "cancelled" };
 const SEED_MODES = [["increment", "Seed +1 per render"], ["random", "Random seeds"], ["fixed", "Same seed (a repeat)"]];
 
@@ -296,7 +296,13 @@ export const FarmMixin = {
             act("Stop", "", () => this._farmPost(rec, { action: "stop", id: m.id }), "Stop billing for the GPU; the disk is kept (a few cents a day)");
         }
         if (m.url) {
-            act("Open ComfyUI", "", () => this._viewerWindow().open(m.url, "_blank", "noopener"), m.url);
+            act("Open ComfyUI", "", async () => {
+                // The farm image asks for the machine's token: fetch the address with it, then open it.
+                const w = this._viewerWindow().open("", "_blank");
+                const r = await this._farmPost(rec, { action: "open_url", id: m.id }, { quiet: true });
+                if (!w) return;
+                if (r.url) { w.opener = null; w.location.href = r.url; } else w.close();
+            }, m.url);
         }
         act("Check workflow", "", async (b) => {
             const wf = await this._farmWorkflow(rec);
@@ -427,7 +433,7 @@ export const FarmMixin = {
             ["max_usd_per_hour", "Most per hour ($)", "number", "Offers dearer than this are not rented."],
             ["idle_stop_minutes", "Stop when idle (minutes)", "number", "A rented machine with nothing to render is stopped after this. 0 = never."],
             ["eu_only", "EU machines only", "checkbox", "Offers outside the EU (and Norway, Switzerland, the UK) are left out."],
-            ["gpu", "GPU to look for", "text", "As the providers name it, e.g. RTX 5090, RTX PRO 6000, H100."],
+            ["gpu", "GPU to look for", "text", "Part of the name, any case (5090), or with * as a wildcard (RTX 50*, *PRO 6000*). Empty = every GPU."],
             ["image", "Machine image", "text", "The Docker image every machine starts from: ComfyUI with your custom nodes and bepic_templates."],
             ["disk_gb", "Disk (GB)", "number", "Room for the models the workflows need."],
             ["retries", "Retries on another machine", "number", "A render that fails is tried this many more times."],
@@ -531,7 +537,8 @@ export const FarmMixin = {
             const row = h("div", "fm-row");
             const gpu = h("input", "fm-gpu");
             gpu.value = st.gpu || "";
-            gpu.placeholder = "GPU, e.g. RTX 5090";
+            gpu.placeholder = "GPU, e.g. 5090 or RTX 50*";
+            gpu.title = "Part of the GPU name (any case), or * as a wildcard: RTX 50*, *PRO 6000*. Empty = every GPU.";
             const go = h("button", "fm-btn fm-primary", "Find offers");
             const where = h("span", "fm-sec-text", st.eu_only ? "EU only" : "Any region");
             row.append(gpu, go, where);
@@ -608,10 +615,30 @@ export const FarmMixin = {
         try {
             const p = await app.graphToPrompt();
             const wf = p && (p.output || p);
+            rec.farmModelUrls = this._farmModelUrls(p && p.workflow);
             if (wf && typeof wf === "object" && Object.keys(wf).length) return wf;
         } catch (e) { console.warn("imageViewer: graphToPrompt", e); }
         this._farmToast(rec, "The canvas has no workflow to send.", "warn");
         return null;
+    },
+
+    /** Download addresses the workflow carries (ComfyUI templates list them per loader node under
+     *  properties.models), as {"folder/name": url}: a farm machine that lacks a model downloads it from there. */
+    _farmModelUrls(graph) {
+        const out = {};
+        const walk = (nodes) => {
+            for (const n of nodes || []) {
+                for (const mo of ((n && n.properties && n.properties.models) || [])) {
+                    if (mo && mo.name && mo.directory && /^https:\/\//.test(mo.url || "")) out[`${mo.directory}/${mo.name}`] = mo.url;
+                }
+            }
+        };
+        walk(graph && graph.nodes);
+        for (const sg of ((graph && graph.definitions && graph.definitions.subgraphs) || [])) walk(sg.nodes);
+        for (const mo of ((graph && graph.models) || [])) {
+            if (mo && mo.name && mo.directory && /^https:\/\//.test(mo.url || "")) out[`${mo.directory}/${mo.name}`] = mo.url;
+        }
+        return out;
     },
 
     _farmRenderDlg(rec) {
@@ -675,7 +702,7 @@ export const FarmMixin = {
             go.disabled = true;
             const picked = boxes.filter((b) => b.checked).map((b) => b.value);
             const r = await this._farmPost(rec, { action: "submit", workflow: wf, name: name.value, batch: Number(batch.value) || 1,
-                seed_mode: seed.value, machines: picked.length === boxes.length ? [] : picked });
+                seed_mode: seed.value, machines: picked.length === boxes.length ? [] : picked, model_urls: rec.farmModelUrls || {} });
             go.disabled = false;
             if (!r.error) {
                 d.shade.remove();
