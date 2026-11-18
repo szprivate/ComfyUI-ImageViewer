@@ -17,7 +17,7 @@ import asyncio
 import json
 
 ACTIONS = ("offers", "rent", "start", "stop", "terminate", "add_url", "remove", "parity", "submit", "cancel",
-           "retry", "remove_job", "settings", "refresh")
+           "retry", "remove_job", "settings", "refresh", "open_url")
 MAX_BODY = 16 * 1024 * 1024
 ROUTE = "pool"
 
