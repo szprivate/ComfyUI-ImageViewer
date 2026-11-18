@@ -1562,7 +1562,6 @@ export const PrevizMixin = {
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu([
             { label: "Save scene\u2026", run: () => this.previzSaveSceneFile() },
-            { label: "Export USD\u2026", run: () => this.previzExportUsd() },
             "-",
             { label: "Render\u2026", run: () => this.previzRenderDialog() },
         ], a.left, a.bottom + 2, anchor);
@@ -2057,10 +2056,13 @@ export const PrevizMixin = {
             id: "scene",
             title: "Open scene",
             kind: "scene",
-            exts: [".usda", ".usdc", ".usd", ".json"],
+            // A scene is USD (or an older JSON one); a packed .usdz and an Alembic cache open here too,
+            // read as a stage (the route usd_import) - there is no separate "Open USD" any more.
+            exts: [".usda", ".usdc", ".usd", ".usdz", ".abc", ".json"],
             go: "Open",
             note: "Replaces the scene in this tab.",
             onPick: async ([file]) => {
+                if (/\.(usdz|abc)$/i.test(file.path)) return this._previzOpenStage(file);
                 const res = await fetch(api.apiURL(`/imageviewer/scene?path=${encodeURIComponent(file.path)}`));
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) return { ok: false, message: `Could not open ${file.name}: ${data.error || res.status}` };
@@ -2072,58 +2074,16 @@ export const PrevizMixin = {
         });
     },
 
-    // ── USD stages ───────────────────────────────────────────────────────────
-
-    /** Write the shot out as a USD stage, for the rest of the pipeline. */
-    async previzExportUsd() {
-        const scene = this.previzScene();
-        if (!scene) return;
-        await openExportDialog(this.container, {
-            title: "Export USD",
-            kind: "stage",
-            name: this.previzRenderName(),
-            fixed: [{ value: "usda", label: "USD, text (.usda)" }, { value: "usdc", label: "USD, binary (.usdc)" }],
-            values: this._previzUsdExport,
-            onExport: async (v) => {
-                this._previzUsdExport = { format: v.format };
-                // The stage carries keys, not constraints or clips: those are baked into a copy first;
-                // the scene as kept rides along, and the meshes only the page has.
-                const { body } = this._previzUsdBody(scene);
-                const res = await fetch(api.apiURL("/imageviewer/usd_export"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ scene: body.baked, kept: scene, geometry: body.geometry,
-                                           name: v.name, format: v.format, rule: true, context: v.context }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, message: `Could not export the stage: ${data.error || res.status}` };
-                notice("success", "USD stage exported", data.relative ? "output/" + data.relative : data.path);
-                return { ok: true };
-            },
-        });
-    },
-
-    /** Replace the scene with one read from a USD stage or an Alembic cache. */
-    async previzImportUsd() {
-        await openFilePicker(this.container, {
-            id: "stage",
-            title: "Open USD / Alembic",
-            kind: "stage",
-            exts: [".usd", ".usda", ".usdc", ".usdz", ".abc"],
-            go: "Open",
-            note: "Replaces the scene in this tab with what the stage or cache holds.",
-            onPick: async ([file]) => {
-                const res = await fetch(api.apiURL(`/imageviewer/usd_import?path=${encodeURIComponent(file.path)}`));
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, message: `Could not open ${file.name}: ${data.error || res.status}` };
-                const scene = this._previzOpenScene(data.scene);
-                await this.previzChanged({ reload: true });
-                if (this._model3d) this._model3d.resetView();
-                notice("info", "Stage opened",
-                       `${file.name}: ${scene.items.length} item${scene.items.length === 1 ? "" : "s"}`);
-                return { ok: true };
-            },
-        });
+    /** A packed .usdz or an Alembic cache, opened from File > Open scene… as the scene of this tab. */
+    async _previzOpenStage(file) {
+        const res = await fetch(api.apiURL(`/imageviewer/usd_import?path=${encodeURIComponent(file.path)}`));
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, message: `Could not open ${file.name}: ${data.error || res.status}` };
+        const scene = this._previzOpenScene(data.scene);
+        await this.previzChanged({ reload: true });
+        if (this._model3d) this._model3d.resetView();
+        notice("info", "Scene opened", `${file.name}: ${scene.items.length} item${scene.items.length === 1 ? "" : "s"}`);
+        return { ok: true };
     },
 
     /**

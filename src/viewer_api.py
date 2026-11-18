@@ -3730,6 +3730,15 @@ try:
                                  send=lambda ev, data: PromptServer.instance.send_sync(ev, data))
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Comp routes not registered: {e}")
+        # The 3D space's matchmove: plate facts, tracking, the lens, the solves (matchmove_routes.py).
+        try:
+            from . import matchmove_routes
+            from . import export_rules as _mm_rules
+            matchmove_routes.register(_safe_add, web=web, path_access=path_access, folder_paths=folder_paths,
+                                      export_rules=_mm_rules,
+                                      resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Matchmove routes not registered: {e}")
         # The Farm space: rented GPU machines rendering workflows, relayed to agentY's /agentY/pool (farm_routes.py).
         try:
             from . import farm_routes

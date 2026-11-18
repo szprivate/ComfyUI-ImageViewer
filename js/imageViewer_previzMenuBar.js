@@ -110,7 +110,6 @@ export const PrevizMenuBarMixin = {
         return [
             { label: "New scene", cmd: "PrevizNewScene", run: () => this.previzNewScene() },
             { label: "Open scene…", cmd: "PrevizLoadScene", run: () => this.previzLoadSceneFile() },
-            { label: "Open USD / Alembic…", cmd: "PrevizImportUsd", run: () => this.previzImportUsd() },
             { label: "Import Model…", cmd: "PrevizAddModel", title: "Add models to the scene from a file "
                 + "(glTF, FBX, OBJ, STL, PLY, USD, splats); the File Browser's selected models go in at once",
               run: () => this.previzImportModel() },
@@ -118,7 +117,6 @@ export const PrevizMenuBarMixin = {
                 + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() },
             "-",
             { label: "Save scene…", cmd: "PrevizSaveScene", run: () => this.previzSaveSceneFile() },
-            { label: "Export USD…", cmd: "PrevizExportUsd", run: () => this.previzExportUsd() },
             ...(exports.length ? [{ label: "Export character", sub: exports }] : []),
             "-",
             { label: "Render…", cmd: "PrevizRender", run: () => this.previzRenderDialog() },
