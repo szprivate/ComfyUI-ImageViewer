@@ -132,6 +132,8 @@ const ROOT_ZONE = 12;
 const GAP = 5;
 // Pointer travel before a press on a header becomes a drag rather than a click.
 const DRAG_SLOP = 4;
+// The main view, where a panel id is asked for (its drag, its maximise). Never a key of DOCK_PANELS.
+const VIEW_ID = "__view__";
 // A panel's least room, with the room round its card (a 3 px margin each side).
 const CARD = 6;
 const _minOf = (id) => { const s = DOCK_PANELS[id]; return s ? { w: s.minW + CARD, h: s.minH + CARD } : null; };
@@ -194,7 +196,18 @@ export const DockMixin = {
             if (src && src.parentNode === view.parentNode) view.appendChild(src);
             view.appendChild(this.viewport);
         }
+        // The main view is a panel too (Sebastian 2026-11-19): a title bar above the picture, the picture's own
+        // elements in a body under it. Moved once, here, before anything plays.
+        let body = view.querySelector(":scope > .dock-view-body");
+        if (!body) {
+            body = doc.createElement("div");
+            body.className = "dock-view-body";
+            for (const c of [...view.children]) if (!c.classList.contains("panel-titlebar")) body.appendChild(c);
+            view.appendChild(body);
+        }
+        this.dockViewBody = body;
         this.dockViewEl = view;
+        this._ensureViewTitlebar();
         let root = sr.getElementById("dock-root");
         if (!root) {
             root = doc.createElement("div");
@@ -893,6 +906,142 @@ export const DockMixin = {
         return bar;
     },
 
+    // ── The main view as a panel ─────────────────────────────────────────────
+    //
+    // The picture's place has a title bar of its own (Sebastian 2026-11-19: "main views should become panels as
+    // well"): its switch picks the tab it shows, its name says which, it is dragged like any panel - beside a
+    // panel, a place or the whole area, or onto a panel's middle to trade places with it - and it fills the
+    // viewer with the maximise button. It has no close and no fold: there is always one.
+
+    _ensureViewTitlebar() {
+        const el = this.dockViewEl;
+        if (!el) return null;
+        let bar = el.querySelector(":scope > .panel-titlebar");
+        if (bar) return bar;
+        const doc = el.ownerDocument;
+        bar = doc.createElement("div");
+        bar.className = "panel-titlebar view-titlebar";
+        const grip = doc.createElement("button");
+        grip.className = "pt-switch";
+        grip.id = "view-switch-btn";
+        grip.title = "Show another tab here";
+        grip.setAttribute("aria-haspopup", "menu");
+        this._dockSwitchIcon(grip);
+        const name = doc.createElement("span");
+        name.className = "pt-name";
+        const max = doc.createElement("button");
+        max.className = "pt-btn pt-max";
+        max.id = "view-max-btn";
+        const fold = doc.createElement("button");      // only for _dockBarIcons; never shown
+        bar.append(grip, name, max);
+        el.insertBefore(bar, el.firstChild);
+        this._dockViewFold = fold;
+        this._dockBarIcons(VIEW_ID, fold, max);
+        for (const b of [max, grip]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        grip.addEventListener("click", (e) => { e.stopPropagation(); this._dockViewMenu(grip); });
+        max.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleMaximized(VIEW_ID); });
+        bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button")) this.dockToggleMaximized(VIEW_ID); });
+        bar.addEventListener("pointerdown", (e) => this._onDockHeaderDown(VIEW_ID, bar, e));
+        this.dockViewTitleSync();
+        return bar;
+    },
+
+    _dockViewLabel(key) {
+        if (!key) return "";
+        if (this._historyTabLabel) { try { return this._historyTabLabel(key) || key; } catch (_) { /* below */ } }
+        return key;
+    },
+
+    /** The main view's name: the tab it shows. Called by switchTab and whenever the layout is drawn. */
+    dockViewTitleSync() {
+        const bar = this.dockViewEl && this.dockViewEl.querySelector(":scope > .panel-titlebar");
+        const name = bar && bar.querySelector(":scope > .pt-name");
+        if (!name) return;
+        const label = this._dockViewLabel(this.activeTab);
+        const text = label ? label : "Main view";
+        if (name.textContent !== text) name.textContent = text;
+        name.title = label ? `Main view: ${label}` : "Main view";
+    },
+
+    /** The main view's switch: every open tab, the one shown ticked; then the panels it can trade places with. */
+    _dockViewMenu(btn) {
+        if (this._previzAddMenu) { const was = this._dockSwitchOpen; this._previzCloseAddMenu(); if (was === VIEW_ID) return; }
+        const entries = [{ head: "Show in the main view" }];
+        const tabs = (Array.isArray(this.tabOrder) ? this.tabOrder : Object.keys(this.allTabs || {}))
+            .filter((k) => this.allTabs && this.allTabs[k]);
+        for (const k of tabs) {
+            const here = k === this.activeTab;
+            entries.push({ label: (here ? "\u2713  " : "     ") + this._dockViewLabel(k),
+                           title: here ? "Shown here" : "Show this tab here",
+                           run: () => { if (!here && this.switchTab) this.switchTab(k); } });
+        }
+        const mates = DT.panels(this.dockLayout.root).filter((p) => !p.hidden && !p.behind && !p.tab && this._dockPanelEl(p.id));
+        if (mates.length) {
+            entries.push("-", { head: "Trade places with" });
+            for (const p of mates) entries.push({ label: "     " + DOCK_PANELS[p.id].label, title: "The main view and this panel swap places",
+                                                  run: () => this.dockViewSwap(p.id) });
+        }
+        const r = btn.getBoundingClientRect();
+        const menu = this._previzOpenMenu && this._previzOpenMenu(entries, r.left, r.bottom + 3, btn);
+        if (!menu) return;
+        menu.classList.add("bar-menu", "pt-switch-menu", "view-switch-menu");
+        this._dockSwitchOpen = VIEW_ID;
+        btn.classList.add("open");
+        const win = btn.ownerDocument.defaultView || window;
+        const off = () => { if (!menu.isConnected) { btn.classList.remove("open"); this._dockSwitchOpen = null; } else win.requestAnimationFrame(off); };
+        win.requestAnimationFrame(off);
+    },
+
+    /** Take the view node out of the tree as it is (no tidy: tidy would put a new one back). */
+    _dockTakeView(root) {
+        const at = DT.findView(root);
+        if (!at || !at.parent) return null;
+        at.parent.children.splice(at.index, 1);
+        const v = at.node;
+        delete v.px; delete v.size;
+        return v;
+    },
+
+    /**
+     * Move the main view beside a place: `ref` as dockPanelBeside's ({ kind: "panel", id } | { kind: "root" }),
+     * `edge` left / right / top / bottom. The view takes a share; the panels keep what they had.
+     */
+    dockViewBeside(ref, edge) {
+        if (!DT.EDGES.includes(edge) || !ref || ref.kind === "view") return false;
+        const L = this.dockLayout;
+        if (ref.kind === "panel" && !DT.locate(L.root, ref.id)) return false;
+        const v = this._dockTakeView(L.root);
+        if (!v) return false;
+        const node = ref.kind === "root" ? L.root : DT.locate(L.root, ref.id).node;
+        L.root = DT.tidy(DT.insertBeside(L.root, node, edge, v), _known);
+        this._dockAfterViewMove();
+        return true;
+    },
+
+    /** The main view and a panel trade places (each takes the other's room). A panel in a tab group stays put. */
+    dockViewSwap(panelId) {
+        const L = this.dockLayout;
+        const p = DT.locate(L.root, _dockId(panelId)), v = DT.findView(L.root);
+        if (!p || !v || !p.parent || !v.parent || p.node.tab || p.node.hidden) return false;
+        const room = (n) => ({ px: n.px, size: n.size });
+        const rp = room(p.node), rv = room(v.node);
+        p.parent.children[p.index] = v.node;
+        v.parent.children[v.index] = p.node;
+        const put = (n, r) => { delete n.px; delete n.size; if (r.px > 0) n.px = r.px; if (r.size > 0) n.size = r.size; };
+        put(v.node, rp); put(p.node, rv);
+        // The panel had the view's room, which was a share: it keeps the view's share where the view's chain was.
+        L.root = DT.tidy(L.root, _known);
+        this._dockAfterViewMove();
+        return true;
+    },
+
+    _dockAfterViewMove() {
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        // The picture's box changed: fit it again (the viewer's own resize observer does too, a frame later).
+        if (this.updateTransform) { try { this.updateTransform(); } catch (_) { /* drawn on the next change */ } }
+    },
+
     // ── Switching what a panel shows (the button left of its name) ──────────
 
     _dockSwitchIcon(btn) {
@@ -1016,7 +1165,7 @@ export const DockMixin = {
     /** One panel over the whole viewer between its tab bar and its transport, until pressed again (not saved). */
     dockToggleMaximized(id, on) {
         const want = on === undefined ? this._dockMaxId !== id : !!on;
-        if (want) {
+        if (want && id !== VIEW_ID) {
             const e = this._dockEntryOf(id);
             if (!e || e.hidden) return;
             if (e.collapsed) this.dockToggleCollapsed(id, false);
@@ -1055,9 +1204,18 @@ export const DockMixin = {
     /** Lay the maximised panel over the viewer (fixed, so no rail's overflow clips it) and keep it there. */
     _dockMaxSync() {
         const id = this._dockMaxId;
-        const e = id && this._dockEntryOf(id);
-        if (id && (!e || e.hidden || e.behind)) this._dockMaxId = null;
+        const e = id && id !== VIEW_ID && this._dockEntryOf(id);
+        if (id && id !== VIEW_ID && (!e || e.hidden || e.behind)) this._dockMaxId = null;
         const cur = this._dockMaxId;
+        const vbar = this.dockViewEl && this.dockViewEl.querySelector(":scope > .panel-titlebar");
+        const vmax = vbar && vbar.querySelector(":scope > .pt-max");
+        if (vmax && this._dockViewFold) this._dockBarIcons(VIEW_ID, this._dockViewFold, vmax);
+        const vel = this.dockViewEl;
+        if (vel && cur !== VIEW_ID && vel.classList.contains("dock-max")) {
+            vel.classList.remove("dock-max");
+            for (const k of ["position", "left", "top", "width", "height", "zIndex"]) vel.style[k] = "";
+        }
+        this.dockViewTitleSync();
         for (const pid of Object.keys(DOCK_PANELS)) {
             const el = this._dockPanelEl(pid);
             if (!el) continue;
@@ -1072,7 +1230,8 @@ export const DockMixin = {
         }
         this.container && this.container.classList.toggle("has-dock-max", !!cur);
         if (!cur) { this._dockMaxPlace = null; return; }
-        const el = this._dockPanelEl(cur);
+        const el = cur === VIEW_ID ? this.dockViewEl : this._dockPanelEl(cur);
+        if (!el) { this._dockMaxId = null; return; }
         el.classList.add("dock-max");
         const place = () => {
             if (this._dockMaxId !== cur || !el.isConnected) return;
@@ -1126,6 +1285,11 @@ export const DockMixin = {
     /** What a drop does: into a place as a tab, or beside a place (which splits it). */
     _dockDrop(id, target) {
         if (!target) return false;
+        if (id === VIEW_ID) {
+            if (target.kind === "tab") return this.dockViewSwap(target.ref.id);
+            if (target.kind === "edge") return this.dockViewBeside(target.ref, target.edge);
+            return false;
+        }
         if (target.kind === "tab") { this.dockPanelAsTab(id, target.ref.id); return true; }
         if (target.kind === "edge") return this.dockPanelBeside(id, target.ref, target.edge);
         return false;
@@ -1138,7 +1302,7 @@ export const DockMixin = {
         this._dockDragCancelled = false;
         // An embedded frame under the pointer must not take the moves away from the header.
         this.container?.classList?.add("dock-drag-on");
-        const el = this._dockPanelEl(id);
+        const el = id === VIEW_ID ? this.dockViewEl : this._dockPanelEl(id);
         if (el) {
             el.classList.add("dock-dragging");
             const bar = el.querySelector(":scope > .panel-titlebar");
@@ -1152,7 +1316,7 @@ export const DockMixin = {
         this._dockPreviewEl.className = "dock-preview";
         this._dockGhostEl = doc.createElement("div");
         this._dockGhostEl.className = "dock-ghost";
-        this._dockGhostEl.textContent = DOCK_PANELS[id].label;
+        this._dockGhostEl.textContent = id === VIEW_ID ? "Main view" : DOCK_PANELS[id].label;
         this.dockOverlay.appendChild(this._dockPreviewEl);
         this.dockOverlay.appendChild(this._dockGhostEl);
         this.dockOverlay.classList.add("active");
@@ -1170,7 +1334,7 @@ export const DockMixin = {
 
     _endDockDrag(id) {
         this.container?.classList?.remove("dock-drag-on");
-        const el = this._dockPanelEl(id);
+        const el = id === VIEW_ID ? this.dockViewEl : this._dockPanelEl(id);
         if (el) {
             el.classList.remove("dock-dragging");
             const bar = el.querySelector(":scope > .panel-titlebar");
@@ -1233,12 +1397,15 @@ export const DockMixin = {
             if (!inside(p.r)) continue;
             if (p.id === dragId) return null;
             const fx = (x - p.r.left) / Math.max(1, p.r.width), fy = (y - p.r.top) / Math.max(1, p.r.height);
-            if (fx > 0.3 && fx < 0.7 && fy > 0.3 && fy < 0.7) return { kind: "tab", ref: p };
+            // The main view dropped on a panel's middle trades places with it (not with one of a tab group).
+            const tabbed = dragId === VIEW_ID && DT.locate(this.dockLayout.root, p.id)?.node?.tab;
+            if (fx > 0.3 && fx < 0.7 && fy > 0.3 && fy < 0.7 && !tabbed) return { kind: "tab", ref: p };
             const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
             const edge = DT.EDGES.reduce((a, k) => (d[k] < d[a] ? k : a), "left");
             return { kind: "edge", ref: { kind: "panel", id: p.id }, edge, r: p.r, side: edge };
         }
         const v = R.viewport;
+        if (dragId === VIEW_ID) return null;
         if (inside(v)) {
             const fx = (x - v.left) / Math.max(1, v.width), fy = (y - v.top) / Math.max(1, v.height);
             // Above and below are shallower bands than the sides: a strip over or under the picture, not half of it.
@@ -1274,7 +1441,7 @@ export const DockMixin = {
         if (target.kind === "tab") { put(r.left, r.top, r.width, r.height); return; }
         // Beside a place: the band of it the panel will take - half of a panel, its own size beside the picture.
         const spec = DOCK_PANELS[dragId] || { minW: 200, minH: 150 };
-        const half = target.ref.kind === "panel";
+        const half = target.ref.kind === "panel" || dragId === VIEW_ID;
         if (target.edge === "left" || target.edge === "right") {
             const w = Math.min(r.width / 2, half ? r.width / 2 : Math.max(spec.minW, 300));
             put(target.edge === "left" ? r.left : r.right - w, r.top, w, r.height);

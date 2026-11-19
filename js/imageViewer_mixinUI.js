@@ -587,6 +587,7 @@ export const UIMixin = {
         this.activeTab = k;
         // ...and the space entered brings its own layout up, before it shows its panels.
         if (this.dockSpaceEnter) this.dockSpaceEnter(k);
+        if (this.dockViewTitleSync) this.dockViewTitleSync();
         // The panels' title bars take a slight accent of the space that is up (imageViewer.css).
         try {
             const tint = this._tabSpaceKind ? spaceColor(this._tabSpaceKind(k)) : "";
