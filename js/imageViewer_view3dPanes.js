@@ -538,10 +538,9 @@ export const View3DPanesMixin = {
         const kind = this.paneActiveKind();
         const cam = this.activeCameraObject();
         const target = this._paneTarget(kind);
-        this.controls.object = cam;
-        this.controls.target.copy(target);
+        // Without moving anything: the centre on the camera's view axis, a scene camera left as it stands.
+        this._bindControls(cam, target);
         this.controls.enableRotate = isPerspKind(kind);
-        this.controls.update();
         this._paneGizmoFit(cam, this._paneActiveBox());
         this._applyNavButtons(false);
         this.requestRender();
