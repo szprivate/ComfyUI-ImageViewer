@@ -53,6 +53,7 @@ import { ClipVfxMixin } from "./imageViewer_clipVfx.js";
 import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
 import { PrevizLayersMixin } from "./imageViewer_previzLayers.js";
+import { PrevizMatchmoveMixin } from "./imageViewer_previzMatchmove.js";
 import { AnimLayersMixin } from "./imageViewer_animLayersPanel.js";
 import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
 import { PrevizRenderMixin } from "./imageViewer_previzRender.js";
@@ -859,7 +860,10 @@ class ViewerPanel extends HTMLElement {
         if (this.channelsPanel) this.channelsPanel.classList.add('cb-params');
         // The 3D space's Layers panel and its Character Picker (imageViewer_previzLayers.js).
         for (const [id, prop, cls] of [['layers3d', 'layers3dPanel', 'layers3d-panel'],
-                                       ['picker', 'pickerPanel', 'picker-panel']]) {
+                                       ['picker', 'pickerPanel', 'picker-panel'],
+                                       // The matchmove guide and its plate (imageViewer_previzMatchmove.js).
+                                       ['mmGuide', 'mmGuidePanel', 'mm-guide-panel'],
+                                       ['mmPlate', 'mmPlatePanel', 'mm-plate-panel']]) {
             let lp = sr.getElementById(`${id}-panel`);
             if (!lp && this.channelsPanel && this.channelsPanel.parentNode) {
                 lp = this.channelsPanel.ownerDocument.createElement('div');
@@ -1668,6 +1672,7 @@ Object.assign(
     LoraPanelMixin,
     PrevizChannelsMixin,
     PrevizLayersMixin,
+    PrevizMatchmoveMixin,
     AnimLayersMixin,
     PrevizHotkeysMixin,
     PrevizRenderMixin,

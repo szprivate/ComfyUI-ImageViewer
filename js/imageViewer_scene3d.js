@@ -1402,6 +1402,9 @@ export function parseScene(raw) {
     if (data.defaultLights === "on" || data.defaultLights === "off") scene.defaultLights = data.defaultLights;
     // The clip sequencer's tracks and sources (imageViewer_clipSeqData.js tidies them).
     if (data.sequencer && typeof data.sequencer === "object") scene.sequencer = JSON.parse(JSON.stringify(data.sequencer));
+    // The matchmove this scene was built from: only its file (imageViewer_previzMatchmove.js keeps the rest there).
+    if (data.matchmove && typeof data.matchmove === "object" && typeof data.matchmove.file === "string")
+        scene.matchmove = { file: data.matchmove.file, ...(typeof data.matchmove.group === "string" ? { group: data.matchmove.group } : {}) };
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
     // Animation layers (imageViewer_animLayers.js blends them).
     const layers = readAnimLayers(data);

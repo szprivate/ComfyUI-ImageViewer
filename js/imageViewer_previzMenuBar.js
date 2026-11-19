@@ -1,6 +1,6 @@
 // imageViewer_previzMenuBar.js
 // The 3D space's menu bar, across the top of the canvas (Maya's panel menus,
-// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, Terrain, View,
+// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, Terrain, Matchmove, View,
 // Windows. The Outliner was the place for these once; it is the tree only now.
 //
 // The view (imageViewer_model3d.js) makes the bar and keeps the shading,
@@ -26,6 +26,8 @@ const WINDOWS = [
     ["Layers", "layers3d"],
     ["Character Picker", "picker"],
     ["Clip Sequencer", "clips", "View3DClipsPanel"],
+    ["Matchmove guide", "mmGuide"],
+    ["Plate", "mmPlate"],
     ["History", "history"],
 ];
 
@@ -39,6 +41,7 @@ const MENUS = [
     ["Constrain", "previz-constrain", (p) => p._previzConstrainMenuEntries()],
     ["World", "previz-atlas-menu", (p) => p._previzWorldBarEntries()],
     ["Terrain", "previz-mb-terrain", (p) => p._previzTerrainMenuEntries()],
+    ["Matchmove", "previz-mb-matchmove", (p) => p._previzMatchmoveMenuEntries()],
     ["View", "previz-mb-view", (p) => p._previzViewMenuEntries()],
     ["Windows", "previz-mb-windows", (p) => p._previzWindowsMenuEntries()],
 ];
@@ -110,7 +113,6 @@ export const PrevizMenuBarMixin = {
         return [
             { label: "New scene", cmd: "PrevizNewScene", run: () => this.previzNewScene() },
             { label: "Open scene…", cmd: "PrevizLoadScene", run: () => this.previzLoadSceneFile() },
-            { label: "Open USD / Alembic…", cmd: "PrevizImportUsd", run: () => this.previzImportUsd() },
             { label: "Import Model…", cmd: "PrevizAddModel", title: "Add models to the scene from a file "
                 + "(glTF, FBX, OBJ, STL, PLY, USD, splats); the File Browser's selected models go in at once",
               run: () => this.previzImportModel() },
@@ -118,7 +120,6 @@ export const PrevizMenuBarMixin = {
                 + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() },
             "-",
             { label: "Save scene…", cmd: "PrevizSaveScene", run: () => this.previzSaveSceneFile() },
-            { label: "Export USD…", cmd: "PrevizExportUsd", run: () => this.previzExportUsd() },
             ...(exports.length ? [{ label: "Export character", sub: exports }] : []),
             "-",
             { label: "Render…", cmd: "PrevizRender", run: () => this.previzRenderDialog() },

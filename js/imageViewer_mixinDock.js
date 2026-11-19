@@ -56,6 +56,9 @@ const DOCK_PANELS = {
     // Display layers, selection sets and references; and a character's picker (imageViewer_previzLayers.js).
     layers3d: { prop: "layers3dPanel", label: "Layers", minW: 190, minH: 140, defaultRail: "right" },
     picker: { prop: "pickerPanel", label: "Picker", minW: 190, minH: 200, defaultRail: "right", size: 2 },
+    // The matchmove guide (step by step) and the plate it tracks on (imageViewer_previzMatchmove.js).
+    mmGuide: { prop: "mmGuidePanel", label: "Matchmove", minW: 260, minH: 200, defaultRail: "right", size: 2 },
+    mmPlate: { prop: "mmPlatePanel", label: "Plate", minW: 260, minH: 160, defaultRail: "bottom", size: 2, tabWith: "curves" },
     // The scene's animation layers (imageViewer_animLayersPanel.js).
     animLayers: { prop: "animLayersPanel", label: "Anim Layers", minW: 240, minH: 120, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
@@ -206,6 +209,7 @@ export const DockMixin = {
                                            { id: "previz",  size: 1, hidden: true  },
                                            { id: "layers3d", size: 1, hidden: true },
                                            { id: "picker", size: 2, hidden: true },
+                                           { id: "mmGuide", size: 2, hidden: true },
                                            { id: "animLayers", size: 1, hidden: true },
                                            { id: "rotoCurves", size: 1, hidden: true },
                                            { id: "paramCurves", size: 1, hidden: true },
@@ -221,6 +225,7 @@ export const DockMixin = {
             bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true, tab: "tcurves", behind: false },
                                             { id: "dopeSheet", size: 1, hidden: true, tab: "tcurves", behind: true },
                                             { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
+                                            { id: "mmPlate", size: 1, hidden: true, tab: "tcurves", behind: true },
                                             { id: "motionTimeline", size: 1, hidden: true },
                                             { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
                                             { id: "compLayers", size: 1, hidden: true, tab: "comp", behind: true },
@@ -710,6 +715,8 @@ export const DockMixin = {
             if (this._plRender) this._plRender(true);
         } else if (id === "picker") {
             if (this._pkRender) this._pkRender(true);
+        } else if (id === "mmGuide" || id === "mmPlate") {
+            if (this._mmPanelShown) this._mmPanelShown(id);
         } else if (id === "animLayers") {
             if (this._alRender) this._alRender();
         } else if (id === "agentChat") {

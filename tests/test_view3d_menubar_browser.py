@@ -126,7 +126,7 @@ class MenuBarPaneTests(unittest.TestCase):
             mode = pg.evaluate("() => window.__panel._modelView().gizmoMode")
         finally:
             pg.close()
-        self.assertEqual(labels, ["File", "Edit", "Create", "Rig", "Animate", "Constrain", "World", "Terrain", "View", "Windows"])
+        self.assertEqual(labels, ["File", "Edit", "Create", "Rig", "Animate", "Constrain", "World", "Terrain", "Matchmove", "View", "Windows"])
         self.assertGreaterEqual(right, 3)
         self.assertTrue(inside)
         self.assertEqual(tools[:4], ["select", "translate", "rotate", "scale"])
@@ -391,7 +391,12 @@ class MenuBarPaneTests(unittest.TestCase):
         self.assertNotIn("Model…", create)
         self.assertIn("Camera", create)
         self.assertIn("Import Model…", file_items)
-        self.assertLess(file_items.index("Open USD / Alembic…"), file_items.index("Import Model…"))
+        self.assertLess(file_items.index("Open scene…"), file_items.index("Import Model…"))
+        # the scene is USD: no separate USD open / export (Sebastian 2026-11-18)
+        self.assertNotIn("Open USD / Alembic…", file_items)
+        # (the one "Export USD…" left is the character's, under "Export character")
+        self.assertEqual([i for i, t in enumerate(file_items) if t == "Export USD…"],
+                         [file_items.index("Export character") + 2])
         self.assertEqual(picker, {"title": "Import Model", "go": "Import"})
         self.assertEqual(added, ["robot.glb"])
         self.assertEqual(self.errors, [])

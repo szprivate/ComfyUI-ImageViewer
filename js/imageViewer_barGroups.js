@@ -36,9 +36,14 @@ const ICONS = {
     paint: spaceIconSvg("paint"),
     timeline: spaceIconSvg("edit"),
     farm: spaceIconSvg("farm"),
+    // Matchmove lives in the 3D space: a crosshair (Lucide's crosshair shape), in the 3D colour.
+    matchmove: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" '
+        + 'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        + '<circle cx="12" cy="12" r="10"/><line x1="22" x2="18" y1="12" y2="12"/><line x1="6" x2="2" y1="12" y2="12"/>'
+        + '<line x1="12" x2="12" y1="6" y2="2"/><line x1="12" x2="12" y1="22" y2="18"/></svg>',
 };
 // The space each icon stands for, for its accent colour (SPACE_COLORS).
-const ICON_SPACE = { box: "3d", motion: "motion", comp: "comp", paint: "paint", timeline: "edit", farm: "farm" };
+const ICON_SPACE = { box: "3d", motion: "motion", comp: "comp", paint: "paint", timeline: "edit", farm: "farm", matchmove: "3d" };
 // ComfyUI's own mark, as its frontend ships it (white on black, as it is drawn).
 const COMFY_LOGO = "/assets/images/comfy-logo-mono.svg";
 
@@ -65,6 +70,13 @@ const GROUPS = [
         { label: "Dope Sheet", panel: "dopeSheet", needs: "3d" },
         { label: "Playblast\u2026", run: (p) => p.previzPlayblastDialog(), needs: "3d" },
         { label: "Clip Sequencer", panel: "clips", needs: "3d" },
+    ] },
+    // Matchmove (imageViewer_previzMatchmove.js): a camera solved from a plate, in a 3D tab; the guide leads step by step.
+    { id: "matchmove", title: "Matchmove", icon: "matchmove", items: [
+        { label: "Open Matchmove\u2026", run: (p) => p.matchmoveOpen(),
+          checked: (p) => !!(p.isPrevizTab && p.isPrevizTab() && p.isPanelDocked && p.isPanelDocked("mmGuide")) },
+        { label: "Matchmove guide", panel: "mmGuide", needs: "3d" },
+        { label: "Plate", panel: "mmPlate", needs: "3d" },
     ] },
     // A motion-graphics scene is a tab; "Open scene" asks for one, the three panels are its parts.
     { id: "motion", title: "Motion", icon: "motion", items: [
