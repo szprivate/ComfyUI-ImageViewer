@@ -394,6 +394,40 @@ class Routes(unittest.TestCase):
                 self.assertFalse(20 <= k0[1] < 120 and 40 <= k0[2] < 140, "started on the matte")
         self.run_c(go)
 
+    def test_the_models_can_run_on_a_smaller_plate_and_answer_at_its_size(self):
+        from PIL import Image
+        async def go(c):
+            r = await c.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "background",
+                                                            "workflow": "rmbg2", "frames": [0], "scale": 0.05})
+            self.assertEqual(r.status, 400)                                 # below the smallest share
+            r = await c.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "background",
+                                                            "workflow": "rmbg2", "frames": [0, 2], "scale": 0.5})
+            d = await r.json()
+            self.assertEqual(r.status, 200, d)
+            self.assertEqual((d["width"], d["height"], d["scale"]), (320, 200, 0.5))
+            self.assertEqual((d["work_width"], d["work_height"]), (160, 100))
+            g = d["graph"]
+            for k, v in g.items():
+                if v["class_type"] == "LoadImage":                          # the models get the half-size frame
+                    self.assertEqual(Image.open(os.path.join(self.dirs["input"], v["inputs"]["image"])).size, (160, 100))
+            images = {}
+            sub = os.path.join("matchmove", "matte", d["run"])
+            os.makedirs(os.path.join(self.dirs["output"], sub), exist_ok=True)
+            for f in d["frames"]:
+                a = np.zeros((100, 160, 3), np.uint8)
+                a[20:70, 10:60] = 255
+                name = f"matte.{f:04d}_00001_.png"
+                Image.fromarray(a).save(os.path.join(self.dirs["output"], sub, name))
+                images[str(f)] = {"filename": name, "subfolder": sub, "type": "output"}
+            r = await c.post("/imageviewer/mm_matte_place", json={"run": d["run"], "images": images})
+            got = await r.json()
+            self.assertEqual(r.status, 200, got)
+            m = np.asarray(Image.open(MM.matte_path(got["pattern"], 0)).convert("L"))
+            self.assertEqual(m.shape, (200, 320))                           # back at the plate's size
+            self.assertGreater(m[90, 70], 200)
+            self.assertLess(m[180, 300], 50)
+        self.run_c(go)
+
     def test_depth_puts_the_floor_into_the_solves_world_and_says_the_metres(self):
         """A depth job (Depth Anything 3 Metric) of a floor 1.5 below a camera sliding sideways: each frame's depth,
         scaled onto the solved tracks, lands on the floor in the solve's world, and a unit is 0.4 m."""

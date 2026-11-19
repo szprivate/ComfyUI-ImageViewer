@@ -25,6 +25,9 @@ import { showInstallLog } from "./imageViewer_installLog.js";
 const AI_GROUND_FRAMES = 5;      // frames SAM 3 looks for the ground on
 const AI_GROUND_SHARE = 0.6;     // a track on the ground in this share of the frames it was seen in
 const MATTE_CACHE = 24;          // matte pictures kept for drawing
+// The share of the plate's size the mask / depth models run at (their answers come back at the plate's size).
+const WORK_SCALES = [["1", "Full size"], ["0.5", "Half size"], ["0.25", "Quarter size"]];
+const workScale = (v) => { const n = Number(v); return n > 0 && n <= 1 ? n : 1; };
 
 const el = (doc, tag, cls, text) => {
     const n = doc.createElement(tag);
@@ -126,12 +129,13 @@ export const PrevizMatchmoveAIMixin = {
      * The ground as SAM 3 sees it: the words (default "ground") looked for on a few frames spread over the solve
      * in ONE job; the solved tracks that stay on what it found are the ground's points, then findGround among them.
      */
-    async matchmoveGroundAI(words, { ask = true } = {}) {
+    async matchmoveGroundAI(words, { ask = true, scale = null } = {}) {
         const st = this._mmCur();
         if (!st || !st.mm.solve) throw new Error("Solve the camera first.");
         const prompt = String(words || st.groundPrompt || "ground").trim() || "ground";
         const frames = this._mmSpreadFrames(st, AI_GROUND_FRAMES);
-        const matte = await this._mmMatteRun(st, { engine: "objects", prompt, frames, what: `Looking for "${prompt}"`, ask });
+        const matte = await this._mmMatteRun(st, { engine: "objects", prompt, frames, what: `Looking for "${prompt}"`, ask,
+                                                  scale: scale === null ? workScale(st.groundScale) : workScale(scale) });
         if (!matte) return null;
         const solved = new Set(st.mm.solve.points.map((q) => q.id));
         const points = {};
@@ -165,7 +169,7 @@ export const PrevizMatchmoveAIMixin = {
      * the world set on it. With a metric model and `metres`, the world is also scaled so a unit is a metre.
      * Answers findGround's result with {metres, height} (or {error}, or null when not run).
      */
-    async matchmoveGroundDepth({ workflow = null, metres = true, ask = true } = {}) {
+    async matchmoveGroundDepth({ workflow = null, metres = true, ask = true, scale = null } = {}) {
         const st = this._mmCur();
         if (!st || !st.mm.solve) throw new Error("Solve the camera first.");
         const sv = st.mm.solve;
@@ -178,6 +182,7 @@ export const PrevizMatchmoveAIMixin = {
                 .map((t) => { const k = D.keyAt(t, f); return k ? [k[1], k[2], ...solved.get(t.id)] : null; }).filter(Boolean);
         }
         const got = await this._mmMatteRun(st, { engine: "depth", frames, workflow, what: "Reading depth", ask,
+            scale: scale === null ? workScale(st.groundScale) : workScale(scale),
             place: { url: "/imageviewer/mm_depth_place", body: { cams, tracks, focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null } } });
         if (!got) return null;
         const pts = got.points.map((X, i) => ({ id: `d${i}`, p: D.pointToScene(X) }));
@@ -217,6 +222,9 @@ export const PrevizMatchmoveAIMixin = {
         words.value = st.groundPrompt || "ground";
         words.style.width = "90px";
         words.onchange = () => { st.groundPrompt = words.value; };
+        const ws = this._mmSelect(ctx, WORK_SCALES, String(workScale(st.groundScale)), (v) => { st.groundScale = workScale(v); });
+        ws.title = "The size the SAM 3 and depth models see the plate at: smaller is quicker and lighter, with less detail";
+        this._mmRow(ctx, "Models at", ws);
         this._mmRow(ctx, "", this._mmBtn(ctx, "Find with AI", () => this.matchmoveGroundAI(words.value), { title: "SAM 3 looks for these words on a few frames; the tracks on it are the ground's" }), words);
         const dl = this._mmMatteLists && this._mmMatteLists.get("depth");
         if (!dl) this._mmMatteList("depth").then(() => this._mmRender()).catch(() => {});
@@ -319,7 +327,7 @@ export const PrevizMatchmoveAIMixin = {
      * One AI matte job over `frames` of the plate: {pattern, frames, width, height, covered, ...} or null when not
      * run (models not fetched, stopped before anything came). Shows as the guide's busy line, Stop stops it.
      */
-    async _mmMatteRun(st, { engine, prompt = "", frames, workflow = null, what = "AI mask", ask = true, place = null }) {
+    async _mmMatteRun(st, { engine, prompt = "", frames, workflow = null, what = "AI mask", ask = true, place = null, scale = 1 }) {
         if (st.busy) throw new Error("Something runs already.");
         const mm = st.mm;
         const list = await this._mmMatteList(engine);
@@ -336,7 +344,7 @@ export const PrevizMatchmoveAIMixin = {
             this._mmRender();
             const graph = await this._paintPrompt(item, () => {});
             const tune = (item.tune && item.tune.length && this._paintTune(wid)) || null;
-            const prep = await post("/imageviewer/mm_matte", { path: mm.plate.path, engine, prompt, frames, workflow: wid, graph, tune });
+            const prep = await post("/imageviewer/mm_matte", { path: mm.plate.path, engine, prompt, frames, workflow: wid, graph, tune, scale: workScale(scale) });
             if (busy.stopped) return null;
             const pid = await this._paintQueue(prep.graph);
             busy.what = `${what} (${item.label})`;
@@ -353,7 +361,7 @@ export const PrevizMatchmoveAIMixin = {
             }
             const placed = await post(place ? place.url : "/imageviewer/mm_matte_place", { ...(place ? place.body : {}), run: prep.run, images });
             if (prep.skipped && prep.skipped.length) notice("warn", `${prep.skipped.length} frame(s) left out`, prep.skipped.slice(0, 3).map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
-            return { ...placed, workflow: wid, engine, prompt };
+            return { ...placed, workflow: wid, engine, prompt, scale: prep.scale, work: [prep.work_width, prep.work_height] };
         } catch (e) {
             const miss = e.data && e.data.missing;
             if (miss && miss.length) throw new Error(`The workflow needs what is not here: ${miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ")}`);
@@ -369,7 +377,7 @@ export const PrevizMatchmoveAIMixin = {
      * An AI mask over the shot: the matte of every `step`-th frame (all of them by default; a frame in between takes
      * the one before) as a new mask - exclude, or an object's when `object` names one. Answers the mask's id.
      */
-    async matchmoveAiMask({ engine = "objects", prompt = "", step = 1, from = 0, to = null, mode = "exclude", object = "", workflow = null, name = "", ask = true } = {}) {
+    async matchmoveAiMask({ engine = "objects", prompt = "", step = 1, from = 0, to = null, mode = "exclude", object = "", workflow = null, name = "", ask = true, scale = 1 } = {}) {
         const st = this._mmCur();
         if (!st || !st.mm.plate) throw new Error("Pick the plate first.");
         const last = st.mm.plate.frames - 1;
@@ -380,7 +388,7 @@ export const PrevizMatchmoveAIMixin = {
         if (frames[frames.length - 1] !== b) frames.push(b);
         const words = String(prompt || "").trim();
         const label = engine === "objects" ? (words || "objects") : "the subject";
-        const got = await this._mmMatteRun(st, { engine, prompt: words, frames, workflow, what: `Masking ${label}`, ask });
+        const got = await this._mmMatteRun(st, { engine, prompt: words, frames, workflow, what: `Masking ${label}`, ask, scale: workScale(scale) });
         if (!got) return null;
         let id;
         this._mmEdit("AI mask", (m) => {
@@ -394,7 +402,7 @@ export const PrevizMatchmoveAIMixin = {
         st.maskSel = id;
         this._mmRender();
         this._mmDraw();
-        notice("info", "AI mask made", `${got.frames.length} frame(s) of ${label}; the tracker keeps features off it.`);
+        notice("info", "AI mask made", `${got.frames.length} frame(s) of ${label}${got.scale < 1 && got.work[0] ? `, run at ${got.work[0]} x ${got.work[1]}` : ""}; the tracker keeps features off it.`);
         return id;
     },
 
@@ -422,6 +430,9 @@ export const PrevizMatchmoveAIMixin = {
                                                             o.workflow || list.choice, (v) => { o.workflow = v; }));
             }
         } else this._mmMatteList(o.engine).then(() => this._mmRender()).catch(() => {});
+        const ws = this._mmSelect(ctx, WORK_SCALES, String(workScale(o.scale)), (v) => { o.scale = workScale(v); });
+        ws.title = "The size the model sees the plate at: smaller is quicker and lighter; the mask comes back at the plate's size, softer at the edges";
+        this._mmRow(ctx, "Model at", ws);
         this._mmRow(ctx, "Every", this._mmNum(ctx, o.step || 1, (v) => { o.step = v >= 1 ? Math.round(v) : 1; }, { width: "48px", min: 1, step: 1 }),
                     el(doc, "span", "", "frame(s)"));
         this._mmRow(ctx, "", this._mmBtn(ctx, "Mask with AI", () => this.matchmoveAiMask({ ...o, workflow: o.workflow || null }), { title: "One ComfyUI job for every frame" }));

@@ -689,7 +689,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         return web.json_response(res, headers={"Cache-Control": "no-cache"})
 
     async def matte_route(request):
-        """POST {path, engine, prompt?, frames, workflow?, graph?, tune?, models?} -> ONE prompt for the frames'
+        """POST {path, engine, prompt?, frames, workflow?, graph?, tune?, models?, scale?} -> ONE prompt for the frames'
         mattes {run, graph, outputs {frame: node}, frames, skipped}; 409 {missing} without its models."""
         from . import matchmove_matte as MT
         from . import paint_generate as G
@@ -710,7 +710,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                             wid=body.get("workflow") or None, graph=body.get("graph"),
                             tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
                             models=body.get("models") if isinstance(body.get("models"), dict) else None,
-                            folder_paths=folder_paths, node_classes=node_classes())
+                            folder_paths=folder_paths, node_classes=node_classes(), scale=body.get("scale"))
         except G.Missing as e:
             return web.json_response({"error": str(e), "missing": e.missing}, status=409)
         except (MT.MatteError, G.GenerateError, ValueError, OSError) as e:

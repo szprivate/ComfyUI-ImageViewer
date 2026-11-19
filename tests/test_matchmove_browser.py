@@ -510,7 +510,7 @@ class MatchmoveBrowserTests(unittest.TestCase):
             G = sys.modules[self.pkg + ".paint_generate"]
             real, G.missing = G.missing, lambda g, fp, nc: []                  # its model "is here"
             try:
-                r = ask("matchmove_ground", {"how": "depth"})
+                r = ask("matchmove_ground", {"how": "depth", "scale": 0.5})
             finally:
                 G.missing = real
             self.assertEqual(r["state"], "done", r)
@@ -522,7 +522,7 @@ class MatchmoveBrowserTests(unittest.TestCase):
             # A mask over the whole shot from a background remover: a box on the left, frame by frame.
             self._fake_mattes("left", lambda f, y, x: x < 120)
             self._fake_comfy(pg, "left")
-            r = ask("matchmove_ai_mask", {"engine": "background", "step": 2})
+            r = ask("matchmove_ai_mask", {"engine": "background", "step": 2, "scale": 0.5})
             self.assertEqual(r["state"], "done", r)
             m = r["result"]["mask"]
             self.assertEqual(m["frames"], 13)                           # 0, 2 .. 22 and the last frame

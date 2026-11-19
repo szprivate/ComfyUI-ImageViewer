@@ -46,6 +46,7 @@ DEPTH_MOST = 4000                         # points a frame at most
 DEPTH_MIN_TRACKS = 6                      # solved tracks a frame needs to scale its depth
 MAX_FRAMES = 1000
 MAX_RUNS = 8
+MIN_WORK_SCALE = 0.1   # the smallest share of the plate the mask / depth models may be run at
 _LOCK = threading.Lock()
 _RUNS = {}
 
@@ -95,11 +96,37 @@ def pick_workflow(engine, wanted, node_classes=None):
     return usable[0]
 
 
+def work_scale(scale):
+    """The share of the plate's size the models are run at: 1 (the plate), or less down to MIN_WORK_SCALE."""
+    try:
+        s = float(scale if scale is not None else 1)
+    except (TypeError, ValueError):
+        raise MatteError("'scale' must be a number (1 = the plate's size, 0.5 = half)") from None
+    if not (MIN_WORK_SCALE <= s <= 1):
+        raise MatteError(f"'scale' must lie between {MIN_WORK_SCALE} and 1")
+    return s
+
+
+def shrink(pic, scale):
+    """An 8-bit RGBA frame at *scale* of its size (Lanczos), at least 64 px a side; the frame itself at 1."""
+    if scale >= 1:
+        return pic
+    from PIL import Image
+    h, w = pic.shape[:2]
+    nw, nh = max(64, int(round(w * scale))), max(64, int(round(h * scale)))
+    if (nw, nh) == (w, h):
+        return pic
+    return np.asarray(Image.fromarray(pic, "RGBA").resize((nw, nh), Image.LANCZOS))
+
+
 def prepare_batch(picture, frames, input_dir, *, engine, prompt="", wid=None, graph=None, tune=None,
-                  models=None, folder_paths=None, node_classes=None):
+                  models=None, folder_paths=None, node_classes=None, scale=1):
     """The mattes of these plate frames as ONE prompt: {run, graph, outputs {frame: node}, frames, skipped, workflow}.
 
-    *picture(n)* is the plate's frame n as linear premultiplied RGBA float (``matchmove_routes.Plate.picture``)."""
+    *picture(n)* is the plate's frame n as linear premultiplied RGBA float (``matchmove_routes.Plate.picture``).
+    *scale* < 1 runs the models on a smaller copy of each frame; the answers are brought back to the plate's size
+    (``place_batch``, ``depth_points``), so only the work and the detail change."""
+    scale = work_scale(scale)
     action = ENGINES.get(engine)
     if not action:
         raise MatteError(f"not a matte engine: {engine!r} (objects, background or depth)")
@@ -117,7 +144,7 @@ def prepare_batch(picture, frames, input_dir, *, engine, prompt="", wid=None, gr
     run = secrets.token_hex(6)
     seed = secrets.randbelow(G.SEED_MAX + 1)
     graphs, outs, done, skipped = [], [], [], []
-    size = None
+    size = work = None
     for f in want:
         try:
             img = picture(f)
@@ -130,6 +157,9 @@ def prepare_batch(picture, frames, input_dir, *, engine, prompt="", wid=None, gr
         pic = CA.to_8bit(img)
         h, w = pic.shape[:2]
         size = size or (w, h)
+        pic = shrink(pic, scale)
+        h, w = pic.shape[:2]
+        work = work or (w, h)
         s = SimpleNamespace(doc=SimpleNamespace(w=w, h=h, selection=None))
         res = G.prepare(s, None, action, input_dir, wid=wid, prompt=words, folder_paths=folder_paths,
                         node_classes=node_classes, graph=graph, tune=tune, picture=pic, models=models)
@@ -148,12 +178,13 @@ def prepare_batch(picture, frames, input_dir, *, engine, prompt="", wid=None, gr
     merged, out_ids = CA.merge_graphs(graphs, outs)
     with _LOCK:
         _RUNS[run] = {"engine": engine, "prompt": words, "size": size, "at": time.time(), "workflow": wid,
+                      "scale": scale, "work": work,
                       "folder": os.path.join(input_dir, "matchmove", "mattes", run)}
         while len(_RUNS) > MAX_RUNS:
             _RUNS.pop(next(iter(_RUNS)))
     return {"run": run, "graph": merged, "outputs": {str(f): o for f, o in zip(done, out_ids)}, "frames": done,
             "skipped": skipped, "engine": engine, "workflow": wid, "nodes": len(merged), "seed": seed,
-            "width": size[0], "height": size[1]}
+            "width": size[0], "height": size[1], "scale": scale, "work_width": work[0], "work_height": work[1]}
 
 
 def run_record(run):
