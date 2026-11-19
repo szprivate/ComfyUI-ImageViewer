@@ -11,12 +11,14 @@
 
 ## Panels
 
-Panels sit in three rails: left, right and bottom.
+Panels and the picture share the viewer's area, split side by side and one above the other as you like.
 
-- Drag a panel by its title bar onto a rail edge, above or below another panel, or onto the middle of a panel to stack both as tabs.
+- Drag a panel by its title bar onto any edge of another panel, of the picture or of the whole area: that place splits in two, the panel on the side you dropped it. Drop it onto the middle of a panel to stack both as tabs.
+- Drag the gap between two places to share the room differently.
 - The button left of the panel name switches what that slot shows.
 - The buttons next to **✕** collapse the panel to its title bar or maximise it over the viewer.
-- The **layout** menu saves the current arrangement under a name and can set it as default.
+- Every space (Viewer, 3D, Comp, Edit, Paint, Motion, Farm) keeps a layout of its own: arrange the panels for 3D work once and they come back with every 3D tab. **Reset this space's panels** in the **layout** menu puts the space that is up back to how it shipped.
+- The **layout** menu saves the current arrangement, every space's, under a name and can set it as default.
 
 The lower bar holds the transport and one menu per area: **ComfyUI** (History, Parameters, Agent code, Dataset, agentY), **3D**, **Motion**, **Paint**, **Comp** and **Timeline**.
 

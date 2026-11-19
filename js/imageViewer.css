@@ -680,6 +680,20 @@ textarea.param-input {
 .rail-splitter:hover, .rail-splitter.dragging,
 .stack-splitter:hover, .stack-splitter.dragging { background: rgba(255,102,0,0.30); }
 
+/* The layout is a tree of splits (imageViewer_dockTree.js, Sebastian 2026-11-19): every split is a .dock-rail box
+   (.bottom when it lays its children side by side), the picture's place is .dock-view, the whole is .dock-root. A
+   panel is a card (.dock-card) with a little room around it; the splitter between two places lies over that room. */
+.dock-root { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; position: relative; padding: 0; }
+.dock-split { min-width: 0; min-height: 0; overflow: hidden; box-sizing: border-box; }
+.dock-rail { padding: 0; }
+.dock-rail > :not(.stack-splitter) { border: none; border-radius: 0; }
+.dock-rail > .dock-card { border: 1px solid #333; border-radius: 7px; overflow: hidden; box-sizing: border-box; margin: 3px; }
+.dock-rail.bottom:not([data-rail="bottom"]) { border-top: 0; }
+.dock-view { flex: 1 1 0; display: flex; flex-direction: row; min-width: 0; min-height: 0; position: relative; overflow: hidden; }
+.dock-rail > .dock-card.dock-max { margin: 0; }
+.dock-rail > .stack-splitter { position: relative; z-index: 30; margin: -3px 0; }
+.dock-rail > .stack-splitter.horizontal { margin: 0 -3px; }
+
 /* Every dockable panel wears one of these: the handle you grab to move it, and
    the two things you do to it without moving it. Built by _ensurePanelTitlebar
    rather than written into the markup three times. */

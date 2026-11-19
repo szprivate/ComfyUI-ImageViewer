@@ -60,6 +60,8 @@ export const LayoutMixin = {
         frag.appendChild(mkOpt("", "", true, true));
         frag.appendChild(mkOpt("__factory__", "Factory Default"));
         frag.appendChild(mkOpt("__make_default__", "🛠 Make Current Layout default"));
+        // Each space keeps its own panel layout (mixinDock): this one's back to how it shipped.
+        frag.appendChild(mkOpt("__space_reset__", "Reset this space's panels"));
 
         const customKeys = Object.keys(this.customLayouts);
         if (customKeys.length > 0) {
@@ -277,6 +279,8 @@ export const LayoutMixin = {
     },
 
     applyLayout(mode) {
+        // Only the panels of the space that is up; the viewer stays where it is.
+        if (mode === "__space_reset__") { if (this.dockSpaceReset) this.dockSpaceReset(); return; }
         // A layout says where the FLOATING viewer goes; docked, the page decides.
         if (mode !== "__make_default__" && this.pageDockSide && this.pageDockSide()) this.setPageDock("");
         this.style.bottom = "auto"; this.style.right = "auto";

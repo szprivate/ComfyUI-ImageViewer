@@ -195,7 +195,8 @@ export const EditMediaMixin = {
             let idx = 0;
             const s0 = sheet.start || 0, s1 = sheet.end > s0 ? sheet.end : sheet.duration;
             // The source moment of the tile: at the clip's speed, through its loop, from its own in.
-            const u = ((x + tw / 2) / W) * m.length;
+            // (A last tile cut by the clip's end has its middle past it: it shows the clip's last moment.)
+            const u = Math.min(m.length, ((x + tw / 2) / W) * m.length);
             const t = m.clip ? D.srcLocal(m.clip, u) : m.in + u;
             if (sheet.n > 1 && s1 > s0) idx = Math.max(0, Math.min(sheet.n - 1, Math.floor(((t - s0) / (s1 - s0)) * sheet.n)));
             if (tiles.length < 64) tiles.push(Math.round(t * 1000) / 1000);

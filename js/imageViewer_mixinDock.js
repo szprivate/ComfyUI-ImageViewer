@@ -1,41 +1,41 @@
 // imageViewer_mixinDock.js
-// Panel docking: where the history strip, the file browser and the parameters
-// panel sit, how wide and how tall they are, and the drag that moves them.
+// Panel docking: where every panel sits, how much room it has, and the drag that moves it.
 //
 // WHY THIS EXISTS
 // Placement used to be spread over six insertBefore/appendChild calls in four
 // files, driven by two independent side flags plus one implicit rule ("history
 // goes opposite params"). Every feature that touched layout had to re-derive
-// the arrangement from those, and twice got it wrong: once by assuming the
-// history strip was an overlay (its stylesheet said `absolute`, the code
-// overrode it to `relative`), once by adding an offset for a collision that
-// could not happen. Both bugs were the same bug — no single place said where
-// the panels are.
+// the arrangement from those, and twice got it wrong. Both bugs were the same
+// bug — no single place said where the panels are.
 //
 // So: one object says where everything is, and one function is allowed to act
 // on it.
 //
-//   dockLayout = {
-//     left:   { width: 260, panels: [{ id:'history', size:1, hidden:false }] },
-//     right:  { width: 320, panels: [{ id:'browser', size:1 }, { id:'params', size:1 }] },
-//     bottom: { height: 240, panels: [{ id:'curves', size:1 }] },
-//   }
+// THE LAYOUT IS A TREE OF SPLITS (Sebastian 2026-11-19: "more panels side by side, or split panels horizontally and
+// vertically"; imageViewer_dockTree.js, pure):
 //
-// A side rail is a vertical stack sharing one width; `size` is each panel's
-// share of the rail's height. The bottom rail — under the picture, above the
-// timeline — is the same idea turned ninety degrees: one height, and `size` is
-// each panel's share of its width. Everything below asks _railIsRow(side)
-// rather than naming "bottom", so the two read as one rule with an axis. Everything else — toggling a panel, restoring a layout,
-// dropping a dragged panel — edits that object and calls applyDockLayout().
+//   dockLayout = { v: 2, root: { split: "col", children: [
+//       { split: "row", children: [ { split: "col", rail: "left", px: 88, children: [{ id: "history" }] },
+//                                   { view: true },
+//                                   { split: "col", rail: "right", px: 300, children: [{ id: "params" }, ...] } ] },
+//       { split: "row", rail: "bottom", px: 240, children: [{ id: "curves" }, ...] } ] } }
+//
+// A split lays its children out side by side ("row") or one above the other ("col"); a child takes `px` (fixed) or
+// `size` (a share). The picture (`view`: the viewport and the Source viewer beside it) is a node like the panels, so
+// a panel dropped on any edge of any panel - or of the picture, or of the whole area - splits that place in two. The
+// three rails of before are the splits marked `rail`, and a saved layout of the rails' shape is read into this one
+// (fromRails). Everything else — toggling a panel, restoring a layout, dropping a dragged panel — edits that object
+// and calls applyDockLayout().
 //
 // TABS. A panel dropped onto the middle of another shares its place: the two
 // are tabs of one slot, named in the title bar, one of them in front. In the
 // layout that is two more fields on an entry - `tab`, the name of the group it
 // is in, and `behind`, set on every member but the one in front. A panel that
 // is behind is open (isPanelDocked) but not drawn; isPanelFront says which is.
-// Members of a group lie next to each other in the rail's list, and the slot's
-// share of the rail is the front one's `size`.
+// Members of a group lie next to each other in their split, and the slot's
+// room is the front one's.
 import { api } from "../../scripts/api.js";
+import * as DT from "./imageViewer_dockTree.js";
 
 // Names that are another panel now: the Channel Box lives in the Parameters panel (Sebastian 2026-11-12).
 const DOCK_ALIASES = { channels: "params" };
@@ -118,15 +118,51 @@ const DOCK_PANELS = {
     // moved here from the ComfyUI sidebar while this panel is open.
     agentChat: { prop: "agentChatPanel", label: "agentY", minW: 280, minH: 260, defaultRail: "right", size: 2 },
 };
-const RAIL_SIDES = ["left", "right", "bottom"];
-// Which way a rail stacks: the bottom one lays its panels out side by side.
-const _isRow = (side) => side === "bottom";
 
-const RAIL_MAX = 900;
-// How far into the viewport an edge drop is offered.
+const RAIL_SIDES = ["left", "right", "bottom"];
+// The room a rail had before anybody dragged it.
+const RAIL_PX = { left: 88, right: 300, bottom: 240 };
+// How far into the picture an edge drop is offered.
 const EDGE_ZONE = 0.28;
+// The band along the whole area's edge that means "beside everything".
+const ROOT_ZONE = 12;
+// Between two places: the splitter.
+const GAP = 5;
 // Pointer travel before a press on a header becomes a drag rather than a click.
 const DRAG_SLOP = 4;
+// A panel's least room, with the room round its card (a 3 px margin each side).
+const CARD = 6;
+const _minOf = (id) => { const s = DOCK_PANELS[id]; return s ? { w: s.minW + CARD, h: s.minH + CARD } : null; };
+const _known = (id) => !!DOCK_PANELS[id];
+// What the old shape's default was; the tree's default is read from it, so both say the same.
+const DEFAULT_RAILS = () => ({
+    left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
+    right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
+                                   { id: "previz",  size: 1, hidden: true  },
+                                   { id: "layers3d", size: 1, hidden: true },
+                                   { id: "picker", size: 2, hidden: true },
+                                   { id: "mmGuide", size: 2, hidden: true },
+                                   { id: "animLayers", size: 1, hidden: true },
+                                   { id: "rotoCurves", size: 1, hidden: true },
+                                   { id: "paramCurves", size: 1, hidden: true },
+                                   { id: "motionProps", size: 2, hidden: true },
+                                   { id: "paintLayers", size: 2, hidden: true },
+                                   { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
+                                   { id: "paintTool", size: 2, hidden: true, tab: "paint", behind: true },
+                                   { id: "paintEffects", size: 2, hidden: true, tab: "paint", behind: true },
+                                   { id: "paintGenerate", size: 2, hidden: true, tab: "paint", behind: true },
+                                   { id: "paintHistory", size: 1, hidden: true },
+                                   { id: "params",  size: 1, hidden: false }] },
+    // A graph over time wants width: the Curve Editor lives under the picture.
+    bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true, tab: "tcurves", behind: false },
+                                    { id: "dopeSheet", size: 1, hidden: true, tab: "tcurves", behind: true },
+                                    { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
+                                    { id: "mmPlate", size: 1, hidden: true, tab: "tcurves", behind: true },
+                                    { id: "motionTimeline", size: 1, hidden: true },
+                                    { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
+                                    { id: "compLayers", size: 1, hidden: true, tab: "comp", behind: true },
+                                    { id: "compCurves", size: 1, hidden: true, tab: "comp", behind: true }] },
+});
 
 export const DockMixin = {
 
@@ -134,29 +170,55 @@ export const DockMixin = {
 
     _initDock() {
         const sr = this.shadowRoot;
-        this._ensureBottomRail();
-        this.railEl = {
-            left:   sr.getElementById("dock-left"),
-            right:  sr.getElementById("dock-right"),
-            bottom: sr.getElementById("dock-bottom"),
-        };
-        this.railSplitter = {
-            left:   sr.getElementById("rail-splitter-left"),
-            right:  sr.getElementById("rail-splitter-right"),
-            bottom: sr.getElementById("rail-splitter-bottom"),
-        };
+        const main = sr.querySelector(".main-area");
         this.dockOverlay = sr.getElementById("dock-overlay");
-        if (!this.railEl.left || !this.railEl.right) return;
+        if (!main || !this.viewport || !this.viewport.parentNode) return;
+        const doc = main.ownerDocument;
+        // The rails of the old markup: the tree draws splits of its own. (A rail element a cached older page still
+        // has is simply taken out.)
+        for (const id of ["dock-left", "dock-right", "dock-bottom", "rail-splitter-left", "rail-splitter-right", "rail-splitter-bottom"]) {
+            const el = sr.getElementById(id);
+            if (el) el.remove();
+        }
+        // The picture's place: the viewport and, left of it, the Source viewer (which is made before #viewport,
+        // so it lands in here too when it comes later). Moved once, before anything plays.
+        let view = sr.getElementById("dock-view");
+        if (!view) {
+            view = doc.createElement("div");
+            view.id = "dock-view";
+            view.className = "dock-view";
+            this.viewport.parentNode.insertBefore(view, this.viewport);
+            const src = this.editSourcePanel;
+            if (src && src.parentNode === view.parentNode) view.appendChild(src);
+            view.appendChild(this.viewport);
+        }
+        this.dockViewEl = view;
+        let root = sr.getElementById("dock-root");
+        if (!root) {
+            root = doc.createElement("div");
+            root.id = "dock-root";
+            root.className = "dock-split dock-rail dock-root";
+            main.insertBefore(root, main.firstChild);
+        }
+        this._dockRootEl = root;
+        // Kept for anything still asking for a rail's element: the split that rail became.
+        const self = this;
+        this.railEl = {};
+        for (const side of RAIL_SIDES) {
+            Object.defineProperty(this.railEl, side, { enumerable: true, get() {
+                const n = self.dockLayout && DT.railNode(self.dockLayout.root, side);
+                return n ? self._dockNodeEl(n) : null;
+            } });
+        }
 
         // Hidden until the first layout pass places them, so nothing flashes at
-        // the edge of the viewport on the way to its rail.
+        // the edge of the viewport on the way to its place.
         for (const id of Object.keys(DOCK_PANELS)) {
             const el = this._dockPanelEl(id);
             if (el) el.style.display = "none";
         }
 
         this.dockLayout = this._defaultDockLayout();
-        this._bindRailSplitters();
         this._bindDockDrag();
         this.applyDockLayout();
         // The lower bar's panel groups (imageViewer_barGroups.js). On its own: a
@@ -167,144 +229,92 @@ export const DockMixin = {
         }
     },
 
-    /**
-     * The bottom rail, built here when the markup doesn't carry it.
-     *
-     * A viewer can come up against an older cached imageViewer.html (the
-     * parameters panel is rebuilt the same way, and for the same reason), and
-     * a missing rail would take docking down with it rather than simply
-     * leaving one side unavailable.
-     */
-    _ensureBottomRail() {
-        const sr = this.shadowRoot;
-        if (sr.getElementById("dock-bottom")) return;
-        const main = sr.querySelector(".main-area");
-        const controls = sr.querySelector(".controls");
-        if (!main || !main.parentNode) return;
-        const doc = main.ownerDocument;
-        const mk = (id, cls) => {
-            const n = doc.createElement("div");
-            n.id = id; n.className = cls; n.dataset.rail = "bottom";
-            return n;
-        };
-        const sp = mk("rail-splitter-bottom", "rail-splitter horizontal");
-        sp.title = "Resize";
-        const rail = mk("dock-bottom", "dock-rail bottom");
-        const at = (controls && controls.parentNode === main.parentNode) ? controls : main.nextSibling;
-        main.parentNode.insertBefore(sp, at);
-        main.parentNode.insertBefore(rail, at);
-    },
-
     _dockPanelEl(id) {
         const spec = DOCK_PANELS[id];
         return spec ? (this[spec.prop] || null) : null;
     },
 
+    /** A node's element: a panel's own, the picture's place, or the split's box (made the first time). */
+    _dockNodeEl(n) {
+        if (!n) return null;
+        if (DT.isPanel(n)) return this._dockPanelEl(n.id);
+        if (DT.isView(n)) return this.dockViewEl || null;
+        if (this.dockLayout && n === this.dockLayout.root) return this._dockRootEl || null;
+        const map = this._dockSplitEls || (this._dockSplitEls = new WeakMap());
+        let el = map.get(n);
+        if (!el && this._dockRootEl) {
+            el = this._dockRootEl.ownerDocument.createElement("div");
+            el.className = "dock-split dock-rail";
+            map.set(n, el);
+        }
+        return el || null;
+    },
+
     _defaultDockLayout() {
         // Matches what the viewer opened with before docking existed: the
-        // parameters panel showing on the right, the other two put away.
-        return {
-            left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
-            right:  { width: 300, panels: [{ id: "browser", size: 1, hidden: true  },
-                                           { id: "previz",  size: 1, hidden: true  },
-                                           { id: "layers3d", size: 1, hidden: true },
-                                           { id: "picker", size: 2, hidden: true },
-                                           { id: "mmGuide", size: 2, hidden: true },
-                                           { id: "animLayers", size: 1, hidden: true },
-                                           { id: "rotoCurves", size: 1, hidden: true },
-                                           { id: "paramCurves", size: 1, hidden: true },
-                                           { id: "motionProps", size: 2, hidden: true },
-                                           { id: "paintLayers", size: 2, hidden: true },
-                                           { id: "paintProps", size: 2, hidden: true, tab: "paint", behind: false },
-                                           { id: "paintTool", size: 2, hidden: true, tab: "paint", behind: true },
-                                           { id: "paintEffects", size: 2, hidden: true, tab: "paint", behind: true },
-                                           { id: "paintGenerate", size: 2, hidden: true, tab: "paint", behind: true },
-                                           { id: "paintHistory", size: 1, hidden: true },
-                                           { id: "params",  size: 1, hidden: false }] },
-            // A graph over time wants width: the Curve Editor lives under the picture.
-            bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true, tab: "tcurves", behind: false },
-                                            { id: "dopeSheet", size: 1, hidden: true, tab: "tcurves", behind: true },
-                                            { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
-                                            { id: "mmPlate", size: 1, hidden: true, tab: "tcurves", behind: true },
-                                            { id: "motionTimeline", size: 1, hidden: true },
-                                            { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
-                                            { id: "compLayers", size: 1, hidden: true, tab: "comp", behind: true },
-                                            { id: "compCurves", size: 1, hidden: true, tab: "comp", behind: true }] },
-        };
+        // parameters panel showing on the right, the others put away.
+        const L = DT.fromRails(DEFAULT_RAILS());
+        L.root = DT.tidy(L.root, _known);
+        return L;
     },
 
     // ── The single writer ────────────────────────────────────────────────────
 
     /**
      * Make the DOM match dockLayout. The ONLY function that moves a panel,
-     * sizes a rail, or shows a splitter — if layout looks wrong, it is either
+     * sizes a place, or shows a splitter — if layout looks wrong, it is either
      * this function or the object it was handed, and nowhere else.
+     *
+     * Order inside a split is CSS `order`, so an element is moved only when its split changes: re-appending the
+     * picture would pause a playing film.
      */
     applyDockLayout() {
-        if (!this.railEl || !this.railEl.left) return;
+        if (!this._dockRootEl) return;
         this._normaliseDockLayout();
-
-        for (const side of RAIL_SIDES) {
-            const rail = this.railEl[side];
-            if (!rail) continue;
-            const row = _isRow(side);
-            const spec = this.dockLayout[side];
-            // A panel behind another's tab is open, and has no room of its own.
-            const shown = spec.panels.filter(p => !p.hidden && !p.behind);
-
-            // Splitters are rebuilt each pass; they belong between panels, and
-            // which panels are in the rail is exactly what may have changed.
-            rail.querySelectorAll(".stack-splitter").forEach(el => el.remove());
-
-            spec.panels.forEach((entry) => {
-                const el = this._dockPanelEl(entry.id);
-                if (!el) return;
-                if (el.parentNode !== rail) rail.appendChild(el);
-                else rail.appendChild(el);           // re-append: array order wins
-                el.style.display = (entry.hidden || entry.behind) ? "none" : "flex";
-                // Collapsed: only its title bar, as tall (or, in the bottom rail, as wide) as that.
-                const folded = !!entry.collapsed && !entry.hidden;
+        const root = this.dockLayout.root;
+        const used = new Set();
+        const place = (n, parentEl, parent, order) => {
+            const el = this._dockNodeEl(n);
+            if (!el) return;
+            used.add(el);
+            if (parentEl && el.parentNode !== parentEl) parentEl.appendChild(el);
+            el.style.order = String(order);
+            if (DT.isPanel(n)) {
+                const row = parent && parent.split === "row";
+                const side = DT.sideOf(root, n.id);
+                el.classList.add("dock-card");
+                el.classList.toggle("left", !row && side === "left");
+                el.classList.toggle("right", !row && side !== "left");
+                el.classList.toggle("bottom", !!row);
+                const folded = !!n.collapsed && !n.hidden;
                 el.classList.toggle("dock-collapsed", folded);
-                el.style.flex    = folded ? "0 0 auto" : `${this._dockGrow(side, entry)} 1 0`;
-                el.style.minHeight = folded ? "" : `${DOCK_PANELS[entry.id].minH}px`;
-                // Whichever way the rail runs, the rail owns the other axis.
-                el.style.minWidth = row && !folded ? `${DOCK_PANELS[entry.id].minW}px` : "";
-                el.style.width   = "";
-                el.style.height  = "";
-                el.classList.toggle("left",   side === "left");
-                el.classList.toggle("right",  side === "right");
-                el.classList.toggle("bottom", row);
-            });
-
-            // One splitter between each adjacent visible pair.
-            shown.forEach((entry, i) => {
-                if (i === 0) return;
-                // A folded panel has no share to give or take.
-                if (entry.collapsed || shown[i - 1].collapsed) return;
-                const el = this._dockPanelEl(entry.id);
-                if (!el) return;
-                const sp = el.ownerDocument.createElement("div");
-                sp.className = row ? "stack-splitter horizontal" : "stack-splitter";
-                sp.dataset.rail = side;
-                sp.dataset.after = shown[i - 1].id;
-                sp.dataset.before = entry.id;
-                rail.insertBefore(sp, el);
-                this._bindStackSplitter(sp);
-            });
-
-            const active = shown.length > 0;
-            rail.style.display = active ? "flex" : "none";
-            rail.style.width   = (active && !row) ? `${this._railSize(side)}px` : "";
-            // The bottom rail with every panel folded is as low as their title bars.
-            rail.style.height  = (active && row)  ? (shown.every((p) => p.collapsed) ? "auto" : `${this._railSize(side)}px`) : "";
-            if (this.railSplitter[side]) {
-                this.railSplitter[side].style.display = active ? "block" : "none";
+                const spec = DOCK_PANELS[n.id];
+                // Along the split: its own minimum. Across: the split owns that, as a rail owned its width.
+                el.style.minHeight = folded || row ? "" : `${spec.minH}px`;
+                el.style.minWidth = row && !folded ? `${spec.minW}px` : "";
+                el.style.width = "";
+                el.style.height = "";
+                return;
             }
+            if (!DT.isSplit(n)) return;
+            el.classList.add("dock-split", "dock-rail");
+            el.classList.toggle("bottom", n.split === "row");
+            el.style.flexDirection = n.split === "row" ? "row" : "column";
+            if (n.rail) el.dataset.rail = n.rail; else delete el.dataset.rail;
+            n.children.forEach((c, i) => place(c, el, n, i * 2));
+            this._dockFlexSplit(n);
+        };
+        place(root, null, null, 0);
+        this._dockRootEl.style.display = "flex";
+        // A split box no longer in the tree goes (its panels have moved on by now).
+        for (const el of [...this._dockRootEl.querySelectorAll(".dock-split")]) {
+            if (!used.has(el)) el.remove();
         }
 
         // Kept in step for anything still reading it (icons, older call sites).
-        this.paramsSide  = this._dockSideOf("params")  || this.paramsSide  || "right";
-        this.browserSide = this._dockSideOf("browser") || this.browserSide || "right";
+        const lr = (id, was) => { const s = this._dockSideOf(id); return s === "left" || s === "right" ? s : (was || "right"); };
+        this.paramsSide  = lr("params", this.paramsSide);
+        this.browserSide = lr("browser", this.browserSide);
         this._syncDockTabs();
         this._dockMaxSync();
         this._syncPanelToggleButtons();
@@ -315,212 +325,213 @@ export const DockMixin = {
         if (this._afterViewportMoved) this._afterViewportMoved();
     },
 
+    /** One split's children: shown or not, their room, and a splitter between each two shown ones. */
+    _dockFlexSplit(n, sizesOnly = false) {
+        const el = this._dockNodeEl(n);
+        if (!el) return;
+        const row = n.split === "row";
+        const axis = row ? "w" : "h";
+        // During a splitter's drag only the sizes change: the splitter under the pointer must stay.
+        if (!sizesOnly) el.querySelectorAll(":scope > .stack-splitter").forEach((s) => s.remove());
+        for (const c of n.children) {
+            const ce = this._dockNodeEl(c);
+            if (ce && (!DT.isLive(c) || c.behind)) ce.style.display = "none";
+        }
+        const flex = DT.flexOf(n);
+        flex.forEach((f, k) => {
+            const ce = this._dockNodeEl(f.node);
+            if (!ce) return;
+            ce.style.display = "flex";
+            let basis = f.basis;
+            // A fixed place is never less than what its panels need.
+            if (typeof basis === "number" && f.grow === 0) basis = Math.max(basis, DT.minSize(f.node, axis, _minOf, GAP));
+            ce.style.flex = `${f.grow} ${f.grow > 0 ? 1 : 0} ${typeof basis === "number" ? basis + "px" : basis}`;
+            if (k === 0 || sizesOnly) return;
+            const prev = flex[k - 1];
+            // A folded panel has no room to give or take.
+            if (DT.allFolded(f.node) || DT.allFolded(prev.node)) return;
+            const sp = el.ownerDocument.createElement("div");
+            sp.className = row ? "stack-splitter horizontal" : "stack-splitter";
+            sp.style.order = String(n.children.indexOf(f.node) * 2 - 1);
+            if (DT.isPanel(prev.node)) sp.dataset.after = prev.node.id;
+            if (DT.isPanel(f.node)) sp.dataset.before = f.node.id;
+            sp.title = "Resize";
+            el.appendChild(sp);
+            this._dockBindSplitter(sp, n, prev.node, f.node);
+        });
+        el.style.display = DT.isLive(n) || n === this.dockLayout.root ? "flex" : "none";
+    },
+
     // The title bar of a panel that shares its place names every panel there:
     // the one in front as it is, the others as tabs to press.
     _syncDockTabs() {
-        for (const side of RAIL_SIDES) {
-            const list = this.dockLayout[side].panels;
-            for (const entry of list) {
-                const el = this._dockPanelEl(entry.id);
-                const bar = el && el.querySelector(":scope > .panel-titlebar");
-                const name = bar && bar.querySelector(":scope > .pt-name");
-                if (!name) continue;
-                const mates = entry.tab ? list.filter((p) => p.tab === entry.tab && !p.hidden) : [];
-                if (entry.hidden || entry.behind || mates.length < 2) {
-                    if (name._tabs) { name._tabs = ""; name.classList.remove("pt-tabs"); name.textContent = DOCK_PANELS[entry.id].label; }
-                    continue;
-                }
-                const sig = mates.map((p) => p.id).join(",") + "|" + entry.id;
-                if (name._tabs === sig) continue;
-                name._tabs = sig;
-                name.classList.add("pt-tabs");
-                const doc = name.ownerDocument;
-                name.replaceChildren(...mates.map((p) => {
-                    const front = p.id === entry.id;
-                    // The front one is part of the bar (it is what a drag takes
-                    // hold of); the others are buttons, and a press brings them up.
-                    const tab = doc.createElement(front ? "span" : "button");
-                    tab.className = "pt-tab" + (front ? " on" : "");
-                    tab.textContent = DOCK_PANELS[p.id].label;
-                    if (!front) {
-                        tab.title = "Show " + DOCK_PANELS[p.id].label;
-                        tab.addEventListener("pointerdown", (e) => e.stopPropagation());
-                        tab.addEventListener("click", (e) => { e.stopPropagation(); this.dockTabFront(p.id); });
-                    }
-                    return tab;
-                }));
+        DT.walk(this.dockLayout.root, (entry, parent) => {
+            if (!DT.isPanel(entry) || !parent) return;
+            const list = parent.children;
+            const el = this._dockPanelEl(entry.id);
+            const bar = el && el.querySelector(":scope > .panel-titlebar");
+            const name = bar && bar.querySelector(":scope > .pt-name");
+            if (!name) return;
+            const mates = entry.tab ? list.filter((p) => DT.isPanel(p) && p.tab === entry.tab && !p.hidden) : [];
+            if (entry.hidden || entry.behind || mates.length < 2) {
+                if (name._tabs) { name._tabs = ""; name.classList.remove("pt-tabs"); name.textContent = DOCK_PANELS[entry.id].label; }
+                return;
             }
-        }
+            const sig = mates.map((p) => p.id).join(",") + "|" + entry.id;
+            if (name._tabs === sig) return;
+            name._tabs = sig;
+            name.classList.add("pt-tabs");
+            const doc = name.ownerDocument;
+            name.replaceChildren(...mates.map((p) => {
+                const front = p.id === entry.id;
+                // The front one is part of the bar (it is what a drag takes
+                // hold of); the others are buttons, and a press brings them up.
+                const tab = doc.createElement(front ? "span" : "button");
+                tab.className = "pt-tab" + (front ? " on" : "");
+                tab.textContent = DOCK_PANELS[p.id].label;
+                if (!front) {
+                    tab.title = "Show " + DOCK_PANELS[p.id].label;
+                    tab.addEventListener("pointerdown", (e) => e.stopPropagation());
+                    tab.addEventListener("click", (e) => { e.stopPropagation(); this.dockTabFront(p.id); });
+                }
+                return tab;
+            }));
+        });
     },
 
-    /**
-     * A panel's flex-grow in its rail: its `size`, scaled so that the shares of
-     * the panels on show add up to at least 1. CSS gives flex items whose grow
-     * factors sum to less than 1 only that part of the free room and leaves the
-     * rest empty - a panel left alone with a dragged share of 0.86 stopped 14 %
-     * short of the rail's end, a grey band under it.
-     */
-    _dockGrow(side, entry) {
-        const size = entry.size || 1;
-        const sum = this.dockLayout[side].panels
-            .filter((p) => !p.hidden && !p.behind)
-            .reduce((n, p) => n + (p.size || 1), 0);
-        return sum > 0 && sum < 1 ? size / sum : size;
-    },
-
-    /**
-     * A rail's one measurement — its width, or the bottom rail's height —
-     * clamped to what the panels in it can live with.
-     */
-    _railSize(side) {
-        const spec = this.dockLayout[side];
-        const row = _isRow(side);
-        const shown = spec.panels.filter(p => !p.hidden && !p.behind);
-        const min = shown.reduce((m, p) => Math.max(m, DOCK_PANELS[p.id][row ? "minH" : "minW"]), 60);
-        const want = (row ? spec.height : spec.width) || min;
-        return Math.round(Math.max(min, Math.min(RAIL_MAX, want)));
-    },
-
-    /** Write that measurement back, to whichever field the rail keeps it in. */
-    _setRailSize(side, px) {
-        const spec = this.dockLayout[side];
-        if (_isRow(side)) spec.height = px; else spec.width = px;
+    /** The split a rail became; made beside the picture (the bottom one under everything) when there is none. */
+    _dockRail(side, entry) {
+        const L = this.dockLayout;
+        let rail = DT.railNode(L.root, side);
+        if (rail) { if (entry) rail.children.push(entry); return rail; }
+        rail = { split: side === "bottom" ? "row" : "col", rail: side, children: entry ? [entry] : [] };
+        if (side === "bottom") L.root = DT.insertBeside(L.root, L.root, "bottom", rail, RAIL_PX.bottom);
+        else L.root = DT.insertBeside(L.root, DT.findView(L.root).node, side, rail, RAIL_PX[side]);
+        return rail;
     },
 
     /** Drop unknown ids, re-home missing ones, and keep every panel exactly once. */
     _normaliseDockLayout() {
-        if (!this.dockLayout) this.dockLayout = this._defaultDockLayout();
-        const seen = new Set();
-        for (const side of RAIL_SIDES) {
-            const spec = this.dockLayout[side] || (this.dockLayout[side] = { width: 300, panels: [] });
-            if (!Array.isArray(spec.panels)) spec.panels = [];
-            spec.panels = spec.panels.filter((p) => {
-                if (!p || !DOCK_PANELS[p.id] || seen.has(p.id)) return false;
-                seen.add(p.id);
-                if (!(p.size > 0)) p.size = 1;
-                p.hidden = !!p.hidden;
-                return true;
-            });
-            // Tabs: of the open panels that share a place exactly one is in
-            // front; a panel left alone in its group is simply a panel.
-            const groups = new Map();
-            for (const p of spec.panels) {
-                if (typeof p.tab !== "string" || !p.tab) { delete p.tab; p.behind = false; continue; }
-                if (!groups.has(p.tab)) groups.set(p.tab, []);
-                groups.get(p.tab).push(p);
-            }
-            for (const members of groups.values()) {
-                if (members.length < 2) { delete members[0].tab; members[0].behind = false; continue; }
-                const open = members.filter((p) => !p.hidden);
-                const front = open.find((p) => !p.behind) || open[0];
-                for (const p of members) p.behind = p !== front;
-            }
-            if (_isRow(side)) { if (!(spec.height > 0)) spec.height = 240; }
-            else if (!(spec.width > 0)) spec.width = 300;
+        if (!DT.isTreeLayout(this.dockLayout)) {
+            this.dockLayout = DT.isRailLayout(this.dockLayout) ? DT.fromRails(this.dockLayout) : this._defaultDockLayout();
         }
-        // Once: the Curve Editor's home became the strip under the picture. A
-        // layout saved before that has it, put away, in a side rail.
-        try {
-            if (!window.localStorage.getItem("imageviewer.viewer.curvesBottom")) {
-                window.localStorage.setItem("imageviewer.viewer.curvesBottom", "1");
-                for (const side of ["left", "right"]) {
-                    const list = this.dockLayout[side].panels;
-                    const i = list.findIndex((p) => p.id === "curves");
-                    if (i < 0) continue;
-                    const [entry] = list.splice(i, 1);
-                    delete entry.tab;
-                    entry.behind = false;
-                    this.dockLayout.bottom.panels.push(entry);
-                }
-            }
-        } catch (_) { /* no storage: it stays where the layout has it */ }
-        // Once, too: the Mixer's home became the strip under the picture, right of the timeline (it shipped
-        // in the right rail, where it shared the height with the Inspector).
-        try {
-            if (!window.localStorage.getItem("imageviewer.viewer.mixerBottom")) {
-                window.localStorage.setItem("imageviewer.viewer.mixerBottom", "1");
-                this._dockMixerHome();
-            }
-        } catch (_) { /* no storage: it stays where the layout has it */ }
-        // Once, too: the Comp's Layers became a timeline and moved from the right rail to a tab beside the Node graph.
-        try {
-            if (!window.localStorage.getItem("imageviewer.viewer.compLayersBottom")) {
-                window.localStorage.setItem("imageviewer.viewer.compLayersBottom", "1");
-                this._dockCompLayersHome();
-            }
-        } catch (_) { /* no storage: it stays where the layout has it */ }
+        const L = this.dockLayout;
+        L.root = DT.tidy(L.root, _known);
+        // Once each: a panel's home moved to the strip under the picture. A layout saved before that has it, put
+        // away, beside the picture: the Curve Editor; the Mixer (it shipped in the right rail, where it shared the
+        // height with the Inspector); the Comp's Layers (a timeline now, a tab beside the Node graph).
+        const once = (flag, fn) => {
+            try {
+                if (window.localStorage.getItem(flag)) return;
+                window.localStorage.setItem(flag, "1");
+                fn();
+            } catch (_) { /* no storage: it stays where the layout has it */ }
+        };
+        once("imageviewer.viewer.curvesBottom", () => {
+            const s = this._dockSideOf("curves");
+            if (s !== "left" && s !== "right") return;
+            const entry = DT.detach(L.root, "curves");
+            if (entry) { entry.size = 1; L.root = DT.tidy(L.root, _known); this._dockRail("bottom", entry); }
+        });
+        once("imageviewer.viewer.mixerBottom", () => this._dockMixerHome());
+        once("imageviewer.viewer.compLayersBottom", () => this._dockCompLayersHome());
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
+        const seen = new Set(DT.panels(L.root).map((p) => p.id));
         for (const [id, spec] of Object.entries(DOCK_PANELS)) {
             if (seen.has(id)) continue;
-            // `size`: its share of the rail's height, until the user drags it.
+            // `size`: its share of its place, until the user drags it.
             const entry = { id, size: spec.size || 1, hidden: true };
-            const near = spec.tabWith ? this._dockEntry(spec.tabWith) : null;
-            if (near) {
-                const list = this.dockLayout[near.side].panels;
-                if (!near.entry.tab) { near.entry.tab = "t" + spec.tabWith; near.entry.behind = false; }
-                Object.assign(entry, { tab: near.entry.tab, behind: true, size: near.entry.size });
+            const near = spec.tabWith ? DT.locate(L.root, spec.tabWith) : null;
+            if (near && near.parent) {
+                const list = near.parent.children;
+                if (!near.node.tab) { near.node.tab = "t" + spec.tabWith; near.node.behind = false; }
+                Object.assign(entry, { tab: near.node.tab, behind: true });
+                if (near.node.size > 0) entry.size = near.node.size;
                 let at = near.index;
                 list.forEach((p, i) => { if (p.tab === entry.tab) at = i; });
                 list.splice(at + 1, 0, entry);
                 seen.add(id);
                 continue;
             }
-            if (spec.first) this.dockLayout[spec.defaultRail].panels.unshift(entry);
-            else this.dockLayout[spec.defaultRail].panels.push(entry);
+            const rail = this._dockRail(spec.defaultRail);
+            if (spec.first) rail.children.unshift(entry); else rail.children.push(entry);
+            seen.add(id);
         }
+        L.root = DT.tidy(L.root, _known);
     },
 
     // The Mixer into the strip under the picture, right after the Edit timeline (its own place there).
     _dockMixerHome() {
-        let entry = null;
-        for (const side of ["left", "right"]) {
-            const list = this.dockLayout[side].panels;
-            const i = list.findIndex((p) => p.id === "editMixer");
-            if (i >= 0) [entry] = list.splice(i, 1);
-        }
+        const L = this.dockLayout;
+        const s = this._dockSideOf("editMixer");
+        if (s !== "left" && s !== "right" && s !== "top") return;
+        const entry = DT.detach(L.root, "editMixer");
         if (!entry) return;
-        delete entry.tab;
-        entry.behind = false;
-        const list = this.dockLayout.bottom.panels;
-        const tl = list.findIndex((p) => p.id === "editTimeline");
-        entry.size = tl >= 0 ? Math.max(0.2, (list[tl].size || 1) * 0.4) : DOCK_PANELS.editMixer.size;
-        list.splice(tl >= 0 ? tl + 1 : list.length, 0, entry);
+        L.root = DT.tidy(L.root, _known);
+        const tl = DT.locate(L.root, "editTimeline");
+        if (tl && tl.parent && tl.parent.split === "row") {
+            entry.size = Math.max(0.2, (tl.node.size || 1) * 0.4);
+            tl.parent.children.splice(tl.index + 1, 0, entry);
+            return;
+        }
+        entry.size = DOCK_PANELS.editMixer.size;
+        this._dockRail("bottom", entry);
     },
 
     // The Comp's Layers into the strip under the picture, a tab behind the Node graph.
     _dockCompLayersHome() {
-        let entry = null;
-        for (const side of ["left", "right"]) {
-            const list = this.dockLayout[side].panels;
-            const i = list.findIndex((p) => p.id === "compLayers");
-            if (i >= 0) [entry] = list.splice(i, 1);
-        }
+        const L = this.dockLayout;
+        const s = this._dockSideOf("compLayers");
+        if (s !== "left" && s !== "right" && s !== "top") return;
+        const entry = DT.detach(L.root, "compLayers");
         if (!entry) return;
-        const list = this.dockLayout.bottom.panels;
-        const g = list.findIndex((p) => p.id === "compGraph");
-        if (g < 0) { delete entry.tab; entry.behind = false; list.push(entry); return; }
-        if (!list[g].tab) { list[g].tab = "comp"; list[g].behind = false; }
-        Object.assign(entry, { tab: list[g].tab, behind: true, size: list[g].size || 1 });
-        list.splice(g + 1, 0, entry);
+        L.root = DT.tidy(L.root, _known);
+        const g = DT.locate(L.root, "compGraph");
+        if (!g || !g.parent) { entry.size = 1; this._dockRail("bottom", entry); return; }
+        if (!g.node.tab) { g.node.tab = "comp"; g.node.behind = false; }
+        Object.assign(entry, { tab: g.node.tab, behind: true, hidden: !!entry.hidden });
+        if (g.node.size > 0) entry.size = g.node.size;
+        g.parent.children.splice(g.index + 1, 0, entry);
     },
 
     // ── Queries ──────────────────────────────────────────────────────────────
 
+    /** Which way from the picture a panel is: "left", "right", "bottom" (or "top"), null when it is not there. */
     _dockSideOf(id) {
-        for (const side of RAIL_SIDES) {
-            if ((this.dockLayout?.[side]?.panels || []).some(p => p.id === id)) return side;
-        }
-        return null;
+        return this.dockLayout && DT.isTreeLayout(this.dockLayout) ? DT.sideOf(this.dockLayout.root, id) : null;
     },
 
+    /** Where a panel's entry is: { side (its split), index, entry, list (the split's children) }, or null. */
     _dockEntry(id) {
-        for (const side of RAIL_SIDES) {
-            const list = this.dockLayout?.[side]?.panels || [];
-            const i = list.findIndex(p => p.id === id);
-            if (i >= 0) return { side, index: i, entry: list[i] };
-        }
-        return null;
+        if (!this.dockLayout || !DT.isTreeLayout(this.dockLayout)) return null;
+        const at = DT.locate(this.dockLayout.root, id);
+        if (!at || !at.parent) return null;
+        return { side: at.parent, index: at.index, entry: at.node, list: at.parent.children };
+    },
+
+    /** Every panel entry of the layout, in order (what tests and the bar read instead of the old rails). */
+    dockPanelEntries() {
+        return this.dockLayout && DT.isTreeLayout(this.dockLayout) ? DT.panels(this.dockLayout.root) : [];
+    },
+
+    /**
+     * The panels by the side of the picture they are on, in the old rails' shape - { left, right, bottom, top }:
+     * { panels: [entries] } - for reading (tests, anything that asked the rails). The entries are the layout's own.
+     */
+    dockRailsView() {
+        const out = { left: { panels: [] }, right: { panels: [] }, bottom: { panels: [] }, top: { panels: [] } };
+        for (const p of this.dockPanelEntries()) out[this._dockSideOf(p.id) || "right"].panels.push(p);
+        return out;
+    },
+
+    /** Set the room of a rail (the split it became): its width, or the bottom one's height. */
+    dockSetRailSize(side, px) {
+        const rail = this.dockLayout && DT.railNode(this.dockLayout.root, side);
+        if (!rail || !(px > 0)) return false;
+        rail.px = Math.round(px);
+        this.applyDockLayout();
+        return true;
     },
 
     isPanelDocked(id) {
@@ -538,20 +549,12 @@ export const DockMixin = {
 
     _dockTabMates(found) {
         const tab = found.entry.tab;
-        return tab ? this.dockLayout[found.side].panels.filter((p) => p.tab === tab) : [found.entry];
+        return tab ? found.list.filter((p) => DT.isPanel(p) && p.tab === tab) : [found.entry];
     },
 
-    // Keep the panels that share a place next to each other in a rail's list,
-    // where the first of them is.
-    _dockRegroup(list) {
-        const out = [], done = new Set();
-        for (const p of list) {
-            if (!p.tab) { out.push(p); continue; }
-            if (done.has(p.tab)) continue;
-            done.add(p.tab);
-            out.push(...list.filter((q) => q.tab === p.tab));
-        }
-        list.splice(0, list.length, ...out);
+    // One entry takes another's room in a place (a tab coming to the front).
+    _dockTakeRoom(to, from) {
+        for (const k of ["size", "px"]) { if (from[k] > 0) to[k] = from[k]; else delete to[k]; }
     },
 
     /** Bring a panel to the front of the place it shares. */
@@ -560,7 +563,7 @@ export const DockMixin = {
         if (!found || found.entry.hidden) return;
         const mates = this._dockTabMates(found);
         const was = mates.find((p) => !p.hidden && !p.behind && p !== found.entry);
-        if (was) found.entry.size = was.size;            // the place keeps its share of the rail
+        if (was) this._dockTakeRoom(found.entry, was);   // the place keeps its room
         for (const p of mates) p.behind = p !== found.entry;
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
@@ -568,33 +571,19 @@ export const DockMixin = {
 
     /** Put a panel into the place of another, as a tab beside it, in front. */
     dockPanelAsTab(id, ontoId) {
-        if (id === ontoId || !DOCK_PANELS[id]) return;
-        const from = this._dockEntry(id);
-        if (!from) return;
-        const entry = from.entry;
-        this.dockLayout[from.side].panels.splice(from.index, 1);
-        const onto = this._dockEntry(ontoId);
-        if (!onto) { this.dockLayout[from.side].panels.splice(from.index, 0, entry); return; }
-        if (!onto.entry.tab) onto.entry.tab = "t" + Date.now().toString(36) + ontoId;
-        entry.tab = onto.entry.tab;
-        entry.hidden = false;
-        entry.size = onto.entry.size;
-        const list = this.dockLayout[onto.side].panels;
-        // After the last member of the group, so the group stays in one piece.
-        let at = onto.index;
-        list.forEach((p, i) => { if (p.tab === entry.tab) at = i; });
-        list.splice(at + 1, 0, entry);
-        for (const p of list) if (p.tab === entry.tab) p.behind = p !== entry;
-        const spec = this.dockLayout[onto.side];
-        this._setRailSize(onto.side, Math.max(_isRow(onto.side) ? (spec.height || 0) : (spec.width || 0),
-                                              DOCK_PANELS[id][_isRow(onto.side) ? "minH" : "minW"]));
+        if (id === ontoId || !DOCK_PANELS[id] || !DT.locate(this.dockLayout.root, ontoId)) return;
+        const L = this.dockLayout;
+        const entry = DT.detach(L.root, id);
+        if (!entry) return;
+        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(DT.insertAsTab(L.root, ontoId, entry), _known);
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
     },
 
     // ── Mutations (each ends in one applyDockLayout) ─────────────────────────
 
-    /** Show or hide a panel, keeping the slot it had. */
+    /** Show or hide a panel, keeping the place it had. */
     setPanelDocked(id, visible) {
         id = _dockId(id);
         const found = this._dockEntry(id);
@@ -604,7 +593,7 @@ export const DockMixin = {
         if (visible && found.entry.tab) {
             const mates = this._dockTabMates(found);
             const was = mates.find((p) => !p.hidden && !p.behind && p !== found.entry);
-            if (was) found.entry.size = was.size;
+            if (was) this._dockTakeRoom(found.entry, was);
             for (const p of mates) p.behind = p !== found.entry;
         }
         this.applyDockLayout();
@@ -616,34 +605,45 @@ export const DockMixin = {
         return this.isPanelDocked(id);
     },
 
-    /** Move a panel into `side` at `index` (default: the end of that rail). */
+    /** Move a panel into a rail - the place beside the picture on `side` - at `index` (default: its end). */
     dockPanelTo(id, side, index) {
         if (!DOCK_PANELS[id] || !RAIL_SIDES.includes(side)) return;
-        const found = this._dockEntry(id);
-        if (!found) return;
-        const entry = found.entry;
-        this.dockLayout[found.side].panels.splice(found.index, 1);
-        // A place of its own again: it leaves whatever tabs it was among.
-        delete entry.tab;
-        entry.behind = false;
-
-        const target = this.dockLayout[side].panels;
-        const at = (index == null) ? target.length : Math.max(0, Math.min(target.length, index));
-        target.splice(at, 0, entry);
-
-        // A rail that has only ever held the history strip is 88px wide; the
-        // parameters panel arriving there would be unusable at that width.
-        const spec = this.dockLayout[side];
-        this._setRailSize(side, Math.max(_isRow(side) ? (spec.height || 0) : (spec.width || 0),
-                                         DOCK_PANELS[id][_isRow(side) ? "minH" : "minW"]));
-
+        const L = this.dockLayout;
+        const entry = DT.detach(L.root, id);
+        if (!entry) return;
+        L.root = DT.tidy(L.root, _known);
+        const rail = this._dockRail(side);
+        const at = (index == null) ? rail.children.length : Math.max(0, Math.min(rail.children.length, index));
+        rail.children.splice(at, 0, entry);
         // Sizes are shares, so a stack of new arrivals should start out even.
-        target.forEach(p => { p.size = 1; });
-        // Dropped between two tabs of one place, it would split them.
-        this._dockRegroup(target);
-
+        rail.children.forEach((p) => { if (!(p.px > 0)) p.size = 1; });
+        L.root = DT.tidy(L.root, _known);
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
+    },
+
+    /**
+     * Move a panel beside a place: `ref` is { kind: "panel", id } | { kind: "view" } (the picture) | { kind: "root" }
+     * (the whole area), `edge` "left" / "right" / "top" / "bottom". That place is split in two, or the panel joins
+     * the split it is in when that runs the same way.
+     */
+    dockPanelBeside(id, ref, edge) {
+        if (!DOCK_PANELS[id] || !DT.EDGES.includes(edge) || !ref) return false;
+        if (ref.kind === "panel" && (ref.id === id || !DT.locate(this.dockLayout.root, ref.id))) return false;
+        const L = this.dockLayout;
+        const entry = DT.detach(L.root, id);
+        if (!entry) return false;
+        entry.hidden = false;
+        L.root = DT.tidy(L.root, _known);
+        const node = ref.kind === "view" ? DT.findView(L.root).node
+            : ref.kind === "root" ? L.root
+            : DT.locate(L.root, ref.id)?.node;
+        const spec = DOCK_PANELS[id];
+        const px = DT.edgeDir(edge) === "row" ? Math.max(spec.minW, 300) : Math.max(spec.minH, 240);
+        L.root = DT.tidy(DT.insertBeside(L.root, node || L.root, edge, entry, px), _known);
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        return true;
     },
 
     /**
@@ -662,10 +662,8 @@ export const DockMixin = {
     _notifyPanelsShown() {
         const before = this._dockShown || new Set();
         const now = new Set();
-        for (const side of RAIL_SIDES) {
-            // In front counts: a tab brought up is a panel coming into view.
-            for (const p of this.dockLayout[side].panels) if (!p.hidden && !p.behind) now.add(p.id);
-        }
+        // In front counts: a tab brought up is a panel coming into view.
+        for (const p of DT.panels(this.dockLayout.root)) if (!p.hidden && !p.behind) now.add(p.id);
         this._dockShown = now;
         if (before.has("agentChat") && !now.has("agentChat")) {
             try { this._agentPanelRelease(); }
@@ -785,61 +783,39 @@ export const DockMixin = {
         el.addEventListener("lostpointercapture", up);
     },
 
-    _bindRailSplitters() {
-        for (const side of RAIL_SIDES) {
-            const sp = this.railSplitter[side];
-            if (!sp || sp._dockBound) continue;
-            sp._dockBound = true;
-            sp.addEventListener("pointerdown", (e) => {
-                const row = _isRow(side);
-                const start = row ? e.clientY : e.clientX;
-                const startSize = this._railSize(side);
-                sp.classList.add("dragging");
-                this._pointerDrag(sp, e, (ev) => {
-                    // Each rail grows away from the picture: the left one with
-                    // the pointer, the right and bottom ones against it.
-                    const d = (row ? ev.clientY : ev.clientX) - start;
-                    this._setRailSize(side, side === "left" ? startSize + d : startSize - d);
-                    const px = this._railSize(side);
-                    this._setRailSize(side, px);
-                    this.railEl[side].style[row ? "height" : "width"] = `${px}px`;
-                    if (this._afterViewportMoved) this._afterViewportMoved();
-                }, () => {
-                    sp.classList.remove("dragging");
-                    this.queuePersistViewerState && this.queuePersistViewerState();
-                });
-            });
-        }
-    },
-
-    _bindStackSplitter(sp) {
+    /**
+     * The splitter between two places of a split. A fixed place (a rail's width, a panel beside the picture) takes
+     * the pointer's travel; two shares trade between them; two fixed places trade pixels.
+     */
+    _dockBindSplitter(sp, split, a, b) {
         sp.addEventListener("pointerdown", (e) => {
-            const side = sp.dataset.rail;
-            const aId = sp.dataset.after, bId = sp.dataset.before;
-            const a = this._dockEntry(aId), b = this._dockEntry(bId);
-            const aEl = this._dockPanelEl(aId), bEl = this._dockPanelEl(bId);
-            if (!a || !b || !aEl || !bEl) return;
-
-            // Along the rail: heights in a side rail, widths in the bottom one.
-            const row = _isRow(side);
+            const aEl = this._dockNodeEl(a), bEl = this._dockNodeEl(b);
+            if (!aEl || !bEl) return;
+            const row = split.split === "row";
             const axis = row ? "width" : "height";
+            const mk = row ? "w" : "h";
             const startAt = row ? e.clientX : e.clientY;
-            const aH = aEl.getBoundingClientRect()[axis];
-            const bH = bEl.getBoundingClientRect()[axis];
-            const total = aH + bH;
-            const share = a.entry.size + b.entry.size;
-            if (total <= 0 || share <= 0) return;
-            const key = row ? "minW" : "minH";
-            const aMin = DOCK_PANELS[aId][key], bMin = DOCK_PANELS[bId][key];
+            const aS = aEl.getBoundingClientRect()[axis];
+            const bS = bEl.getBoundingClientRect()[axis];
+            const total = aS + bS;
+            if (total <= 0) return;
+            const aMin = DT.minSize(a, mk, _minOf, GAP), bMin = DT.minSize(b, mk, _minOf, GAP);
+            const flex = DT.flexOf(split);
+            const fixed = (n) => { const f = flex.find((x) => x.node === n); return !!f && f.grow === 0 && typeof f.basis === "number"; };
+            const fa = fixed(a), fb = fixed(b);
+            const byPx = !flex.some((f) => f.basis === 0 && !(f.node.px > 0 && !DT.containsView(f.node)));
+            const share = (a.size > 0 ? a.size : 1) + (b.size > 0 ? b.size : 1);
 
             sp.classList.add("dragging");
             this._pointerDrag(sp, e, (ev) => {
-                const dy = (row ? ev.clientX : ev.clientY) - startAt;
-                const newAH = Math.max(aMin, Math.min(total - bMin, aH + dy));
-                a.entry.size = share * (newAH / total);
-                b.entry.size = share - a.entry.size;
-                aEl.style.flex = `${this._dockGrow(side, a.entry)} 1 0`;
-                bEl.style.flex = `${this._dockGrow(side, b.entry)} 1 0`;
+                const d = (row ? ev.clientX : ev.clientY) - startAt;
+                const na = Math.max(aMin, Math.min(total - bMin, aS + d));
+                if (fa && fb || byPx) { a.px = Math.round(na); b.px = Math.round(total - na); }
+                else if (fa) a.px = Math.round(na);
+                else if (fb) b.px = Math.round(total - na);
+                else { a.size = share * (na / total); b.size = share - a.size; }
+                this._dockFlexSplit(split, true);
+                if (this._afterViewportMoved) this._afterViewportMoved();
             }, () => {
                 sp.classList.remove("dragging");
                 if (this._afterViewportMoved) this._afterViewportMoved();
@@ -985,19 +961,17 @@ export const DockMixin = {
         if (fromId === toId || !DOCK_PANELS[toId] || !this._dockPanelEl(toId)) return false;
         const a = this._dockEntry(fromId), b = this._dockEntry(toId);
         if (!a || !b) return false;
-        const PLACE = ["size", "tab", "behind", "collapsed", "hidden"];
+        const PLACE = ["size", "px", "tab", "behind", "collapsed", "hidden"];
         const take = (e) => Object.fromEntries(PLACE.map((k) => [k, e[k]]));
         const pa = take(a.entry), pb = take(b.entry);
         const put = (e, p) => { for (const k of PLACE) { if (p[k] === undefined) delete e[k]; else e[k] = p[k]; } };
-        this.dockLayout[a.side].panels[a.index] = b.entry;
-        this.dockLayout[b.side].panels[b.index] = a.entry;
+        a.list[a.index] = b.entry;
+        b.list[b.index] = a.entry;
         put(b.entry, pa); put(a.entry, pb);
         b.entry.hidden = false;
         if (this._dockMaxId === fromId) this._dockMaxId = toId;
         else if (this._dockMaxId === toId) this._dockMaxId = fromId;
-        // A rail as narrow as the history strip would leave the newcomer unusable.
-        const spec = this.dockLayout[a.side], row = _isRow(a.side);
-        this._setRailSize(a.side, Math.max(row ? (spec.height || 0) : (spec.width || 0), DOCK_PANELS[toId][row ? "minH" : "minW"]));
+        // (A place as narrow as the history strip is widened to the newcomer's minimum when it is drawn.)
         // The Edit panels remember which of them are up for the next cut's tab.
         if (this._editTlWant && this.isEditTab && this.isEditTab()) {
             for (const [pid, on] of [[fromId, !pb.hidden], [toId, true]]) {
@@ -1014,22 +988,20 @@ export const DockMixin = {
     // ── Folding a panel, and one panel filling the viewer ───────────────────
 
     _dockEntryOf(id) {
-        for (const side of RAIL_SIDES) {
-            const e = this.dockLayout && this.dockLayout[side].panels.find((p) => p.id === id);
-            if (e) return e;
-        }
-        return null;
+        const found = this._dockEntry(id);
+        return found ? found.entry : null;
     },
 
     isPanelCollapsed(id) { const e = this._dockEntryOf(id); return !!(e && e.collapsed); },
 
     /** Fold a panel to its title bar (kept in the layout), or open it again. A tab group folds as one. */
     dockToggleCollapsed(id, on) {
-        const e = this._dockEntryOf(id);
-        if (!e) return;
+        const found = this._dockEntry(id);
+        if (!found) return;
+        const e = found.entry;
         const want = on === undefined ? !e.collapsed : !!on;
         if (want && this._dockMaxId === id) this._dockMaxId = null;
-        const group = e.tab ? RAIL_SIDES.flatMap((s) => this.dockLayout[s].panels).filter((p) => p.tab === e.tab) : [e];
+        const group = this._dockTabMates(found);
         for (const p of group) { if (want) p.collapsed = true; else delete p.collapsed; }
         this.applyDockLayout();
         if (this.queuePersistViewerState) this.queuePersistViewerState();
@@ -1143,9 +1115,16 @@ export const DockMixin = {
             const cancelled = !!this._dockDragCancelled;
             this._endDockDrag(id);
             if (cancelled) return;
-            if (target && target.kind === "tab") this.dockPanelAsTab(id, target.ref.id);
-            else if (target) this.dockPanelTo(id, target.side, target.index);
+            this._dockDrop(id, target);
         });
+    },
+
+    /** What a drop does: into a place as a tab, or beside a place (which splits it). */
+    _dockDrop(id, target) {
+        if (!target) return false;
+        if (target.kind === "tab") { this.dockPanelAsTab(id, target.ref.id); return true; }
+        if (target.kind === "edge") return this.dockPanelBeside(id, target.ref, target.edge);
+        return false;
     },
 
     _beginDockDrag(id) {
@@ -1174,26 +1153,7 @@ export const DockMixin = {
         this.dockOverlay.appendChild(this._dockGhostEl);
         this.dockOverlay.classList.add("active");
 
-        // Measured once: nothing moves until the drop, so every pointermove
-        // after this is arithmetic — no layout reads, no thrash.
-        const mainArea = this.dockOverlay.parentNode;
-        this._dockRects = {
-            main: mainArea.getBoundingClientRect(),
-            viewport: this.viewport.getBoundingClientRect(),
-            rails: {},
-            panels: [],
-        };
-        for (const side of RAIL_SIDES) {
-            const rail = this.railEl[side];
-            const active = !!rail && rail.style.display !== "none";
-            this._dockRects.rails[side] = active ? rail.getBoundingClientRect() : null;
-            (this.dockLayout[side].panels || []).forEach((p, i) => {
-                if (p.hidden || p.behind) return;
-                const pel = this._dockPanelEl(p.id);
-                if (!pel) return;
-                this._dockRects.panels.push({ id: p.id, side, index: i, r: pel.getBoundingClientRect() });
-            });
-        }
+        this._dockMeasure();
 
         const esc = (ev) => {
             if (ev.key !== "Escape") return;
@@ -1225,13 +1185,33 @@ export const DockMixin = {
         }
     },
 
+    // Measured once per drag: nothing moves until the drop, so every pointermove after this is arithmetic — no
+    // layout reads, no thrash.
+    _dockMeasure() {
+        const mainArea = (this.dockOverlay && this.dockOverlay.parentNode) || this._dockRootEl.parentNode;
+        const view = this.dockViewEl || this.viewport;
+        this._dockRects = {
+            main: mainArea.getBoundingClientRect(),
+            root: this._dockRootEl.getBoundingClientRect(),
+            viewport: view.getBoundingClientRect(),
+            panels: [],
+        };
+        for (const p of DT.panels(this.dockLayout.root)) {
+            if (p.hidden || p.behind) continue;
+            const pel = this._dockPanelEl(p.id);
+            if (!pel) continue;
+            const r = pel.getBoundingClientRect();
+            if (r.width > 0 && r.height > 0) this._dockRects.panels.push({ id: p.id, r });
+        }
+        return this._dockRects;
+    },
+
     /**
      * Where would a drop at (x, y) put the panel? null for "nowhere".
      *
-     * Over a docked panel: its middle means INTO its place, as a tab; the
-     * third towards its top means above it, the third towards its bottom below.
-     * Over the outer quarter-ish of the viewport: the end of that rail.
-     * Anywhere else — the middle of the picture — is not a drop.
+     * Along the whole area's edge: beside everything. Over a docked panel: its middle means INTO its place, as a
+     * tab; nearer an edge, beside it on that edge (the place splits in two). Over the outer part of the picture:
+     * beside the picture on that side. The middle of the picture is not a drop.
      */
     _dockDropTarget(x, y, dragId) {
         const R = this._dockRects;
@@ -1239,33 +1219,31 @@ export const DockMixin = {
         if (this._dockDragCancelled) return null;
 
         const inside = (r) => r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-
+        const m = R.root;
+        if (inside(m)) {
+            const d = { left: x - m.left, right: m.right - x, top: y - m.top, bottom: m.bottom - y };
+            const edge = DT.EDGES.find((k) => d[k] < ROOT_ZONE);
+            if (edge) return { kind: "edge", ref: { kind: "root" }, edge, r: m, side: edge };
+        }
         for (const p of R.panels) {
             if (!inside(p.r)) continue;
-            // How far along the panel the pointer is, the way its rail runs.
-            const along = _isRow(p.side) ? (x - p.r.left) / Math.max(1, p.r.width)
-                                         : (y - p.r.top) / Math.max(1, p.r.height);
-            if (p.id !== dragId && along > 0.3 && along < 0.7) return { side: p.side, kind: "tab", ref: p };
-            // "Before" is up in a side rail and left in the bottom one.
-            const above = along < 0.5;
-            let index = above ? p.index : p.index + 1;
-            // Dropping either side of itself changes nothing.
-            const cur = this._dockEntry(dragId);
-            if (cur && cur.side === p.side && (index === cur.index || index === cur.index + 1)) return null;
-            if (cur && cur.side === p.side && cur.index < index) index -= 1;
-            return { side: p.side, index, kind: above ? "before" : "after", ref: p };
+            if (p.id === dragId) return null;
+            const fx = (x - p.r.left) / Math.max(1, p.r.width), fy = (y - p.r.top) / Math.max(1, p.r.height);
+            if (fx > 0.3 && fx < 0.7 && fy > 0.3 && fy < 0.7) return { kind: "tab", ref: p };
+            const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
+            const edge = DT.EDGES.reduce((a, k) => (d[k] < d[a] ? k : a), "left");
+            return { kind: "edge", ref: { kind: "panel", id: p.id }, edge, r: p.r, side: edge };
         }
-
         const v = R.viewport;
         if (inside(v)) {
-            const edge = v.width * EDGE_ZONE;
-            if (x <= v.left + edge)  return { side: "left",  index: null, kind: "edge" };
-            if (x >= v.right - edge) return { side: "right", index: null, kind: "edge" };
-            // The bottom edge is a shallower band than the sides: it is a strip
-            // under the picture, not half of it.
-            if (this.railEl.bottom && y >= v.bottom - v.height * (EDGE_ZONE / 2)) {
-                return { side: "bottom", index: null, kind: "edge" };
-            }
+            const fx = (x - v.left) / Math.max(1, v.width), fy = (y - v.top) / Math.max(1, v.height);
+            // Above and below are shallower bands than the sides: a strip over or under the picture, not half of it.
+            let edge = null;
+            if (fx <= EDGE_ZONE) edge = "left";
+            else if (fx >= 1 - EDGE_ZONE) edge = "right";
+            else if (fy >= 1 - EDGE_ZONE / 2) edge = "bottom";
+            else if (fy <= EDGE_ZONE / 2) edge = "top";
+            if (edge) return { kind: "edge", ref: { kind: "view" }, edge, r: v, side: edge };
         }
         return null;
     },
@@ -1287,62 +1265,122 @@ export const DockMixin = {
             prev.style.height = `${h}px`;
             prev.classList.add("shown");
         };
-
-        if (target.kind === "edge") {
-            const rail = R.rails[target.side];
-            if (target.side === "bottom") {
-                // The rail sits under .main-area, so the band is drawn along
-                // the foot of the picture — where the panel will appear.
-                const h = rail ? rail.height : Math.max(DOCK_PANELS[dragId].minH, 200);
-                put(main.left, main.bottom - h, main.width, h);
-                return;
-            }
-            const w = rail ? rail.width : Math.max(DOCK_PANELS[dragId].minW, 260);
-            const l = target.side === "left" ? main.left : main.right - w;
-            put(l, main.top, w, main.height);
-            return;
-        }
+        const r = target.r || target.ref.r;
         // Onto a panel: the whole of it, since its place is what is shared.
-        if (target.kind === "tab") { const q = target.ref.r; put(q.left, q.top, q.width, q.height); return; }
-        // Insert beside a panel: a band at that edge of it.
-        const r = target.ref.r;
-        if (_isRow(target.side)) {
-            const w = Math.max(24, Math.min(r.width / 2, 120));
-            put(target.kind === "before" ? r.left : r.right - w, r.top, w, r.height);
+        if (target.kind === "tab") { put(r.left, r.top, r.width, r.height); return; }
+        // Beside a place: the band of it the panel will take - half of a panel, its own size beside the picture.
+        const spec = DOCK_PANELS[dragId] || { minW: 200, minH: 150 };
+        const half = target.ref.kind === "panel";
+        if (target.edge === "left" || target.edge === "right") {
+            const w = Math.min(r.width / 2, half ? r.width / 2 : Math.max(spec.minW, 300));
+            put(target.edge === "left" ? r.left : r.right - w, r.top, w, r.height);
             return;
         }
-        const h = Math.max(24, Math.min(r.height / 2, 120));
-        put(r.left, target.kind === "before" ? r.top : r.bottom - h, r.width, h);
+        const h = Math.min(r.height / 2, half ? r.height / 2 : Math.max(spec.minH, 240));
+        put(r.left, target.edge === "top" ? r.top : r.bottom - h, r.width, h);
+    },
+
+    // ── Spaces: a layout each ────────────────────────────────────────────────
+    //
+    // Each space (Viewer, 3D, Comp, Edit, Paint, Motion, Farm; a tab of no space counts as the Viewer) keeps a layout
+    // of its own (Sebastian 2026-11-19: "the spaces then become presets of panel layouts that suit each space").
+    // switchTab keeps the layout of the space it leaves (dockSpaceLeave, before that space puts its panels away) and
+    // brings up the layout of the space it enters (dockSpaceEnter, before that space shows its panels). A space seen
+    // for the first time starts from the layout as it is; Reset gives it the default one again.
+
+    _dockSpaceOf(tab) {
+        const s = tab && this._tabSpaceKind ? this._tabSpaceKind(tab) : "";
+        return s || "viewer";
+    },
+
+    /** The layouts kept per space (clean copies), { space: root }. */
+    _dockSpaceMap() {
+        if (!this._dockSpaces || typeof this._dockSpaces !== "object") this._dockSpaces = {};
+        return this._dockSpaces;
+    },
+
+    /** Leaving `prevTab` for `nextTab`: when that changes the space, the layout as it is goes with the space left. */
+    dockSpaceLeave(prevTab, nextTab) {
+        if (!this.dockLayout || !DT.isTreeLayout(this.dockLayout)) return;
+        const from = this._dockSpace || this._dockSpaceOf(prevTab);
+        if (from === this._dockSpaceOf(nextTab)) return;
+        this._dockSpaceMap()[from] = DT.cleanCopy(this.dockLayout.root);
+    },
+
+    /** Entering `tab`: its space's layout comes up (one seen for the first time keeps the layout as it is). */
+    dockSpaceEnter(tab) {
+        const to = this._dockSpaceOf(tab);
+        if (to === this._dockSpace) return false;
+        this._dockSpace = to;
+        const saved = this._dockSpaceMap()[to];
+        if (!saved || !DT.isSplit(saved)) return false;
+        this.dockLayout = { v: DT.LAYOUT_VERSION, root: DT.tidy(DT.cleanCopy(saved), _known) };
+        this.applyDockLayout();
+        return true;
+    },
+
+    /** The space that is up ("viewer", "3d", "comp", "edit", "paint", "motion", "farm"). */
+    dockSpace() {
+        return this._dockSpace || this._dockSpaceOf(this.activeTab);
+    },
+
+    /**
+     * Give the space that is up its default layout again: the rails around the picture, the Parameters panel open;
+     * the space then opens its own panels as it does when its tab comes up.
+     */
+    dockSpaceReset() {
+        const space = this.dockSpace();
+        delete this._dockSpaceMap()[space];
+        this._dockMaxId = null;
+        this.dockLayout = this._defaultDockLayout();
+        this.applyDockLayout();
+        if (this.activeTab && this.switchTab) {
+            try { this.switchTab(this.activeTab); } catch (e) { console.warn("imageViewer: the space could not show its panels again", e); }
+        }
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        return space;
     },
 
     // ── Persistence ──────────────────────────────────────────────────────────
 
     serializeDock() {
         this._normaliseDockLayout();
-        return JSON.parse(JSON.stringify(this.dockLayout));
+        const out = { v: DT.LAYOUT_VERSION, root: DT.cleanCopy(this.dockLayout.root) };
+        // The other spaces' layouts, and which space this one is.
+        const space = this.dockSpace();
+        const spaces = {};
+        for (const [k, root] of Object.entries(this._dockSpaceMap())) if (k !== space && DT.isSplit(root)) spaces[k] = root;
+        if (Object.keys(spaces).length) out.spaces = spaces;
+        out.space = space;
+        return out;
     },
 
+    /** Take a saved layout: the tree's shape, or the three rails' (read into the tree). */
     applyDockData(data) {
         if (!data || typeof data !== "object") return false;
-        if (!data.left && !data.right) return false;
-        this.dockLayout = {
-            left:   { width: 88,  panels: [] },
-            right:  { width: 300, panels: [] },
-            bottom: { height: 240, panels: [] },
-        };
-        for (const side of RAIL_SIDES) {
-            const src = data[side];
-            if (!src) continue;
-            if (src.width > 0)  this.dockLayout[side].width = src.width;
-            if (src.height > 0) this.dockLayout[side].height = src.height;
-            if (Array.isArray(src.panels)) {
-                this.dockLayout[side].panels = src.panels
-                    .filter(p => p && DOCK_PANELS[p.id])
-                    .map(p => ({ id: p.id, size: p.size > 0 ? p.size : 1, hidden: !!p.hidden,
-                                 ...(typeof p.tab === "string" && p.tab ? { tab: p.tab, behind: !!p.behind } : {}),
-                                 ...(p.collapsed ? { collapsed: true } : {}) }));
+        let L = null;
+        if (DT.isTreeLayout(data)) L = { v: DT.LAYOUT_VERSION, root: DT.cleanCopy(data.root) };
+        else if (DT.isRailLayout(data)) L = DT.fromRails(data);
+        if (!L) return false;
+        L.root = DT.tidy(L.root, _known);
+        // The spaces' layouts, when the saved one has them (a layout of the rails' shape has one for all).
+        if (DT.isTreeLayout(data)) {
+            const spaces = {};
+            if (data.spaces && typeof data.spaces === "object") {
+                for (const [k, root] of Object.entries(data.spaces)) if (DT.isSplit(root)) spaces[k] = DT.cleanCopy(root);
             }
+            this._dockSpaces = spaces;
+            // Saved while another space was up: that one's layout is kept for it, and this space's comes up.
+            const here = this.dockSpace();
+            const was = typeof data.space === "string" && data.space ? data.space : here;
+            if (was !== here) {
+                spaces[was] = DT.cleanCopy(L.root);
+                if (spaces[here]) L.root = DT.tidy(DT.cleanCopy(spaces[here]), _known);
+            }
+            delete spaces[here];
+            this._dockSpace = here;
         }
+        this.dockLayout = L;
         this.applyDockLayout();
         return true;
     },

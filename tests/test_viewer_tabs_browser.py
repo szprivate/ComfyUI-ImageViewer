@@ -101,7 +101,7 @@ class ViewTabTests(unittest.TestCase):
 
     @staticmethod
     def docks(pg, panel="__panel"):
-        return pg.evaluate("""(p)=>{const P=eval(p), L=P.dockLayout;
+        return pg.evaluate("""(p)=>{const P=eval(p), L=P.dockRailsView();
             return {ids:Object.values(L).flatMap(r=>r.panels.map(x=>x.id)),
                     stray:['agent-code-panel','lora-panel'].filter(i=>P.shadowRoot.getElementById(i)).length}}""", panel)
 
@@ -274,18 +274,18 @@ class ViewTabTests(unittest.TestCase):
         for _ in range(2):      # and again, as a layout switch would hand it in
             self.assertTrue(pg.evaluate("(d)=>__panel.applyDockData(d)", old))
             pg.wait_for_timeout(200)
-            ids = pg.evaluate("()=>Object.values(__panel.dockLayout).flatMap(r=>r.panels.map(p=>p.id))")
+            ids = pg.evaluate("()=>__panel.dockPanelEntries().map(p=>p.id)")
             self.assertNotIn("agentCode", ids)
             self.assertNotIn("loraDataset", ids)
             self.assertEqual(len(ids), len(set(ids)))
-            hist = pg.evaluate("()=>__panel.dockLayout.left.panels.find(p=>p.id==='history')")
+            hist = pg.evaluate("()=>__panel.dockRailsView().left.panels.find(p=>p.id==='history')")
             self.assertFalse(hist.get("tab"))
             self.assertFalse(hist.get("behind"))
             ser = str(pg.evaluate("()=>__panel.serializeDock()"))
             self.assertNotIn("agentCode", ser)
             self.assertNotIn("loraDataset", ser)
             # no slot is left empty: every panel the layout holds has its element
-            self.assertEqual(pg.evaluate("""()=>Object.values(__panel.dockLayout).flatMap(r=>r.panels)
+            self.assertEqual(pg.evaluate("""()=>__panel.dockPanelEntries()
                 .filter(p=>!__panel._dockPanelEl(p.id)).length"""), 0)
             self.assertEqual(pg.evaluate("()=>__panel.shadowRoot.querySelectorAll('#agent-code-panel, #lora-panel').length"), 0)
         self.assertEqual(self.errors, [])
@@ -302,7 +302,7 @@ class ViewTabTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))
         self.assertLess(box()[1], 34)        # the title bar (26 px since 2026-11-12) and the outline
         self.assertGreater(pg.evaluate("()=>__panel.browserPanel.getBoundingClientRect().height"), h0)   # the other takes the room
-        self.assertTrue(pg.evaluate("()=>__panel.serializeDock().right.panels.find(p=>p.id==='params').collapsed"))
+        self.assertTrue(pg.evaluate("()=>__panel.dockRailsView().right.panels.find(p=>p.id==='params').collapsed"))
         # Kept through a layout round trip, and opened again by a double-click on the title.
         pg.evaluate("()=>__panel.applyDockData(__panel.serializeDock())")
         self.assertTrue(pg.evaluate("()=>__panel.isPanelCollapsed('params')"))

@@ -559,6 +559,8 @@ export const UIMixin = {
         // A tab just opened comes up here: the space buttons' underlines follow the open tabs.
         if (this.barGroupsSync) this.barGroupsSync();
         if (prevTab && prevTab !== k) this.captureTabViewState(prevTab);
+        // A space keeps its panel layout: the one left is kept before its panels are put away (mixinDock).
+        if (this.dockSpaceLeave && prevTab !== k) this.dockSpaceLeave(prevTab, k);
         // An Edit tab hands the viewport back before anything else is shown.
         if (this._editPlayOn && !(prevTab === k && this.isEditTab(k))) this.editPlayLeave();
         // ...and its panels (Edit, Inspector, Effects) are up only with a cut's tab.
@@ -581,6 +583,8 @@ export const UIMixin = {
         } catch (e) {}
 
         this.activeTab = k;
+        // ...and the space entered brings its own layout up, before it shows its panels.
+        if (this.dockSpaceEnter) this.dockSpaceEnter(k);
         // The panels' title bars take a slight accent of the space that is up (imageViewer.css).
         try {
             const tint = this._tabSpaceKind ? spaceColor(this._tabSpaceKind(k)) : "";

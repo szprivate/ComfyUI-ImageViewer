@@ -377,20 +377,20 @@ class EditTimelineBrowserTests(unittest.TestCase):
         # on a cut's tab. CSS hands flex items whose grow factors add up to less than 1 only that part of the room:
         # a grey band was left under the History's footer.
         pg = self.page()
-        layout = pg.evaluate("()=>JSON.parse(JSON.stringify(__panel.dockLayout))")
+        layout = pg.evaluate("()=>JSON.parse(JSON.stringify(__panel.dockRailsView()))")
         for side in ("right", "bottom"):
             layout[side]["panels"] = [p for p in layout[side]["panels"] if p["id"] not in ("params", "history")]
         layout["left"] = {"width": 327, "panels": [{"id": "params", "size": 1, "hidden": True},
                                                    {"id": "history", "size": 0.8555623847572219, "hidden": False}]}
         self.assertTrue(pg.evaluate("(d)=>__panel.applyDockData(d)", layout))
         pg.wait_for_timeout(200)
-        # (the rail's content box: since 2026-11-12 a rail has padding round its panels, which are cards)
+        # (inside the rail's room: since 2026-11-12 a panel is a card with a little room round it, its margin)
         rail, hist = pg.evaluate("""()=>[__panel.railEl.left, __panel.historyPanel].map((e, i)=>{const r=e.getBoundingClientRect();
-            const cs=getComputedStyle(e), pt=i?0:parseFloat(cs.paddingTop), pb=i?0:parseFloat(cs.paddingBottom);
+            const cs=getComputedStyle(__panel.historyPanel), pt=i?0:parseFloat(cs.marginTop), pb=i?0:parseFloat(cs.marginBottom);
             return [Math.round(r.top+pt), Math.round(r.bottom-pb)]})""")
         self.assertEqual(hist, rail)
         # its share is kept as it was: a panel that joins the rail splits it as before
-        self.assertAlmostEqual(pg.evaluate("()=>__panel.dockLayout.left.panels.find(p=>p.id==='history').size"), 0.8555623847572219)
+        self.assertAlmostEqual(pg.evaluate("()=>__panel.dockRailsView().left.panels.find(p=>p.id==='history').size"), 0.8555623847572219)
         self.assertEqual(self.errors, [])
 
     # ── popped out ──
