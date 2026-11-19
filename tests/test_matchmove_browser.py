@@ -553,5 +553,131 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.close()
 
 
+    def test_measurements_lasso_select_and_the_lens_chart(self):
+        """Tracks picked with a lasso in the Plate panel (Ctrl takes away), two real distances measured from the
+        guide: the solve comes back in metres with a third distance right; the built locators lassoed in the 3D view;
+        the lens chart full screen and closed with Esc."""
+        pg = self._page()
+        try:
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
+                                 timeout=20000)
+            pg.evaluate("async () => { await window.__panel.matchmoveAutoTrack(); window.__panel.setFrame(0); }")
+            pg.wait_for_timeout(300)
+            # The camera list: a phone sets its 35 mm equivalent.
+            pg.evaluate("""() => { const P = window.__panel; P._mmCur().mm.step = 'plate'; P._mmRender(); }""")
+            cam = pg.evaluate("""() => { const P = window.__panel; const sel = P.mmGuidePanel.querySelector('.mm-camera-preset');
+                sel.value = 'iphone14-wide'; sel.dispatchEvent(new Event('change')); return P._mmCur().mm.camera; }""")
+            self.assertEqual((cam["preset"], cam["focalMm"]), ("iphone14-wide", 26), cam)
+            # ... and back to nothing known: this plate is no phone's.
+            pg.evaluate("""() => { const P = window.__panel; P._mmEdit('reset', (m) => { m.camera.focalMm = null; m.camera.focalKnown = false;
+                m.camera.preset = ''; m.camera.sensor = [36, 24]; }); }""")
+
+            # Lasso in the Plate panel: switched on from its bar, drawn round the left third.
+            pg.evaluate("() => window.__panel._mmUI.shape.click()")
+            self.assertEqual(pg.evaluate("() => window.__panel._mmCur().selectShape"), "lasso")
+            box = pg.evaluate("() => { const r = window.__panel._mmUI.stage.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+            corners = pg.evaluate("""() => { const P = window.__panel, st = P._mmCur(), p = st.mm.plate;
+                return [P._mmToScreen(st, 0, 0), P._mmToScreen(st, p.width / 3, 0), P._mmToScreen(st, p.width / 3, p.height), P._mmToScreen(st, 0, p.height)]; }""")
+            def lasso(points, mods=()):
+                for m in mods:
+                    pg.keyboard.down(m)
+                pg.mouse.move(box[0] + points[0][0], box[1] + points[0][1])
+                pg.mouse.down()
+                for (x, y) in points[1:] + points[:1]:
+                    pg.mouse.move(box[0] + x, box[1] + y, steps=8)
+                pg.mouse.up()
+                for m in mods:
+                    pg.keyboard.up(m)
+            lasso(corners)
+            picked = pg.evaluate("""() => { const P = window.__panel, st = P._mmCur(), p = st.mm.plate;
+                const xs = [...st.sel].map((id) => { const t = st.mm.tracks.find((q) => q.id === id); return t.keys.find((k) => k[0] === 0)[1]; });
+                return { n: xs.length, max: Math.max(...xs), here: st.mm.tracks.filter((t) => t.keys.some((k) => k[0] === 0 && k[1] < p.width / 3 - 4)).length }; }""")
+            self.assertGreater(picked["n"], 5, picked)
+            self.assertLess(picked["max"], W / 3 + 8, picked)
+            self.assertGreaterEqual(picked["n"], picked["here"] - 1, picked)
+            # Ctrl takes the top half away.
+            top = [corners[0], corners[1], [corners[1][0], (corners[1][1] + corners[2][1]) / 2], [corners[0][0], (corners[0][1] + corners[3][1]) / 2]]
+            lasso(top, ("Control",))
+            left = pg.evaluate("""() => { const st = window.__panel._mmCur();
+                return [...st.sel].map((id) => st.mm.tracks.find((q) => q.id === id).keys.find((k) => k[0] === 0)[2]); }""")
+            self.assertTrue(left and min(left) > H / 2 - 4, left)
+            self._shot(pg, "mm_lasso")
+
+            # Two real distances, measured through the guide's buttons: the tracks' dots are known here.
+            X, cams = plate_scene()
+            u = F * X[:, 0] / X[:, 2] + W / 2
+            v = F * X[:, 1] / X[:, 2] + H / 2
+            keys0 = pg.evaluate("""() => window.__panel._mmCur().mm.tracks.map((t) => { const k = t.keys.find((q) => q[0] === 0); return k ? [t.id, k[1], k[2], t.keys.length] : null; }).filter(Boolean)""")
+            truth = {}
+            for tid, x, y, n in keys0:
+                d = np.hypot(u - x, v - y)
+                i = int(np.argmin(d))
+                if d[i] < 0.8 and n >= N - 2 and np.sum(d < 6) == 1:
+                    truth[tid] = X[i]
+            ids = sorted(truth, key=lambda k: truth[k][0])
+            self.assertGreater(len(ids), 10)
+            pairs = [(ids[0], ids[-1]), (min(ids, key=lambda k: truth[k][2]), max(ids, key=lambda k: truth[k][2]))]
+            pg.evaluate("() => { const P = window.__panel; P._mmCur().mm.step = 'solve'; P._mmRender(); }")
+            for a, b in pairs:
+                metres = float(np.linalg.norm(truth[a] - truth[b]))
+                pg.evaluate("""([a, b, m]) => { const P = window.__panel, st = P._mmCur(); st.sel = new Set([a, b]); st.measureMetres = m; P._mmRender(); }""",
+                            [a, b, metres])
+                pg.locator("button[data-measure=distance]").click()
+            self.assertEqual(pg.evaluate("() => window.__panel._mmCur().mm.constraints.length"), 2)
+            sv = pg.evaluate("""async () => { const P = window.__panel; await P.matchmoveSolve(); const s = P._mmCur().mm.solve;
+                return { units: s.units, rows: s.constraints, rms: s.rms, pts: s.points.map((q) => [q.id, q.X]) }; }""")
+            self.assertEqual(sv["units"], "m", sv["rows"])
+            self.assertTrue(all(r["ok"] for r in sv["rows"]), sv["rows"])
+            pts = {k: np.asarray(x) for k, x in sv["pts"]}
+            rest = [k for k in ids if k in pts and k not in {p for pr in pairs for p in pr}]
+            # distances nobody measured: 1 unit = 1 m (the median over many, the dots are a few pixels on a small plate)
+            ratios = [np.linalg.norm(pts[a] - pts[b]) / np.linalg.norm(truth[a] - truth[b])
+                      for i, a in enumerate(rest) for b in rest[i + 1:] if np.linalg.norm(truth[a] - truth[b]) > 3]
+            self.assertGreater(len(ratios), 10)
+            self.assertAlmostEqual(float(np.median(ratios)), 1.0, delta=0.06)
+            pg.wait_for_timeout(200)
+            rows = pg.evaluate("() => [...window.__panel.mmGuidePanel.querySelectorAll('.mm-constraint')].map((r) => r.textContent)")
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(all("% off" in r for r in rows), rows)
+            # this small plate does not pin its focal length down (it is found some 10 % off): the guide says so
+            self.assertIn("warn", pg.evaluate("() => window.__panel.mmGuidePanel.querySelector('.mm-proportions').className"))
+            self._shot(pg, "mm_measurements")
+
+            # Built: the locators lassoed in the 3D view (Edit > Tool > Lasso select).
+            pg.evaluate("async () => { await window.__panel.matchmoveBuild(); }")
+            pg.wait_for_timeout(500)
+            pg.evaluate("""() => { const P = window.__panel; P._modelView().setSelectShape('lasso'); P.previzSelectMany([], 'replace'); }""")
+            pg.wait_for_timeout(300)
+            c = pg.evaluate("() => { const r = window.__panel._model3d.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+            pg.evaluate("() => window.__panel.previzSetGizmoMode('select')")
+            ring = [(c[0] + c[2] * fx, c[1] + c[3] * fy) for fx, fy in ((0.12, 0.12), (0.9, 0.12), (0.9, 0.9), (0.12, 0.9))]
+            pg.mouse.move(*ring[0])
+            pg.mouse.down()
+            for p in ring[1:] + ring[:1]:
+                pg.mouse.move(*p, steps=6)
+            pg.mouse.up()
+            pg.wait_for_timeout(200)
+            chosen = pg.evaluate("() => { const P = window.__panel; const sc = P.previzScene(); return P.previzSelectedIds().filter((id) => (sc.items.find((i) => i.id === id) || {}).mmTrack).length; }")
+            self.assertGreater(chosen, 5)
+            self.assertFalse(pg.evaluate("() => !!window.__panel._model3d.root.querySelector('.model-lasso')"))
+
+            # The lens chart: full screen, more squares with +, Esc closes.
+            pg.evaluate("() => window.__panel.matchmoveLensChart()")
+            pg.wait_for_timeout(200)
+            cols = pg.evaluate("() => document.querySelector('.iv-lens-chart').dataset.cols")
+            self.assertEqual(cols, "12")
+            self._shot(pg, "mm_lens_chart")
+            pg.keyboard.press("+")
+            self.assertEqual(pg.evaluate("() => document.querySelector('.iv-lens-chart').dataset.cols"), "14")
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(100)
+            self.assertFalse(pg.evaluate("() => !!document.querySelector('.iv-lens-chart')"))
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
 if __name__ == "__main__":
     unittest.main()

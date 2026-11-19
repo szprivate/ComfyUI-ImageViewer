@@ -151,7 +151,11 @@ export const PrevizMenuBarMixin = {
             ].map(([mode, label, cmd]) => ({ label: tick(this._modelView().gizmoMode === mode, label), cmd,
                                              run: () => this.previzSetGizmoMode(mode) })).concat(["-",
                 { label: tick(this._modelView().gizmoSpace === "local", "Local axes"), cmd: "GizmoSpace",
-                  run: () => this.previzToggleGizmoSpace() }]) },
+                  run: () => this.previzToggleGizmoSpace() }, "-",
+                { label: tick(this._modelView().selectShape() !== "lasso", "Box select"), title: "A drag in the view selects what is in a box",
+                  run: () => this._modelView().setSelectShape("box") },
+                { label: tick(this._modelView().selectShape() === "lasso", "Lasso select"), title: "A drag in the view draws a free shape round what to select (Shift toggles, Ctrl takes away)",
+                  run: () => this._modelView().setSelectShape("lasso") }]) },
             "-",
             ...this._previzEditMenuEntries(),
         ];

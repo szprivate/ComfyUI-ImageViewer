@@ -65,11 +65,12 @@ export function newMatchmove(plate = null) {
         v: MM_VERSION,
         step: "plate",
         plate: plate ? cleanPlate(plate) : null,
-        camera: { focalMm: null, sensor: [36, 24], focalKnown: false, model: "", lens: "" },
+        camera: { focalMm: null, sensor: [36, 24], focalKnown: false, model: "", lens: "", pixelAspect: 1, preset: "" },
         lens: { k1: 0, k2: 0, center: null, source: "none", error: null, coverage: null, lines: [], notes: [] },
         masks: [],
         tracks: [],
         objects: [],
+        constraints: [],
         settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, mode: "auto", refine: "auto" },
         solve: null,
         objectSolves: {},
@@ -164,7 +165,8 @@ export function cleanMatchmove(raw) {
     const c = raw.camera || {};
     mm.camera = { focalMm: Number.isFinite(Number(c.focalMm)) && Number(c.focalMm) > 0 ? Number(c.focalMm) : null,
                   sensor: Array.isArray(c.sensor) && c.sensor.length === 2 ? [num(c.sensor[0], 36, 1, 100), num(c.sensor[1], 24, 1, 100)] : [36, 24],
-                  focalKnown: !!c.focalKnown, model: String(c.model || ""), lens: String(c.lens || "") };
+                  focalKnown: !!c.focalKnown, model: String(c.model || ""), lens: String(c.lens || ""),
+                  pixelAspect: num(c.pixelAspect, 1, 0.2, 5), preset: String(c.preset || "") };
     const l = raw.lens || {};
     mm.lens = { k1: num(l.k1, 0, -5, 5), k2: num(l.k2, 0, -5, 5),
                 center: Array.isArray(l.center) && l.center.length === 2 ? [num(l.center[0], 0), num(l.center[1], 0)] : null,
@@ -177,6 +179,7 @@ export function cleanMatchmove(raw) {
     mm.masks = (raw.masks || []).map(cleanMask).filter(Boolean);
     mm.tracks = (raw.tracks || []).map(cleanTrack).filter(Boolean);
     mm.objects = (raw.objects || []).filter((o) => o && o.id).map((o) => ({ id: String(o.id), name: String(o.name || o.id) }));
+    mm.constraints = (Array.isArray(raw.constraints) ? raw.constraints : []).map(cleanConstraint).filter(Boolean);
     const s = raw.settings || {};
     mm.settings = { n: Math.round(num(s.n, 200, 8, 1000)), minDist: Math.round(num(s.minDist, 0, 0, 500)),
                     minNcc: num(s.minNcc, 0.75, 0.3, 0.99), from: Math.round(num(s.from, 0, 0)),
@@ -201,6 +204,113 @@ export function newId(mm, prefix) {
 }
 
 // ── the camera ───────────────────────────────────────────────────────────────
+
+/**
+ * Cameras to pick from: `sensor` is the recorded width x height in mm for the picture's frame, `focal` a lens
+ * that comes with it (mm), `pa` the pixel aspect. A phone is given by its 35 mm equivalent focal length on a
+ * full-frame-diagonal frame of the plate's own shape (`eq`), as phones report it: every lens of a phone has a
+ * sensor of its own, and video crops it. Numbers as the makers publish them.
+ */
+export const CAMERA_PRESETS = [
+    { id: "ff", name: "Full frame (36 × 24)", sensor: [36, 24] },
+    { id: "s35", name: "Super 35 (24.89 × 18.66)", sensor: [24.89, 18.66] },
+    { id: "s35-169", name: "Super 35 16:9 (24.89 × 14.0)", sensor: [24.89, 14.0] },
+    { id: "apsc", name: "APS-C (23.5 × 15.6)", sensor: [23.5, 15.6] },
+    { id: "m43", name: "Micro Four Thirds (17.3 × 13.0)", sensor: [17.3, 13.0] },
+    { id: "alexa-mini", name: "ARRI Alexa Mini 16:9 (23.76 × 13.37)", sensor: [23.76, 13.37] },
+    { id: "alexa35", name: "ARRI Alexa 35 16:9 (24.88 × 14.0)", sensor: [24.88, 14.0] },
+    { id: "alexa-lf", name: "ARRI Alexa LF 16:9 (31.68 × 17.82)", sensor: [31.68, 17.82] },
+    { id: "venice", name: "Sony Venice 6K 3:2 (35.9 × 24.0)", sensor: [35.9, 24.0] },
+    { id: "fx3", name: "Sony FX3 / A7S III (35.6 × 23.8)", sensor: [35.6, 23.8] },
+    { id: "komodo", name: "RED Komodo 6K (27.03 × 14.26)", sensor: [27.03, 14.26] },
+    { id: "bmpcc6k", name: "Blackmagic Pocket 6K (23.10 × 12.99)", sensor: [23.10, 12.99] },
+    { id: "bmpcc4k", name: "Blackmagic Pocket 4K (18.96 × 10.00)", sensor: [18.96, 10.0] },
+    { id: "gopro", name: "GoPro HERO (6.17 × 4.55)", sensor: [6.17, 4.55] },
+    { id: "anamorphic2", name: "Anamorphic 2× on Super 35 4:3 (24.89 × 18.66, 2:1 pixels)", sensor: [24.89, 18.66], pa: 2 },
+    { id: "iphone12-wide", name: "iPhone 12 / 12 mini · wide (26 mm eq.)", eq: 26 },
+    { id: "iphone13-wide", name: "iPhone 13 / 13 mini · wide (26 mm eq.)", eq: 26 },
+    { id: "iphone14-wide", name: "iPhone 14 / 14 Plus · wide (26 mm eq.)", eq: 26 },
+    { id: "iphone15-wide", name: "iPhone 15 / 15 Plus · wide (26 mm eq.)", eq: 26 },
+    { id: "iphone16-wide", name: "iPhone 16 / 16 Plus · wide (26 mm eq.)", eq: 26 },
+    { id: "iphone-ultra", name: "iPhone (any) · ultra wide (13 mm eq.)", eq: 13 },
+    { id: "iphone14pro-wide", name: "iPhone 14 Pro – 16 Pro · wide (24 mm eq.)", eq: 24 },
+    { id: "iphone-tele77", name: "iPhone 13 Pro – 15 Pro · tele 3× (77 mm eq.)", eq: 77 },
+    { id: "iphone-tele120", name: "iPhone 15 Pro Max / 16 Pro · tele 5× (120 mm eq.)", eq: 120 },
+];
+
+/** The 35 mm equivalent frame of a picture w x h: its shape on a full-frame diagonal (43.27 mm). */
+export function equivalentSensor(w, h) {
+    const a = w && h ? w / h : 1.5;
+    const sh = Math.hypot(36, 24) / Math.sqrt(1 + a * a);
+    return [Number((sh * a).toFixed(3)), Number(sh.toFixed(3))];
+}
+
+/** A preset put onto the camera (and the plate's shape for a phone): changes `mm.camera` in place. */
+export function applyCameraPreset(mm, id) {
+    const p = CAMERA_PRESETS.find((q) => q.id === id);
+    const c = mm.camera;
+    if (!p) { c.preset = ""; return mm; }
+    c.preset = p.id;
+    if (p.eq) {
+        c.sensor = equivalentSensor(mm.plate && mm.plate.width, mm.plate && mm.plate.height);
+        c.focalMm = p.eq;
+        c.focalKnown = true;
+    } else {
+        c.sensor = p.sensor.slice();
+        if (p.focal) { c.focalMm = p.focal; c.focalKnown = true; }
+    }
+    c.pixelAspect = p.pa || 1;
+    return mm;
+}
+
+/** A pixel's width over its height (2 for a 2x anamorphic squeeze). */
+export function pixelAspect(mm) {
+    const v = Number(mm && mm.camera && mm.camera.pixelAspect);
+    return Number.isFinite(v) && v >= 0.2 && v <= 5 ? v : 1;
+}
+
+// ── measurements: real distances and shapes the solve keeps ────────────────
+
+export const CONSTRAINT_KINDS = {
+    distance: { name: "Distance", picks: [2, 2], help: "Two tracks and the real distance between them (metres). Two or more in different directions keep the proportions; one sets the scale." },
+    plane: { name: "On one plane", picks: [3, 500], help: "Three or more tracks on one flat surface: a floor, a wall, a table." },
+    line: { name: "On a straight line", picks: [3, 500], help: "Three or more tracks along one straight edge." },
+    right: { name: "Right angle", picks: [3, 3], help: "Three tracks picked in order: an end, the corner, the other end (a corner of a room, a box, a doorway)." },
+};
+
+export function cleanConstraint(c) {
+    if (!c || typeof c !== "object" || !CONSTRAINT_KINDS[c.kind]) return null;
+    const ids = [...new Set((Array.isArray(c.ids) ? c.ids : []).map(String))];
+    const [lo, hi] = CONSTRAINT_KINDS[c.kind].picks;
+    if (ids.length < lo || ids.length > hi) return null;
+    const out = { id: String(c.id || ""), kind: c.kind, ids, on: c.on !== false };
+    if (c.kind === "distance") {
+        const v = Number(c.value);
+        if (!(v > 0) || !Number.isFinite(v)) return null;
+        out.value = v;
+    }
+    if (c.name) out.name = String(c.name).slice(0, 80);
+    return out;
+}
+
+/** A new measurement from the picked tracks (in the order picked); {error} when they do not fit the kind. */
+export function addConstraint(mm, kind, ids, value) {
+    const k = CONSTRAINT_KINDS[kind];
+    if (!k) return { error: "unknown measurement" };
+    const list = [...new Set(ids.map(String))];
+    if (list.length < k.picks[0] || list.length > k.picks[1]) {
+        return { error: k.picks[0] === k.picks[1] ? `${k.name} needs exactly ${k.picks[0]} picked tracks.` : `${k.name} needs ${k.picks[0]} or more picked tracks.` };
+    }
+    const c = cleanConstraint({ id: newId(mm, "c"), kind, ids: list, value });
+    if (!c) return { error: kind === "distance" ? "Type the real distance in metres (above 0)." : "Those tracks do not make that measurement." };
+    mm.constraints.push(c);
+    return { constraint: c };
+}
+
+/** How a measurement held in the last solve: its row of solve.constraints, by id. */
+export function constraintResult(solve, id) {
+    return ((solve && solve.constraints) || []).find((r) => r.id === id) || null;
+}
 
 /** The focal length in pixels of the plate, from millimetres and the sensor's width; null when not known. */
 export function focalPx(mm) {
@@ -309,7 +419,15 @@ export function worstTracks(solve, { share = 0, px = Infinity } = {}) {
 export function removeTracks(mm, ids) {
     const gone = new Set(ids);
     mm.tracks = mm.tracks.filter((t) => !gone.has(t.id));
+    // a measurement keeps the tracks it still has, and goes when too few are left
+    mm.constraints = (mm.constraints || []).map((c) => cleanConstraint({ ...c, ids: c.ids.filter((i) => !gone.has(i)) })).filter(Boolean);
     return mm;
+}
+
+/** `ids` less the tracks a measurement uses (the clean-up buttons leave those alone). */
+export function withoutMeasured(mm, ids) {
+    const used = new Set((mm.constraints || []).flatMap((c) => c.ids));
+    return ids.filter((i) => !used.has(i));
 }
 
 /** Tracks from the server added in, with ids that do not clash (the server numbers from start_id). */
@@ -776,7 +894,9 @@ export function projectPoint(solve, f, X, lens, w, h) {
     const z = p[2] + t[2];
     if (!(z > 1e-9)) return null;
     const c = solve.center || [w / 2, h / 2];
-    const u = solve.focal_px * (p[0] + t[0]) / z + c[0], v = solve.focal_px * (p[1] + t[1]) / z + c[1];
+    // the solve is in square pixels: a wide pixel (pixel_aspect > 1) takes that many of them
+    const pa = Number(solve.pixel_aspect) > 0 ? Number(solve.pixel_aspect) : 1;
+    const u = solve.focal_px * (p[0] + t[0]) / z / pa + c[0], v = solve.focal_px * (p[1] + t[1]) / z + c[1];
     return lensPoint(u, v, "distort", lens, w, h);
 }
 
@@ -784,6 +904,21 @@ export function projectPoint(solve, f, X, lens, w, h) {
 export function cameraCentre(solve, f) {
     const cam = solve && solve.frames && solve.frames[f];
     return cam ? cameraToItem(cam.R, cam.t).position : null;
+}
+
+/**
+ * How far behind the camera's points the plate goes: 5 x their median distance from the first camera (50 for a
+ * solve at its own scale, where that median is 10; a solve in metres from measurements can be any size).
+ */
+export function backplateDistance(solve, fallback = 50) {
+    const pts = (solve && solve.points) || [];
+    const f0 = solve && solve.frames ? Object.keys(solve.frames).map(Number).sort((a, b) => a - b)[0] : undefined;
+    const cam = f0 !== undefined ? solve.frames[f0] : null;
+    if (!cam || pts.length < 3) return fallback;
+    const R = mat3.flat(cam.R), t = cam.t;
+    const d = pts.map((p) => { const q = mat3.vec(R, p.X); return Math.hypot(q[0] + t[0], q[1] + t[1], q[2] + t[2]); }).sort((a, b) => a - b);
+    const m = d[d.length >> 1];
+    return m > 0 && Number.isFinite(m) ? 5 * m : fallback;
 }
 
 /** The backplate's place on the camera: `d` in front, as tall as the view is there (a unit-tall card). */

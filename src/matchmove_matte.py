@@ -441,7 +441,8 @@ def scale_depth(d, cam, tracks):
     return {"scale": k, "spread": float(np.median(np.abs(ratios / k - 1))), "tracks": len(ratios)}
 
 
-def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=DEPTH_STEP, most=DEPTH_MOST):
+def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=DEPTH_STEP, most=DEPTH_MOST,
+                 pixel_aspect=1.0):
     """A depth job's frames as points of the solve's world: {points [[x, y, z]], frames [{frame, scale, spread,
     tracks, points}], skipped, metric, metres_per_unit, workflow}.
 
@@ -460,7 +461,9 @@ def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=D
     gy, gx = np.mgrid[step / 2:h:step, step / 2:w:step]
     grid = np.c_[gx.ravel(), gy.ravel()]
     rays = MM.undistort_points(grid, lens, w, h) if lens else grid
-    rays = np.c_[(rays - c) / fx, np.ones(len(rays))]
+    pa = float(pixel_aspect or 1.0)
+    # the solve is in square pixels (matchmove_solve.solve's pixel_aspect)
+    rays = np.c_[(rays - c) * [pa, 1.0] / fx, np.ones(len(rays))]
     out, frames, skipped, scales = [], [], [], []
     for f, path in sorted(((int(a), b) for a, b in results.items()), key=lambda x: x[0]):
         cam = cams.get(f) or cams.get(str(f))

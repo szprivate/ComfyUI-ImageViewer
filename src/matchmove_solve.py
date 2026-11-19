@@ -306,12 +306,21 @@ def resect(X, uv, f, c, guess=None, rotation_only=False, rng=None):
 
 # ── bundle adjustment ────────────────────────────────────────────────────────
 
-def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False, iters=25, progress=None):
+def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False, iters=25, progress=None,
+                  priors=None):
     """Levenberg-Marquardt over cameras (Rs [C, 3, 3], ts [C, 3]), points X [P, 3] and f.
 
     ``obs`` = (ci [N], pi [N], uv [N, 2]). Cameras in ``fixed`` do not move; a tripod solve moves only the
-    rotations and keeps the points on the unit sphere. Returns (Rs, ts, X, f, rms)."""
+    rotations and keeps the points on the unit sphere. ``priors`` = (index [K], target [K, 3], weight [K]): a pull
+    of point index[k] towards target[k], weight[k] pixels of cost per unit it is away (the measurements' shape,
+    see ``_constrain``). Returns (Rs, ts, X, f, rms); the rms is of the reprojections alone."""
     ci, pi, uv = obs
+    if priors is not None and len(priors[0]):
+        pr_i = np.asarray(priors[0], int)
+        pr_T = np.asarray(priors[1], float).reshape(-1, 3)
+        pr_w2 = np.asarray(priors[2], float) ** 2
+    else:
+        pr_i = None
     Rs, ts, X = Rs.copy(), ts.copy(), X.copy()
     C, P = len(Rs), len(X)
     cp = 3 if tripod else 6
@@ -336,8 +345,15 @@ def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False
         w = np.where(e < HUBER, 1, HUBER / np.maximum(e, 1e-12))
         return float((w * e * e).sum() + (z <= 1e-9).sum() * 1e6), w
 
+    def prior_cost(X):
+        if pr_i is None:
+            return 0.0
+        d = X[pr_i] - pr_T
+        return float((pr_w2 * (d * d).sum(1)).sum())
+
     r, p, iz, z = residuals(Rs, ts, X, f)
     cost, w = cost_of(r, z)
+    cost += prior_cost(X)
     lam = 1e-3
     for it in range(iters):
         N = len(ci)
@@ -364,6 +380,9 @@ def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False
         np.add.at(V, pi, Vpp)
         G = np.zeros((P, 3))
         np.add.at(G, pi, gp)
+        if pr_i is not None:
+            np.add.at(V, pr_i, pr_w2[:, None, None] * np.eye(3))
+            np.add.at(G, pr_i, pr_w2[:, None] * (X[pr_i] - pr_T))
         A = np.zeros((nc, nc))
         b = np.zeros(nc)
         for j in free_cams:
@@ -451,6 +470,7 @@ def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False
                 continue
             r2, p2, iz2, z2 = residuals(Rs2, ts2, X2, f2)
             c2, w2 = cost_of(r2, z2)
+            c2 += prior_cost(X2)
             if c2 < cost:
                 done = (cost - c2) < 1e-7 * cost
                 Rs, ts, X, f, r, p, iz, z, cost, w = Rs2, ts2, X2, f2, r2, p2, iz2, z2, c2, w2
@@ -471,7 +491,7 @@ def bundle_adjust(Rs, ts, X, obs, f, c, fixed=(0,), refine_f=False, tripod=False
 class Obs:
     """Every frame's undistorted track positions: per frame {track index: (u, v)}."""
 
-    def __init__(self, tracks, lens, w, h, frames=None):
+    def __init__(self, tracks, lens, w, h, frames=None, pixel_aspect=1.0):
         self.tracks = [t for t in tracks if t.get("on", True) and len(t["keys"]) >= MIN_TRACK]
         self.by_frame = {}
         lo, hi = (frames or (None, None))
@@ -480,6 +500,9 @@ class Obs:
             if len(ks) < 2:
                 continue
             xy = MM.undistort_points(np.asarray([[k[1], k[2]] for k in ks]), lens, w, h)
+            if pixel_aspect != 1.0:
+                # square pixels: a pixel that is pixel_aspect times as wide as tall is that many square ones
+                xy = xy * np.array([pixel_aspect, 1.0])
             for k, p in zip(ks, xy):
                 self.by_frame.setdefault(int(k[0]), {})[ti] = p
         self.frames = sorted(self.by_frame)
@@ -557,8 +580,10 @@ def _initial_pair(obs, keys, min_common=12):
     return best, best_s
 
 
-def _solve_free(obs, keys, f, c, refine_f, progress=None, cancel=None):
-    """Incremental structure from motion over the key frames. -> dict or None."""
+def _solve_free(obs, keys, f, c, refine_f, progress=None, cancel=None, keep=()):
+    """Incremental structure from motion over the key frames; ``keep`` = track indices never dropped as outliers
+    (the measured ones: a measurement left out unsaid is worse than one that shows it does not fit). -> dict or
+    None."""
     pair, par = _initial_pair(obs, keys)
     if pair is None or par < 1.0:
         return None
@@ -670,7 +695,7 @@ def _solve_free(obs, keys, f, c, refine_f, progress=None, cancel=None):
     # drop what does not fit and adjust again, a few rounds: a tail of tracks that jumped to a neighbour pulls the
     # whole solve (and an unknown focal length) off, though most tracks fit to a fraction of a pixel
     for _ in range(3):
-        drop = _outliers(obs, poses, pts, f, c, rms)
+        drop = [ti for ti in _outliers(obs, poses, pts, f, c, rms) if ti not in keep]
         if not drop:
             break
         for ti in drop:
@@ -749,24 +774,251 @@ def _solve_tripod(obs, keys, f, c, refine_f):
             "pts": {ti: X[pix[ti]] for ti in pid}, "f": f, "rms": rms, "pair": None}
 
 
+# ── measurements: real distances and shapes the points must keep ───────────
+
+CONSTRAINT_KINDS = ("distance", "plane", "line", "right")
+MAX_CONSTRAINTS = 200
+CONSTRAINT_ROUNDS = (0.3, 1.0, 3.0, 8.0, 8.0, 8.0)   # the pull's strength each round (pixels a unit away)
+
+
+def clean_constraints(raw):
+    """[{id, kind, ids, value?}] as the solve reads them: a distance = 2 tracks and metres > 0; a plane = 3 or
+    more tracks; a line = 3 or more; a right angle = 3 tracks (end, corner, end). Others are dropped."""
+    out = []
+    for c in (raw or [])[:MAX_CONSTRAINTS]:
+        if not isinstance(c, dict) or c.get("on") is False:
+            continue
+        kind = c.get("kind")
+        ids = [str(i) for i in (c.get("ids") or []) if isinstance(i, (str, int))][:500]
+        ids = list(dict.fromkeys(ids))
+        if kind == "distance":
+            try:
+                v = float(c.get("value"))
+            except (TypeError, ValueError):
+                continue
+            if len(ids) != 2 or not (v > 0 and math.isfinite(v)):
+                continue
+            out.append({"id": str(c.get("id") or ""), "kind": kind, "ids": ids, "value": v})
+        elif kind in ("plane", "line") and len(ids) >= 3:
+            out.append({"id": str(c.get("id") or ""), "kind": kind, "ids": ids})
+        elif kind == "right" and len(ids) == 3:
+            out.append({"id": str(c.get("id") or ""), "kind": kind, "ids": ids})
+    return out
+
+
+def units_per_metre(cons, P):
+    """How many solve units one metre is, from the distance measurements (the geometric mean of measured / real),
+    or None without one. ``P`` maps a track id to its point."""
+    r = [np.linalg.norm(P[c["ids"][0]] - P[c["ids"][1]]) / c["value"] for c in cons
+         if c["kind"] == "distance" and all(i in P for i in c["ids"])]
+    r = [x for x in r if x > 1e-12]
+    return float(np.exp(np.mean(np.log(r)))) if r else None
+
+
+def constraint_targets(cons, P):
+    """Where each constrained point should be for every measurement to hold, from where the points are now:
+    {track id: target}. A point in several is pulled to the mean of its targets."""
+    acc = {}
+
+    def put(i, X):
+        acc.setdefault(i, []).append(np.asarray(X, float))
+
+    k = units_per_metre(cons, P)
+    for c in cons:
+        ids = [i for i in c["ids"] if i in P]
+        if len(ids) != len(c["ids"]) and c["kind"] in ("distance", "right"):
+            continue
+        A = np.stack([P[i] for i in ids]) if ids else None
+        if c["kind"] == "distance" and k:
+            a, b = A
+            m, d = (a + b) / 2, b - a
+            n = np.linalg.norm(d)
+            if n < 1e-12:
+                continue
+            half = d / n * (c["value"] * k / 2)
+            put(ids[0], m - half)
+            put(ids[1], m + half)
+        elif c["kind"] in ("plane", "line") and len(ids) >= 3:
+            mu = A.mean(0)
+            _, _, Vt = np.linalg.svd(A - mu)
+            if c["kind"] == "plane":
+                nrm = Vt[2]
+                T = A - np.outer((A - mu) @ nrm, nrm)
+            else:
+                u = Vt[0]
+                T = mu + np.outer((A - mu) @ u, u)
+            for i, X in zip(ids, T):
+                put(i, X)
+        elif c["kind"] == "right":
+            a, b, e = A
+            u, v = a - b, e - b
+            lu, lv = np.linalg.norm(u), np.linalg.norm(v)
+            if lu < 1e-12 or lv < 1e-12:
+                continue
+            uh, vh = u / lu, v / lv
+            m = uh + vh
+            n = uh - vh
+            if np.linalg.norm(m) < 1e-9 or np.linalg.norm(n) < 1e-9:
+                continue
+            m, n = m / np.linalg.norm(m), n / np.linalg.norm(n)
+            put(ids[0], b + lu * (m + n) / math.sqrt(2))
+            put(ids[2], b + lv * (m - n) / math.sqrt(2))
+            put(ids[1], b)
+    return {i: np.mean(v, 0) for i, v in acc.items()}
+
+
+def constraint_report(cons, P, metres_per_unit=None):
+    """How well each measurement holds: [{id, kind, ok, text, error}]. ``P`` in the units of the answer."""
+    out = []
+    mpu = metres_per_unit
+    for c in cons:
+        ids = [i for i in c["ids"] if i in P]
+        row = {"id": c["id"], "kind": c["kind"]}
+        if len(ids) < (2 if c["kind"] == "distance" else 3) or (c["kind"] in ("distance", "right") and len(ids) != len(c["ids"])):
+            row.update(ok=False, error=None, text="some of its tracks were not solved: it was left out")
+            out.append(row)
+            continue
+        A = np.stack([P[i] for i in ids])
+        if c["kind"] == "distance":
+            d = float(np.linalg.norm(A[1] - A[0])) * (mpu or 1.0)
+            e = abs(d - c["value"]) / c["value"]
+            row.update(ok=e < 0.03, error=round(e * 100, 2), solved=round(d, 4),
+                       text=f"{d:.3f} m solved for {c['value']:.3f} m ({e * 100:.1f} % off)")
+        elif c["kind"] in ("plane", "line"):
+            mu = A.mean(0)
+            _, S, Vt = np.linalg.svd(A - mu)
+            size = float(S[0] / math.sqrt(len(A))) or 1.0
+            off = (A - mu) @ Vt[2] if c["kind"] == "plane" else np.linalg.norm((A - mu) - np.outer((A - mu) @ Vt[0], Vt[0]), axis=1)
+            rms = float(np.sqrt(np.mean(np.square(off))))
+            e = rms / size
+            row.update(ok=e < 0.03, error=round(e * 100, 2),
+                       text=f"off the {'plane' if c['kind'] == 'plane' else 'line'} by {e * 100:.1f} % of its size")
+        else:
+            u, v = A[0] - A[1], A[2] - A[1]
+            ang = math.degrees(math.acos(np.clip(u @ v / max(1e-12, np.linalg.norm(u) * np.linalg.norm(v)), -1, 1)))
+            row.update(ok=abs(ang - 90) < 3, error=round(abs(ang - 90), 2), solved=round(ang, 2),
+                       text=f"{ang:.1f}° solved for 90°")
+        out.append(row)
+    return out
+
+
+def _key_ba(obs, poses, pts, f, c, fix, refine_f, priors=None, iters=25):
+    """Bundle-adjust the frames in ``poses`` and the points in ``pts`` (in place); ``priors`` {point id (index in
+    obs.tracks): (target, weight)}. -> (f, rms)."""
+    regs = sorted(poses)
+    idx = {fr: k for k, fr in enumerate(regs)}
+    pid = sorted(pts)
+    pix = {ti: k for k, ti in enumerate(pid)}
+    ci, pi, uv = [], [], []
+    for fr in regs:
+        for ti, p in obs.by_frame.get(fr, {}).items():
+            if ti in pix:
+                ci.append(idx[fr])
+                pi.append(pix[ti])
+                uv.append(p)
+    if not ci:
+        return f, 0.0
+    Rs = np.stack([poses[fr][0] for fr in regs])
+    ts = np.stack([poses[fr][1] for fr in regs])
+    X = np.stack([pts[ti] for ti in pid])
+    pr = None
+    if priors:
+        keep = [ti for ti in priors if ti in pix]
+        pr = ([pix[ti] for ti in keep], [priors[ti][0] for ti in keep], [priors[ti][1] for ti in keep])
+    Rs, ts, X, f2, rms = bundle_adjust(Rs, ts, X, (np.asarray(ci), np.asarray(pi), np.asarray(uv)), f, c,
+                                       fixed=(idx[fix],), refine_f=refine_f and len(regs) >= 4, iters=iters,
+                                       priors=pr)
+    for fr in regs:
+        poses[fr] = (Rs[idx[fr]], ts[idx[fr]])
+    for ti in pid:
+        pts[ti] = X[pix[ti]]
+    return f2, rms
+
+
+def _constrain(obs, res, c, cons, refine_f, cancel=None):
+    """The key frames' solve again with the measurements pulling the points into their shape; the cameras and
+    (when refined) the focal length follow. Rounds of: targets from where the points are, then a bundle
+    adjustment pulled towards them, harder each round. Changes ``res`` in place; -> the rounds' rms."""
+    poses, pts = res["poses"], res["pts"]
+    id_of = {t["id"]: ti for ti, t in enumerate(obs.tracks)}
+    fix = res["pair"][0] if res.get("pair") else min(poses)
+    f = res["f"]
+    rms = res["rms"]
+    for strength in CONSTRAINT_ROUNDS:
+        if cancel and cancel():
+            break
+        P = {i: pts[id_of[i]] for i in id_of if id_of[i] in pts}
+        T = constraint_targets(cons, P)
+        if not T:
+            break
+        priors = {}
+        R0, t0 = poses[fix]
+        for i, X in T.items():
+            ti = id_of[i]
+            z = float((R0 @ pts[ti] + t0)[2])
+            if not z > 1e-9:
+                z = float(np.median([(R0 @ q + t0)[2] for q in pts.values()])) or 1.0
+            priors[ti] = (X, strength * f / z)
+        f, rms = _key_ba(obs, poses, pts, f, c, fix, refine_f, priors=priors, iters=15)
+    res["f"], res["rms"] = f, rms
+    return rms
+
+
+def focal_check(obs, res, c, mode="free"):
+    """How firmly the plate pins its focal length down: the key frames solved again with the focal length held
+    10 % shorter and 10 % longer. When the error hardly grows, any focal length near it fits as well, and with it
+    the depth of everything (the solve can come out squashed or stretched). -> {weak, rms, rms_short, rms_long}
+    or None (a tripod, too few key frames)."""
+    if mode == "tripod" or len(res["poses"]) < 3 or len(res["pts"]) < 12:
+        return None
+    f = res["f"]
+    fix = res["pair"][0] if res.get("pair") else min(res["poses"])
+    base = None
+    out = {}
+    for name, k in (("rms", 1.0), ("rms_short", 0.9), ("rms_long", 1.1)):
+        poses = {fr: (R.copy(), t.copy()) for fr, (R, t) in res["poses"].items()}
+        pts = {ti: X.copy() for ti, X in res["pts"].items()}
+        _, rms = _key_ba(obs, poses, pts, f * k, c, fix, False, iters=20)
+        out[name] = round(rms, 4)
+        if name == "rms":
+            base = rms
+    rise = min(out["rms_short"], out["rms_long"]) - base
+    margin = max(0.05, 0.1 * base)
+    better = min(("short", out["rms_short"]), ("long", out["rms_long"]), key=lambda x: x[1])
+    out["better"] = better[0] if better[1] < base - margin else None
+    out["weak"] = bool(out["better"] is None and rise < max(0.05, 0.15 * base))
+    out["rise"] = round(rise, 4)
+    return out
+
+
 def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None, frames=None,
-          progress=None, cancel=None):
+          progress=None, cancel=None, constraints=None, pixel_aspect=1.0):
     """The camera of a plate from its tracks.
 
     ``tracks`` as matchmove.clean_tracks gives them (the camera's: group "camera"); ``lens`` the Comp
     LensDistortion numbers; ``focal_px`` the focal length in pixels when known (else it is searched); ``mode``
-    free | tripod | auto (free, and tripod when the camera hardly moves). Returns {frames: {f: {R, t}}, focal_px,
-    points: [{id, X, error}], rms, per_frame: {f: rms}, mode, notes} or {error, notes}."""
+    free | tripod | auto (free, and tripod when the camera hardly moves). ``constraints`` real measurements
+    (``clean_constraints``): distances in metres make 1 unit = 1 m, shapes (a plane, a line, a right angle) pull
+    the points into them. ``pixel_aspect`` is a pixel's width over its height (2 for a 2x anamorphic squeeze):
+    the solve is in square pixels, ``focal_px`` and the answer's focal_px are square pixels too (the plate's
+    height in pixels is the same either way), its center is in the plate's own pixels. Returns {frames: {f: {R,
+    t}}, focal_px, points: [{id, X, error}], rms, per_frame: {f: rms}, mode, notes, constraints, focal_check,
+    units} or {error, notes}."""
     notes = []
+    pa = float(pixel_aspect or 1.0)
+    if not (0.2 <= pa <= 5):
+        pa = 1.0
     tracks = [t for t in tracks if (t.get("group") or "camera") == "camera"]
-    obs = Obs(tracks, lens, w, h, frames)
+    cons = clean_constraints(constraints)
+    obs = Obs(tracks, lens, w, h, frames, pixel_aspect=pa)
+    w_raw, w = w, w * pa
     if len(obs.frames) < 2:
         return {"error": "Not enough tracked frames: track the plate first.", "notes": notes}
     cnt = [len(obs.by_frame[fr]) for fr in obs.frames]
     thin = [fr for fr, n in zip(obs.frames, cnt) if n < 8]
     if thin:
         notes.append(f"{len(thin)} frame(s) see fewer than 8 tracks (first: {thin[0]}); the camera may jump there.")
-    c = np.array(lens.get("center") if lens and lens.get("center") else [w / 2, h / 2], np.float64)
+    c = np.array(lens.get("center") if lens and lens.get("center") else [w_raw / 2, h / 2], np.float64) * [pa, 1.0]
     keys = _pick_keys(obs.frames)
     known = bool(focal_px)
     refine = (not known) if refine_focal is None else bool(refine_focal)
@@ -776,10 +1028,13 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
         if progress:
             progress("keys", done, total)
 
+    measured = {i for q in cons for i in q["ids"]}
+    keep = {ti for ti, t in enumerate(obs.tracks) if t["id"] in measured}
+
     def attempt(fpx, m, kk, ref):
         if m == "tripod":
             return _solve_tripod(obs, kk, fpx, c, ref)
-        return _solve_free(obs, kk, fpx, c, ref, progress=prog, cancel=cancel)
+        return _solve_free(obs, kk, fpx, c, ref, progress=prog, cancel=cancel, keep=keep)
 
     want = mode if mode in ("free", "tripod") else "free"
     if known:
@@ -815,6 +1070,25 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     if res is None:
         return {"error": "The solve did not find a camera: add tracks that last longer and spread over the frame.",
                 "notes": notes}
+    if cons and want == "tripod":
+        notes.append("The camera only turns, so the points have no distance: the measurements were left out.")
+    elif cons:
+        if progress:
+            progress("measurements", 0, 1)
+        _constrain(obs, res, c, cons, refine, cancel=cancel)
+    if known and refine and abs(res["f"] / float(focal_px) - 1) > 0.1:
+        notes.append(f"The solve moved the focal length {res['f'] / float(focal_px) * 100 - 100:+.0f} % from the "
+                     f"one given ({float(focal_px):.0f} px to {res['f']:.0f} px): check the camera and the lens.")
+    fcheck = focal_check(obs, res, c, want)
+    if fcheck and fcheck["better"]:
+        notes.append(f"A focal length 10 % {'shorter' if fcheck['better'] == 'short' else 'longer'} fits the tracks "
+                     f"better than the {res['f']:.0f} px held ({fcheck['rms_' + fcheck['better']]:.2f} px against "
+                     f"{fcheck['rms']:.2f} px): the depth is likely squashed or stretched. Let the solve refine the "
+                     "focal length, or check the camera and sensor.")
+    elif fcheck and fcheck["weak"]:
+        notes.append("This shot does not pin its focal length down (the error hardly changes 10 % either side), so "
+                     "the depth may come out squashed or stretched: give the camera's focal length, or add two "
+                     "distances or a right angle in Measurements.")
     f = res["f"]
     pts, kposes = res["pts"], res["poses"]
     # every frame: a resection from the points, starting from the nearest solved frame
@@ -841,8 +1115,14 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     # the world: the first solved frame's camera at the origin; scale = the points' median distance from it is 10
     f0 = min(all_poses)
     R0, t0 = all_poses[f0]
+    id_of = {t["id"]: ti for ti, t in enumerate(obs.tracks)}
+    upm = None
+    if want != "tripod" and cons:
+        upm = units_per_metre(cons, {i: pts[ti] for i, ti in id_of.items() if ti in pts})
     if want == "tripod":
         s = 10.0
+    elif upm:
+        s = 1.0 / upm          # 1 unit = 1 metre, from the measurements
     else:
         C0 = -R0.T @ t0
         d = [np.linalg.norm(X - C0) for X in pts.values()]
@@ -869,11 +1149,21 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     rms = float(np.sqrt(np.mean(np.square(list(per.values()))))) if per else res["rms"]
     if rms > 1.5:
         notes.append(f"The solve's error is {rms:.2f} px: delete the worst tracks (the list is sorted) and solve again.")
+    report = []
+    if cons and want != "tripod":
+        P = {p["id"]: np.asarray(p["X"]) for p in points}
+        report = constraint_report(cons, P, 1.0 if upm else None)
+        bad = [r for r in report if not r["ok"]]
+        if bad:
+            notes.append(f"{len(bad)} of the {len(report)} measurements do not hold well (see Measurements): a "
+                         "track on the wrong spot, a wrong number, or a lens not taken out.")
     fov_h = 2 * math.degrees(math.atan(w / 2 / f))
     return {"frames": frames_out, "focal_px": round(f, 4), "fov_h": round(fov_h, 4),
-            "fov_v": round(2 * math.degrees(math.atan(h / 2 / f)), 4), "center": c.round(4).tolist(),
+            "fov_v": round(2 * math.degrees(math.atan(h / 2 / f)), 4),
+            "center": (c / [pa, 1.0]).round(4).tolist(), "pixel_aspect": pa,
             "points": points, "rms": round(rms, 4), "per_frame": per, "mode": want,
             "key_frames": len(kposes), "notes": notes, "used_tracks": len(pts),
+            "constraints": report, "focal_check": fcheck, "units": "m" if upm else "",
             "worst": sorted(points, key=lambda p: -p["error"])[:20] if allerr else []}
 
 
@@ -887,9 +1177,10 @@ def solve_object(tracks, obj_id, camera, w, h, lens=None, scale=None, progress=N
     if len(mine) < 6:
         return {"error": "An object needs 6 or more tracks on it.", "notes": notes}
     f = float(camera["focal_px"])
-    obs = Obs(mine, lens, w, h)
+    pa = float(camera.get("pixel_aspect") or 1.0)
+    obs = Obs(mine, lens, w, h, pixel_aspect=pa)
     keys = _pick_keys(obs.frames)
-    c = np.array(camera.get("center") or [w / 2, h / 2], np.float64)
+    c = np.array(camera.get("center") or [w / 2, h / 2], np.float64) * [pa, 1.0]
     res = _solve_free(obs, keys, f, c, False, cancel=cancel)
     if res is None:
         return {"error": "The object did not solve: it needs tracks that last and that see it turn or move in depth.",

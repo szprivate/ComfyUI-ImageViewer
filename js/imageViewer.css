@@ -2467,6 +2467,8 @@ audio.src-media { width: 90%; }
 .model-display-key { color: #777; font-size: 11px; }
 .model-display-sep { height: 1px; margin: 4px 0; background: #333; }
 /* The marquee: a box drawn while dragging over the 3D view. */
+.model-lasso { position: absolute; pointer-events: none; z-index: 3; overflow: visible; }
+.model-lasso polygon { fill: rgba(255, 255, 255, 0.08); stroke: #fff; stroke-width: 1; stroke-dasharray: 4 3; }
 .model-marquee {
     position: absolute; z-index: 3; pointer-events: none;
     border: 1px dashed #fff; background: rgba(255, 255, 255, 0.06);

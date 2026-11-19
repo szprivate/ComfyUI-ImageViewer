@@ -57,6 +57,18 @@ export function displayKindOf(obj, item) {
 /** Whether a screen rectangle (x0 < x1, y0 < y1) holds the point. */
 const inRect = (r, x, y) => x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
 
+/** Inside a closed polygon [[x, y], ...] (even-odd rule). */
+export function inPolygon(poly, x, y) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [xi, yi] = poly[i], [xj, yj] = poly[j];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+}
+
+const SELECT_SHAPE_STORE = "imageviewer.viewer.selectShape";
+
 export const View3DToolsMixin = {
 
     // ── Display ──────────────────────────────────────────────────────────────
@@ -370,6 +382,20 @@ export const View3DToolsMixin = {
      * tool, an object is (a click on it selects; Maya's tools drag the box
      * from empty space only). The Select tool boxes from anywhere.
      */
+    /** How a drag selects: "box" (default) or "lasso"; kept per viewer. (A method: the mixin is Object.assign'ed.) */
+    selectShape() {
+        if (this._selectShape) return this._selectShape;
+        let v = "box";
+        try { v = this.win.localStorage.getItem(SELECT_SHAPE_STORE) === "lasso" ? "lasso" : "box"; } catch (_) { /* storage off */ }
+        this._selectShape = v;
+        return v;
+    },
+
+    setSelectShape(shape) {
+        this._selectShape = shape === "lasso" ? "lasso" : "box";
+        try { this.win.localStorage.setItem(SELECT_SHAPE_STORE, this._selectShape); } catch (_) { /* storage off */ }
+    },
+
     _mqDown(e) {
         if (e.button !== 0 || e.altKey || this._walk || this._placingNote) return false;
         if (this.gizmo && this.gizmo.object && this.gizmo.axis && this.gizmoMode !== "select") return false;
@@ -378,6 +404,7 @@ export const View3DToolsMixin = {
         if (this.gizmoMode !== "select" && this._pick(e)) return false;
         const rect = this.canvas.getBoundingClientRect();
         this._mq = { x: e.clientX, y: e.clientY, rect, id: e.pointerId, box: null,
+                     lasso: this.selectShape() === "lasso" ? [[e.clientX, e.clientY]] : null,
                      mode: e.ctrlKey || e.metaKey ? (e.shiftKey ? "add" : "remove") : e.shiftKey ? "toggle" : "replace" };
         const win = this.win;
         const move = (ev) => this._mqMove(ev);
@@ -392,11 +419,26 @@ export const View3DToolsMixin = {
         if (!m) return;
         if (!m.box) {
             if (Math.abs(e.clientX - m.x) <= 3 && Math.abs(e.clientY - m.y) <= 3) return;
-            m.box = this.doc.createElement("div");
-            m.box.className = "model-marquee";
+            if (m.lasso) {
+                const NS = "http://www.w3.org/2000/svg";
+                m.box = this.doc.createElementNS(NS, "svg");
+                m.box.setAttribute("class", "model-lasso");
+                m.line = this.doc.createElementNS(NS, "polygon");
+                m.box.append(m.line);
+            } else {
+                m.box = this.doc.createElement("div");
+                m.box.className = "model-marquee";
+            }
             this.root.append(m.box);
         }
         const host = this.root.getBoundingClientRect();
+        if (m.lasso) {
+            const l = m.lasso[m.lasso.length - 1];
+            if (Math.hypot(e.clientX - l[0], e.clientY - l[1]) >= 3) m.lasso.push([e.clientX, e.clientY]);
+            Object.assign(m.box.style, { left: "0px", top: "0px", width: `${host.width}px`, height: `${host.height}px` });
+            m.line.setAttribute("points", m.lasso.map(([x, y]) => `${x - host.left},${y - host.top}`).join(" "));
+            return;
+        }
         const x0 = Math.min(m.x, e.clientX), x1 = Math.max(m.x, e.clientX);
         const y0 = Math.min(m.y, e.clientY), y1 = Math.max(m.y, e.clientY);
         Object.assign(m.box.style, { left: `${x0 - host.left}px`, top: `${y0 - host.top}px`,
@@ -411,11 +453,19 @@ export const View3DToolsMixin = {
         // The pointer-up that ends a box is no click: _onPointerUp must not pick.
         this._mqJustBoxed = true;
         const r = m.rect;
-        const box = {
-            x0: Math.min(m.x, e.clientX) - r.left, x1: Math.max(m.x, e.clientX) - r.left,
-            y0: Math.min(m.y, e.clientY) - r.top, y1: Math.max(m.y, e.clientY) - r.top,
-        };
-        const ids = this.idsInRect(box);
+        let box, poly = null;
+        if (m.lasso) {
+            poly = m.lasso.map(([x, y]) => [x - r.left, y - r.top]);
+            if (poly.length < 3) return;
+            const xs = poly.map((p) => p[0]), ys = poly.map((p) => p[1]);
+            box = { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+        } else {
+            box = {
+                x0: Math.min(m.x, e.clientX) - r.left, x1: Math.max(m.x, e.clientX) - r.left,
+                y0: Math.min(m.y, e.clientY) - r.top, y1: Math.max(m.y, e.clientY) - r.top,
+            };
+        }
+        const ids = this.idsInRect(box, poly);
         if (this.hooks.onMarquee) this.hooks.onMarquee(ids, m.mode);
     },
 
@@ -425,7 +475,8 @@ export const View3DToolsMixin = {
      * its surface is under one of a grid of points across the box - so a
      * plane bigger than the box, with no corner in it, is caught too.
      */
-    idsInRect(r) {
+    idsInRect(r, poly = null) {
+        const inside = poly ? (x, y) => inRect(r, x, y) && inPolygon(poly, x, y) : (x, y) => inRect(r, x, y);
         if (!this.libs || !this.canvas) return [];
         const { THREE } = this.libs;
         const cam = this.activeCameraObject();
@@ -474,7 +525,7 @@ export const View3DToolsMixin = {
                     if (o.isSkinnedMesh && o.applyBoneTransform) o.applyBoneTransform(i, p);
                     p.applyMatrix4(o.matrixWorld);
                     const s = toScreen(p);
-                    if (s && inRect(r, s[0], s[1])) hit = true;
+                    if (s && inside(s[0], s[1])) hit = true;
                 }
                 if (hit) break;
             }
@@ -492,6 +543,7 @@ export const View3DToolsMixin = {
         for (let gy = 0; gy <= 6; gy++) {
             for (let gx = 0; gx <= 6; gx++) {
                 const x = r.x0 + (r.x1 - r.x0) * gx / 6, y = r.y0 + (r.y1 - r.y0) * gy / 6;
+                if (poly && !inPolygon(poly, x, y)) continue;
                 ndc.set(x / W * 2 - 1, -(y / H) * 2 + 1);
                 ray.setFromCamera(ndc, cam);
                 for (const h of ray.intersectObjects(roots.filter((o) => o.isMesh), false)) {
