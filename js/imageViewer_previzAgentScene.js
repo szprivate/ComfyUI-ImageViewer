@@ -3,7 +3,7 @@
 // Sequencer, cameras and turntables, renders and playblasts of the scene on
 // screen, keys on any channel, animation-layer and display-layer settings,
 // IK/FK, spaces, set-driven keys, custom attributes, a model brought in, and a
-// USD stage of the shot, and the Terrain menu (imageViewer_previzAgentTerrain.js). agentY-core's animate_scene sends them through the
+// USD stage of the shot, the Terrain menu (imageViewer_previzAgentTerrain.js) and the matchmove (imageViewer_previzAgentMatchmove.js). agentY-core's animate_scene sends them through the
 // viewer's POST /imageviewer/rig/agent (rig_routes.AGENT_ACTIONS), the same road
 // as animate_character; previzRigAgentRun hands every action named in
 // SCENE_AGENT_ACTIONS to previzSceneAgent here.
@@ -33,6 +33,11 @@ export const SCENE_AGENT_ACTIONS = new Set([
     // The Terrain menu's (imageViewer_previzAgentTerrain.js, TERRAIN_AGENT_ACTIONS).
     "terrain_add", "terrain_set", "terrain_sculpt", "terrain_paint", "terrain_clear", "terrain_height",
     "terrain_erode", "scatter_add", "scatter_set", "scatter_paint", "ground",
+    // The matchmove's (imageViewer_previzAgentMatchmove.js, MATCHMOVE_AGENT_ACTIONS).
+    "matchmove_info", "matchmove_open", "matchmove_camera", "matchmove_lens", "matchmove_lens_export",
+    "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
+    "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
+    "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",

@@ -101,7 +101,7 @@ export const PrevizMatchmoveMixin = {
                                        undo: [], redo: [], frames: new Map(), view: null, busy: null, maskSel: null,
                                        drawing: null, show: { trails: true, solved: true, undistort: false } };
             const scene = this.previzScene();
-            if (scene && scene.matchmove && scene.matchmove.file) this._mmLoadFile(st, scene.matchmove.file);
+            if (scene && scene.matchmove && scene.matchmove.file) st.loading = this._mmLoadFile(st, scene.matchmove.file);
         }
         return st || null;
     },
@@ -109,6 +109,7 @@ export const PrevizMatchmoveMixin = {
     async _mmLoadFile(st, path) {
         try {
             const d = await this._mmGet("/imageviewer/mm_load", { path });
+            clearTimeout(st.saveTimer);                    // an edit before the file came in is not saved over it
             st.mm = D.cleanMatchmove(d.data);
             st.file = d.path;
             st.frames.clear();
@@ -606,8 +607,7 @@ export const PrevizMatchmoveMixin = {
                 Object.assign(m.lens, { k1: d.k1, k2: d.k2, center: d.center || null, error: d.error, coverage: d.coverage ?? null,
                                         notes: d.notes || [], source: "grid" });
             });
-            st.lensFocal = d.focal_px || null;
-            if (d.focal_px && !st.mm.camera.focalKnown) this._mmNote; // shown in the step
+            st.lensFocal = d.focal_px || null;             // the lens step says it
         } finally {
             st.busy = null;
             this._mmRender();
