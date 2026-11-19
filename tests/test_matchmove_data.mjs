@@ -138,3 +138,52 @@ test("a solved point projects onto the plate where the server's camera sees it",
     const bp = D.backplatePlace(90, 10);
     near(bp.scale[0], 20, 1e-9);
 });
+
+test("the ground is found among the solved points: the floor, not the wall beside it or a table on it", () => {
+    // A room in the solve's own (tilted) frame: a floor at y = 0, a wall with MORE points at x = 4, a table top at
+    // y = 0.8, a few strays; cameras at eye height looking 40 degrees down, panning.
+    let seed = 3;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    const W = D.matrixXYZ([25, 70, -15]);
+    const at = (p) => D.mat3.vec(W, p).map((v, i) => v + [2, -1, 3][i]);
+    const pts = [];
+    const add = (id, p) => pts.push({ id, p: at(p) });
+    for (let i = 0; i < 70; i++) add(`f${i}`, [rnd() * 8 - 4, (rnd() - 0.5) * 0.02, rnd() * 8 - 8]);
+    for (let i = 0; i < 110; i++) add(`w${i}`, [4 + (rnd() - 0.5) * 0.02, rnd() * 3, rnd() * 8 - 8]);
+    for (let i = 0; i < 30; i++) add(`t${i}`, [rnd() - 0.5, 0.8 + (rnd() - 0.5) * 0.01, rnd() - 3.5]);
+    for (let i = 0; i < 10; i++) add(`s${i}`, [rnd() * 8 - 4, rnd() * 3, rnd() * 8 - 8]);
+    const cams = [];
+    for (let i = 0; i < 20; i++) {
+        const m = D.mat3.mul(W, D.mat3.mul(D.matrixXYZ([0, -30 + i * 3, 0]), D.matrixXYZ([-40, 0, 0])));
+        cams.push({ c: at([i * 0.1 - 1, 1.6, 2]), right: [m[0], m[3], m[6]], up: [m[1], m[4], m[7]] });
+    }
+    const g = D.findGround(pts, cams);
+    assert.ok(!g.error, g.error);
+    const want = D.mat3.vec(W, [0, 1, 0]);
+    assert.ok(g.normal[0] * want[0] + g.normal[1] * want[1] + g.normal[2] * want[2] > 0.999, `normal ${g.normal}`);
+    const floor = g.ids.filter((id) => id[0] === "f").length;
+    assert.ok(floor >= 65 && g.ids.length - floor <= 5, `${floor} of ${g.ids.length} on the floor`);
+    assert.ok(g.tilt < 2, `tilt ${g.tilt}`);
+    const o = D.orientFound({ R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0], s: 1 }, g, pts);
+    for (const q of pts.filter((x) => x.id[0] === "f")) near(D.orientApply(o, q.p)[1], 0, 0.03);
+    assert.ok(D.orientApply(o, cams[0].c)[1] > 1.5, "the cameras are above it");
+    // only the table's points: the table is found (a region the user drew)
+    const tb = D.findGround(pts.filter((q) => q.id[0] === "t"), cams);
+    near(D.orientApply(D.orientFound(o, tb, pts), pts.find((q) => q.id === "t3").p)[1], 0, 0.02);
+    // lift and flip
+    const l = D.orientLift(o, 0.5);
+    near(D.orientApply(l, cams[0].c)[1] - D.orientApply(o, cams[0].c)[1], 0.5, 1e-9);
+    assert.ok(D.orientApply(D.orientFlip(o), cams[0].c)[1] < 0);
+    assert.ok(D.findGround(pts.slice(0, 2), cams).error);
+});
+
+test("a matte mask keeps its sequence and names the frame that stands for another", () => {
+    const m = D.cleanMask({ id: "k1", name: "People", mode: "exclude", matte: { pattern: "/in/mm/matte.####.png", frames: [4, 0, 8, 8], grow: 3, engine: "objects", prompt: "person" } });
+    assert.deepEqual(m.keys, []);
+    assert.deepEqual(m.matte.frames, [0, 4, 8]);
+    assert.equal(D.matteFrameAt(m.matte, 6), 4);
+    assert.equal(D.matteFrameAt(m.matte, 20), 8);
+    assert.equal(D.mattePath(m.matte.pattern, 7), "/in/mm/matte.0007.png");
+    assert.equal(D.cleanMask({ matte: { pattern: "no-hashes.png", frames: [1] } }), null);
+    assert.deepEqual(D.groundVotes({ a: [3, 4], b: [1, 4], c: [0, 0] }), ["a"]);
+});

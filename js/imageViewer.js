@@ -54,6 +54,7 @@ import { LoraPanelMixin } from "./imageViewer_loraPanel.js";
 import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
 import { PrevizLayersMixin } from "./imageViewer_previzLayers.js";
 import { PrevizMatchmoveMixin } from "./imageViewer_previzMatchmove.js";
+import { PrevizMatchmoveAIMixin } from "./imageViewer_previzMatchmoveAI.js";
 import { AnimLayersMixin } from "./imageViewer_animLayersPanel.js";
 import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
 import { PrevizRenderMixin } from "./imageViewer_previzRender.js";
@@ -1674,6 +1675,7 @@ Object.assign(
     PrevizChannelsMixin,
     PrevizLayersMixin,
     PrevizMatchmoveMixin,
+    PrevizMatchmoveAIMixin,
     AnimLayersMixin,
     PrevizHotkeysMixin,
     PrevizRenderMixin,

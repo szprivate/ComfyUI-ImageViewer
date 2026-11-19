@@ -257,6 +257,21 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         finally:
             job["ended"] = time.time()
 
+    def safe_masks(raw):
+        """The masks a page sent, cleaned; a matte mask only when its sequence is media this server may read."""
+        out = []
+        for m in (MM.clean_mask(m) for m in (raw if isinstance(raw, list) else [])[:64]):
+            if not m:
+                continue
+            if m.get("matte"):
+                first = MM.matte_path(m["matte"]["pattern"], m["matte"]["frames"][0])
+                if not path_access.may_serve(os.path.abspath(first)):
+                    if not m["keys"]:
+                        continue
+                    m.pop("matte")
+            out.append(m)
+        return out
+
     async def track_route(request):
         """POST {path, from, to, mode: auto | points, n?, min_dist?, masks?, points?: [{id, x, y, pattern?,
         search?}]} starts a job; GET /imageviewer/mm_job?job= reads it."""
@@ -277,7 +292,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         step = 1 if f1 >= f0 else -1
         mode = "points" if body.get("mode") == "points" else "auto"
         spec = {"mode": mode, "frames": list(range(f0, f1 + step, step)), "n": n, "min_dist": md,
-                "masks": [m for m in (MM.clean_mask(m) for m in (body.get("masks") or [])[:64]) if m],
+                "masks": safe_masks(body.get("masks")),
                 "min_ncc": min_ncc, "prefix": str(body.get("prefix") or "t")[:8], "start_id": start_id}
         if mode == "points":
             pts = []
@@ -642,7 +657,115 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             return err(f"not written: {e}", 500)
         return web.json_response({"path": path})
 
+    # ── AI mattes over the shot (matchmove_matte): SAM 3 by words, a background remover ──────────────
+
+    def node_classes():
+        try:
+            import nodes  # ComfyUI's own: the node classes this server has
+            return set(nodes.NODE_CLASS_MAPPINGS)
+        except Exception:  # noqa: BLE001 - not inside ComfyUI (the tests): no check
+            return None
+
+    def output_ref(img):
+        if not isinstance(img, dict) or not img.get("filename") or folder_paths is None:
+            return None
+        try:
+            base = folder_paths.get_directory_by_type(img.get("type") or "output")
+        except Exception:  # noqa: BLE001
+            base = None
+        if not base:
+            return None
+        p = os.path.abspath(os.path.join(base, str(img.get("subfolder") or ""), str(img["filename"])))
+        return p if path_access.within(p, base) else None
+
+    async def matte_workflows_route(request):
+        """POST {engine: objects | background} -> {engine, action, workflows, choice}."""
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        try:
+            res = await off(MT.workflows_for, str(body.get("engine") or ""), folder_paths, node_classes())
+        except (MT.MatteError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res, headers={"Cache-Control": "no-cache"})
+
+    async def matte_route(request):
+        """POST {path, engine, prompt?, frames, workflow?, graph?, tune?, models?} -> ONE prompt for the frames'
+        mattes {run, graph, outputs {frame: node}, frames, skipped}; 409 {missing} without its models."""
+        from . import matchmove_matte as MT
+        from . import paint_generate as G
+        body = await body_of(request)
+        if folder_paths is None:
+            return err("ComfyUI's folders are not known here", 500)
+        p, why = await off(plate_of, body.get("path"))
+        if why:
+            return err(*why)
+        frames = body.get("frames")
+        if not isinstance(frames, list) or not all(isinstance(f, (int, float)) and not isinstance(f, bool) for f in frames):
+            return err("'frames' must be a list of frame numbers")
+        last = p.frames - 1
+        frames = [int(f) for f in frames if 0 <= int(f) <= last]
+        try:
+            res = await off(MT.prepare_batch, p.picture, frames, folder_paths.get_input_directory(),
+                            engine=str(body.get("engine") or ""), prompt=str(body.get("prompt") or ""),
+                            wid=body.get("workflow") or None, graph=body.get("graph"),
+                            tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
+                            models=body.get("models") if isinstance(body.get("models"), dict) else None,
+                            folder_paths=folder_paths, node_classes=node_classes())
+        except G.Missing as e:
+            return web.json_response({"error": str(e), "missing": e.missing}, status=409)
+        except (MT.MatteError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    async def matte_place_route(request):
+        """POST {run, images {frame: {filename, subfolder, type}}} -> the matte sequence {pattern, frames, ...}."""
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        run = str(body.get("run") or "")
+        images = body.get("images") if isinstance(body.get("images"), dict) else {}
+        try:
+            rec = MT.run_record(run)
+        except MT.MatteError as e:
+            return err(e)
+        if not path_access.is_allowed(rec["folder"]):
+            return err(path_access.refusal(rec["folder"]), 403)
+        found = {}
+        for f, img in images.items():
+            q = output_ref(img)
+            if q and os.path.isfile(q) and path_access.may_serve(q):
+                try:
+                    found[int(f)] = q
+                except ValueError:
+                    continue
+        if not found:
+            return err("the workflow's pictures were not found", 404)
+        try:
+            res = await off(MT.place_batch, run, found)
+        except (MT.MatteError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    async def matte_sample_route(request):
+        """POST {matte, points {frame: [[id, x, y], ...]}} -> {votes {id: [on, seen]}}."""
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        m = MM.clean_matte(body.get("matte"))
+        if not m:
+            return err("'matte' is not a matte")
+        first = os.path.abspath(MM.matte_path(m["pattern"], m["frames"][0]))
+        if not path_access.may_serve(first):
+            return err("not allowed", 403)
+        try:
+            votes = await off(MT.sample, m, body.get("points") if isinstance(body.get("points"), dict) else {})
+        except (MT.MatteError, ValueError, OSError) as e:
+            return err(e)
+        return web.json_response({"votes": votes})
+
     for prefix in ("/imageviewer", "/api/imageviewer"):
+        add("POST", f"{prefix}/mm_matte_workflows", matte_workflows_route)
+        add("POST", f"{prefix}/mm_matte", matte_route)
+        add("POST", f"{prefix}/mm_matte_place", matte_place_route)
+        add("POST", f"{prefix}/mm_matte_sample", matte_sample_route)
         add("GET", f"{prefix}/mm_plate", plate_route)
         add("GET", f"{prefix}/mm_frame", frame_route)
         add("GET", f"{prefix}/mm_job", job_route)

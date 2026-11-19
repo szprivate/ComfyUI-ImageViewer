@@ -15,7 +15,7 @@ export const MATCHMOVE_AGENT_ACTIONS = [
     "matchmove_info", "matchmove_open", "matchmove_camera", "matchmove_lens", "matchmove_lens_export",
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
-    "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save",
+    "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
 ];
 
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
@@ -469,6 +469,49 @@ export const PrevizAgentMatchmoveMixin = {
         this.matchmoveGeometry(kind);
         const item = scene.items.length > n ? scene.items[scene.items.length - 1] : null;
         return { item: item ? { id: item.id, name: item.name } : null };
+    },
+
+    /**
+     * {how: auto (every solved point) | points (track ids in `points`) | ai (SAM 3 looks for `prompt`, "ground" by
+     * default), tolerance? (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
+     */
+    async _asa_matchmove_ground(scene, a) {
+        const st = await this._amm();
+        if (!st.mm.solve) throw new Error("solve the camera first");
+        if (!st.mm.scene || !st.mm.scene.group) throw new Error("build it in the scene first (matchmove_build)");
+        const how = String(a.how || "auto");
+        const tol = isNum(a.tolerance) ? Number(a.tolerance) : undefined;
+        let g;
+        if (how === "ai") g = await this.matchmoveGroundAI(a.prompt || "ground", { ask: false });
+        else if (how === "points") {
+            const ids = this._ammTrackIds(st, a.points || []);
+            if (ids.length < 3) throw new Error("points takes three or more track ids");
+            g = this.matchmoveGroundFind({ ids, how: "region", tol });
+        } else if (how === "auto") g = this.matchmoveGroundFind({ tol });
+        else throw new Error("how is auto, points or ai");
+        if (!g) throw new Error("not run (stopped, or the model files are not here)");
+        if (g.error) throw new Error(g.error);
+        if (a.flip) this.matchmoveGroundFlip();
+        if (isNum(a.lift) && Number(a.lift)) { st.liftStep = Math.abs(Number(a.lift)); this.matchmoveGroundLift(Math.sign(Number(a.lift))); }
+        return this._ammAnswer(st, { ground: { points: g.count, of: (st.groundInfo || {}).of, tilt: round(g.tilt, 2), below: g.below, ids: g.ids.slice(0, 50) },
+                                     orient: st.mm.orient });
+    },
+
+    /**
+     * {engine: objects (SAM 3, `prompt` = what to find) | background (a background remover: the subject), step?
+     * (every Nth frame, 1), from?, to?, object? (an object's id: its mask), workflow?}: a mask over the whole shot
+     * from an AI model, one ComfyUI job. Track again after it.
+     */
+    async _asa_matchmove_ai_mask(scene, a) {
+        const st = await this._amm();
+        const engine = a.engine === "background" ? "background" : "objects";
+        if (engine === "objects" && !String(a.prompt || "").trim()) throw new Error("say what to mask in prompt (person, car, water ...)");
+        const id = await this.matchmoveAiMask({ engine, prompt: a.prompt || "", step: isNum(a.step) ? Number(a.step) : 1,
+                                                from: isNum(a.from) ? Number(a.from) : 0, to: isNum(a.to) ? Number(a.to) : null,
+                                                mode: a.object ? "object" : "exclude", object: String(a.object || ""), workflow: a.workflow || null, ask: false });
+        if (!id) throw new Error("not run (stopped, or the model files are not here: download them in the guide)");
+        const m = st.mm.masks.find((q) => q.id === id);
+        return this._ammAnswer(st, { mask: { id, name: m.name, frames: m.matte.frames.length } });
     },
 
     async _asa_matchmove_save() {
