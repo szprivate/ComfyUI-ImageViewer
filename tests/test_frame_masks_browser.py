@@ -342,6 +342,43 @@ class FrameMaskBrowserTests(unittest.TestCase):
         self.shot(pg, "6-camera-lens.png")
         self.assertEqual(self.errors, [])
 
+    def test_the_channel_box_sections_fold_and_are_named_by_what_the_item_is(self):
+        """Sebastian 2026-11-20: Transform and the object's properties as sections that fold, named better than
+        "shape" ("Camera Properties")."""
+        pg = self.page()
+        pg.evaluate("""async () => { const P = window.__panel;
+            try { localStorage.removeItem('imageviewer.viewer.channelBoxFolds'); } catch (_) {}
+            await P.spaceOpen('3d');
+            await P.previzAddPrimitive('box');
+            P.previzAddCamera(); }""")
+        pg.wait_for_timeout(300)
+        q = """() => [...window.__panel._cbUI.root.querySelectorAll('.cb-group')].map((g) => ({
+            key: g.dataset.group, title: g.querySelector('.cb-group-title').textContent,
+            folded: g.classList.contains('folded'), rows: g.querySelectorAll('.cb-group-body .cb-row').length,
+            shown: g.querySelector('.cb-group-body').offsetHeight > 0 }))"""
+        groups = pg.evaluate(q)
+        self.assertEqual([g["key"] for g in groups][:2], ["transform", "object"], groups)
+        self.assertEqual(groups[0]["title"], "Transform")
+        self.assertEqual(groups[1]["title"], "Camera Properties")
+        self.assertNotIn("Shape", pg.evaluate("() => window.__panel._cbUI.root.textContent.replace(/Blendshapes/g, '')"))
+        self.assertTrue(all(g["shown"] and not g["folded"] for g in groups))
+        # A click folds Transform; it stays folded for the next item and after a redraw.
+        pg.locator(".cb-group[data-group='transform'] .cb-group-head").click()
+        pg.wait_for_timeout(100)
+        groups = pg.evaluate(q)
+        self.assertTrue(groups[0]["folded"]); self.assertFalse(groups[0]["shown"]); self.assertTrue(groups[1]["shown"])
+        self.shot(pg, "7-channel-box-sections.png")
+        box = pg.evaluate("""() => { const P = window.__panel, b = P.previzScene().items.find((i) => i.kind === 'primitive');
+            P.previzSelect(b.id); return b.id; }""")
+        pg.wait_for_timeout(200)
+        groups = pg.evaluate(q)
+        self.assertEqual(groups[1]["title"], "Box Properties")
+        self.assertTrue(groups[0]["folded"])
+        pg.locator(".cb-group[data-group='transform'] .cb-group-head").click()
+        pg.wait_for_timeout(100)
+        self.assertFalse(pg.evaluate(q)[0]["folded"])
+        self.assertEqual(self.errors, [])
+
     def test_a_cuts_tab_in_the_edit_space_is_masked_too(self):
         import sys
         sys.path.insert(0, os.path.dirname(__file__))
