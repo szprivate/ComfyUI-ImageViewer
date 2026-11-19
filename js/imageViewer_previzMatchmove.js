@@ -17,6 +17,7 @@ import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
 import * as D from "./imageViewer_matchmoveData.js";
 import { openFilePicker, notice, canvasContext } from "./imageViewer_exportUI.js";
+import { openLensChart } from "./imageViewer_lensChart.js";
 
 const PLATE_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx"];
 const PICT_EXTS = [".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".mp4", ".mov"];
@@ -28,7 +29,7 @@ const MAX_POINTS = 400;
 const PLATE_SIZE = 1920;        // the longest side of the plate's pictures on the image plane         // locators made of the solved points (the best by error)
 
 const TOOLS = [
-    ["select", "Select", "Click a track to pick it (Shift adds), drag round several, drag a picked one to move its key here"],
+    ["select", "Select", "Click a track to pick it (Shift adds), drag a box or a lasso round several (Shift adds, Ctrl takes away), drag a picked one to move its key here"],
     ["add", "Add track", "Click a feature: a track is made there and followed through the shot"],
     ["mask", "Mask", "Click the corners of a mask, Enter or a double-click to close it; drag a corner to key it here"],
     ["lines", "Lines", "Click along something straight in the world (3 or more points), Enter to end the line"],
@@ -275,6 +276,8 @@ export const PrevizMatchmoveMixin = {
             const c = d.camera || {};
             if (c.focal_mm) { mm.camera.focalMm = c.focal_mm; mm.camera.focalKnown = true; }
             if (c.sensor_mm) mm.camera.sensor = c.sensor_mm.slice(0, 2);
+            mm.camera.pixelAspect = Number(c.pixel_aspect) > 0 ? Number(c.pixel_aspect) : 1;
+            mm.camera.preset = "";
             mm.camera.model = [c.make, c.model].filter(Boolean).join(" ");
             mm.camera.lens = c.lens || "";
             st.facts = c;
@@ -469,19 +472,29 @@ export const PrevizMatchmoveMixin = {
         for (const n of f.notes || []) facts.append(el(ctx.doc, "div", "mm-note", n));
         ctx.box.append(facts);
         const cam = mm.camera;
-        this._mmRow(ctx, "Focal length", this._mmNum(ctx, cam.focalMm, (v) => this._mmEdit("focal length", (m) => { m.camera.focalMm = v; m.camera.focalKnown = !!v; })),
+        const presets = [["", "Pick a camera… (or type below)"], ...D.CAMERA_PRESETS.map((q) => [q.id, q.name])];
+        const pick = this._mmSelect(ctx, presets, cam.preset || "", (v) => v && this._mmEdit("camera preset", (m) => D.applyCameraPreset(m, v)));
+        pick.classList.add("mm-camera-preset");
+        pick.title = "Sets the sensor (and a phone's lens as its 35 mm equivalent) and the pixel aspect";
+        pick.style.minWidth = "0";
+        pick.style.flex = "1 1 auto";
+        this._mmRow(ctx, "Camera", pick);
+        this._mmRow(ctx, "Focal length", this._mmNum(ctx, cam.focalMm, (v) => this._mmEdit("focal length", (m) => { m.camera.focalMm = v; m.camera.focalKnown = !!v; m.camera.preset = ""; })),
                     el(ctx.doc, "span", "", "mm"));
-        this._mmRow(ctx, "Sensor (recorded)", this._mmNum(ctx, cam.sensor[0], (v) => v && this._mmEdit("sensor", (m) => { m.camera.sensor[0] = v; })),
+        this._mmRow(ctx, "Sensor (recorded)", this._mmNum(ctx, cam.sensor[0], (v) => v && this._mmEdit("sensor", (m) => { m.camera.sensor[0] = v; m.camera.preset = ""; })),
                     el(ctx.doc, "span", "", "×"),
-                    this._mmNum(ctx, cam.sensor[1], (v) => v && this._mmEdit("sensor", (m) => { m.camera.sensor[1] = v; })),
+                    this._mmNum(ctx, cam.sensor[1], (v) => v && this._mmEdit("sensor", (m) => { m.camera.sensor[1] = v; m.camera.preset = ""; })),
                     el(ctx.doc, "span", "", "mm"));
+        const pa = this._mmNum(ctx, D.pixelAspect(mm), (v) => this._mmEdit("pixel aspect", (m) => { m.camera.pixelAspect = v >= 0.2 && v <= 5 ? v : 1; }), { step: 0.01, width: "60px" });
+        pa.classList.add("mm-pixel-aspect");
+        this._mmRow(ctx, "Pixel aspect", pa, el(ctx.doc, "span", "mm-note", "1 = square; 2 = a 2× anamorphic squeeze"));
         const known = el(ctx.doc, "input");
         known.type = "checkbox";
         known.checked = !!(cam.focalKnown && cam.focalMm);
         known.disabled = !cam.focalMm;
         known.onchange = () => this._mmEdit("focal known", (m) => { m.camera.focalKnown = known.checked; });
         const lab = el(ctx.doc, "label", "", "");
-        lab.append(known, ctx.doc.createTextNode(" Trust this focal length in the solve"));
+        lab.append(known, ctx.doc.createTextNode(" Start the solve from this focal length"));
         lab.style.minWidth = "0";
         this._mmRow(ctx, "", lab);
         const fpx = D.focalPx(mm);
@@ -516,6 +529,8 @@ export const PrevizMatchmoveMixin = {
                                                      })));
         if (L.source === "grid") {
             this._mmNote(ctx, "A checkerboard or a grid of lines, shot with this lens at this focus, filling the frame. Several frames (the chart in different places) are better than one.");
+            this._mmRow(ctx, "No chart?", this._mmBtn(ctx, "Show a chart to film…", () => this.matchmoveLensChart(),
+                                                       { title: "A checkerboard full screen on this monitor (or a tablet's): film it with the shot's lens, then choose that film here" }));
             const g = L.grid || {};
             this._mmRow(ctx, "Grid plate", el(ctx.doc, "span", "mm-note", g.path ? g.path.split(/[\\/]/).pop() : "none yet"),
                         this._mmBtn(ctx, "Choose…", () => this._mmPickGrid(st)),
@@ -842,8 +857,9 @@ export const PrevizMatchmoveMixin = {
         const s = mm.settings;
         this._mmRow(ctx, "Camera", this._mmSelect(ctx, [["auto", "Find out"], ["free", "Moves freely"], ["tripod", "Only turns (tripod)"]], s.mode,
                                                   (v) => this._mmEdit("solve mode", (m) => { m.settings.mode = v; })));
-        this._mmRow(ctx, "Focal length", this._mmSelect(ctx, [["auto", mm.camera.focalKnown ? "Trust the plate's" : "Find it"], ["on", "Refine it"], ["off", "Keep it fixed"]], s.refine,
+        this._mmRow(ctx, "Focal length", this._mmSelect(ctx, [["auto", mm.camera.focalKnown ? "Start from the camera's, refine it" : "Find it"], ["on", "Refine it"], ["off", "Keep it fixed"]], s.refine,
                                                         (v) => this._mmEdit("refine", (m) => { m.settings.refine = v; })));
+        this._mmMeasurements(ctx);
         this._mmRow(ctx, "", this._mmBtn(ctx, mm.solve ? "Solve again" : "Solve the camera", () => this.matchmoveSolve(), { primary: true, disabled: mm.tracks.length < 8 }));
         if (mm.tracks.length < 8) this._mmNote(ctx, "Track the plate first: a solve needs 8 or more tracks on every frame.", "warn");
         const sv = mm.solve;
@@ -855,6 +871,12 @@ export const PrevizMatchmoveMixin = {
                      el(ctx.doc, "div", "", `${Object.keys(sv.frames).length} frames solved · ${sv.mode === "tripod" ? "a tripod (turns only)" : "a moving camera"}`),
                      el(ctx.doc, "div", "", `Focal length ${Number(sv.focal_px).toFixed(1)} px${D.focalMmOf(sv.focal_px, mm) ? ` = ${D.focalMmOf(sv.focal_px, mm).toFixed(2)} mm` : ""} · vertical ${Number(sv.fov_v).toFixed(2)}°`),
                      el(ctx.doc, "div", "", `${(sv.points || []).length} points in 3D`));
+        if (sv.units === "m") facts.append(el(ctx.doc, "div", "mm-good", "1 unit = 1 metre, from the distances measured"));
+        const fc = sv.focal_check;
+        if (fc && (fc.weak || fc.better)) facts.append(el(ctx.doc, "div", "mm-note warn mm-proportions",
+            fc.better ? `Proportions: a focal length 10 % ${fc.better === "short" ? "shorter" : "longer"} fits better - the depth is likely squashed or stretched.`
+                      : "Proportions: the shot does not pin its focal length down, so the depth may be squashed or stretched. Measure two distances or a right angle."));
+        else if (fc) facts.append(el(ctx.doc, "div", "mm-good mm-proportions", "Proportions: the focal length is pinned down by the shot."));
         for (const n of sv.notes || []) facts.append(el(ctx.doc, "div", "mm-note", n));
         ctx.box.append(facts);
         const n = mm.plate.frames;
@@ -882,10 +904,59 @@ export const PrevizMatchmoveMixin = {
             ctx.box.append(list);
         }
         const share = st.worstShare || 10;
-        this._mmRow(ctx, "Clean up", this._mmBtn(ctx, "Delete the worst", () => this._mmEdit("delete worst", (m) => D.removeTracks(m, D.worstTracks(m.solve, { share: share / 100 })))),
+        this._mmRow(ctx, "Clean up", this._mmBtn(ctx, "Delete the worst", () => this._mmEdit("delete worst", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { share: share / 100 }))))),
                     this._mmNum(ctx, share, (v) => { st.worstShare = Math.max(1, Math.min(50, v || 10)); }, { step: 1, width: "44px" }), el(ctx.doc, "span", "", "%"),
-                    this._mmBtn(ctx, "over 1 px", () => this._mmEdit("delete over 1 px", (m) => D.removeTracks(m, D.worstTracks(m.solve, { px: 1 })))));
+                    this._mmBtn(ctx, "over 1 px", () => this._mmEdit("delete over 1 px", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { px: 1 }))))));
         this._mmRow(ctx, "", this._mmBtn(ctx, "Into the scene ›", () => { mm.step = "scene"; this._mmRender(); }));
+    },
+
+    /** The Measurements section of the Solve step: real distances and shapes from the tracks picked. */
+    _mmMeasurements(ctx) {
+        const { mm, st } = ctx;
+        const box = el(ctx.doc, "div", "mm-facts mm-measure");
+        box.append(el(ctx.doc, "div", "", "Measurements"),
+                   el(ctx.doc, "div", "mm-note", "Pick tracks in the Plate panel (click, Shift+click, a box or the lasso), then say what they are. They keep the solve's proportions true: two distances in different directions, or a right angle, cure a squashed solve."));
+        const picked = [...st.sel];
+        const row = el(ctx.doc, "div", "mm-row");
+        const dist = this._mmNum(ctx, st.measureMetres ?? null, (v) => { st.measureMetres = v; }, { step: 0.01, width: "60px" });
+        dist.classList.add("mm-measure-metres");
+        const add = (kind) => {
+            const ids = [...st.sel];
+            let err = null;
+            this._mmEdit("measurement", (m) => { const r = D.addConstraint(m, kind, ids, st.measureMetres); if (r.error) err = r.error; });
+            if (err) notice("warn", "Measurement", err);
+        };
+        const b = (kind, label) => {
+            const k = D.CONSTRAINT_KINDS[kind];
+            const btn = this._mmBtn(ctx, label, () => add(kind), { title: k.help, disabled: picked.length < k.picks[0] || picked.length > k.picks[1] });
+            btn.dataset.measure = kind;
+            return btn;
+        };
+        row.append(b("distance", "Distance"), dist, el(ctx.doc, "span", "", "m"));
+        const row2 = el(ctx.doc, "div", "mm-row");
+        row2.append(b("plane", "On a plane"), b("line", "On a line"), b("right", "Right angle"));
+        box.append(row, row2, el(ctx.doc, "div", "mm-note", `${picked.length} track(s) picked${picked.length === 3 ? " (a right angle: end, corner, end - in the order picked)" : ""}`));
+        const list = el(ctx.doc, "div", "mm-list");
+        for (const c of mm.constraints || []) {
+            const r = D.constraintResult(mm.solve, c.id);
+            const li = el(ctx.doc, "div", "mm-li mm-constraint", "");
+            li.dataset.kind = c.kind;
+            const on = el(ctx.doc, "input");
+            on.type = "checkbox";
+            on.checked = c.on !== false;
+            on.title = "Used in the solve";
+            on.onclick = (e) => e.stopPropagation();
+            on.onchange = () => this._mmEdit("measurement on / off", (m) => { m.constraints.find((q) => q.id === c.id).on = on.checked; });
+            const label = `${D.CONSTRAINT_KINDS[c.kind].name}${c.kind === "distance" ? ` ${Number(c.value.toFixed(3))} m` : ""} · ${c.ids.length > 4 ? `${c.ids.slice(0, 3).join(", ")} +${c.ids.length - 3}` : c.ids.join(", ")}`;
+            li.append(on, el(ctx.doc, "span", "grow", label));
+            if (r) li.append(el(ctx.doc, "span", r.ok ? "mm-good" : "mm-note warn", r.text));
+            const del = this._mmBtn(ctx, "×", () => this._mmEdit("measurement removed", (m) => { m.constraints = m.constraints.filter((q) => q.id !== c.id); }), { title: "Remove this measurement" });
+            li.append(del);
+            li.onclick = () => { st.sel = new Set(c.ids); this._mmRender(); this._mmDraw(); };
+            list.append(li);
+        }
+        if ((mm.constraints || []).length) box.append(list);
+        ctx.box.append(box);
     },
 
     _mmFocalFor(mm) {
@@ -898,10 +969,13 @@ export const PrevizMatchmoveMixin = {
         const mm = st.mm;
         const p = mm.plate;
         const fpx = this._mmFocalFor(mm) || (mm.settings.refine === "off" && st.lensFocal) || null;
-        const refine = mm.settings.refine === "on" ? true : mm.settings.refine === "off" ? false : null;
+        // "auto": find it when not known, else start from the camera's and refine it - a camera's metadata (a
+        // phone's above all: stabilisation crops) is near, and a focal length held a little off squashes the depth
+        const refine = mm.settings.refine === "on" ? true : mm.settings.refine === "off" ? false : fpx ? true : null;
         const d = await this._mmJob(st, "Solving", this._mmPost("/imageviewer/mm_solve", {
             width: p.width, height: p.height, tracks: mm.tracks.filter((t) => t.on), lens: this._mmLens(mm), focal_px: fpx || undefined,
-            mode: mm.settings.mode, refine,
+            mode: mm.settings.mode, refine, pixel_aspect: D.pixelAspect(mm),
+            constraints: (mm.constraints || []).filter((c) => c.on !== false),
         }));
         const res = d.result || {};
         if (d.state === "error" || res.error) throw new Error(res.error || d.error || "the solve failed");
@@ -1048,7 +1122,9 @@ export const PrevizMatchmoveMixin = {
         Object.assign(group, D.orientToItem(mm.orient));
         group.matchmove = true;
         const fovv = D.fovV(sv.focal_px, p.height);
-        const cam = S.makeCameraItem(S.uniqueName(scene, "Matchmove camera"), { fov: fovv, resolution: [p.width, p.height] });
+        const pxa = Number(sv.pixel_aspect) > 0 ? Number(sv.pixel_aspect) : 1;
+        // the gate in square pixels: a 2x squeezed plate is twice as wide on screen
+        const cam = S.makeCameraItem(S.uniqueName(scene, "Matchmove camera"), { fov: fovv, resolution: [Math.round(p.width * pxa), p.height] });
         cam.parent = group.id;
         const frames = Object.keys(sv.frames).map(Number).sort((a, b) => a - b);
         let prev = null;
@@ -1070,7 +1146,8 @@ export const PrevizMatchmoveMixin = {
             plateItem = S.makeImagePlaneItem({ path: p.path, name: p.name || "Plate", kind: "plate",
                                                ...(lens.k1 || lens.k2 ? { lens } : {}) }, "Plate");
             delete plateItem.offset;
-            Object.assign(plateItem, D.backplatePlace(fovv, BACKPLATE_DISTANCE));
+            Object.assign(plateItem, D.backplatePlace(fovv, D.backplateDistance(sv, BACKPLATE_DISTANCE)));
+            if (pxa !== 1) plateItem.scale = [plateItem.scale[0] * pxa, plateItem.scale[1], plateItem.scale[2]];
             plateItem.parent = cam.id;
             items.push(plateItem);
         }
@@ -1187,7 +1264,14 @@ export const PrevizMatchmoveMixin = {
             { label: "Solve the camera", disabled: !(mm && mm.tracks.length >= 8), run: () => this.matchmoveSolve().catch((e) => notice("error", "Solve", e.message)) },
             { label: "Build in the scene", disabled: !(mm && mm.solve), run: () => this.matchmoveBuild().catch((e) => notice("error", "Build", e.message)) },
             { label: "Lens into Comp", disabled: !(mm && mm.plate), run: () => this.matchmoveLensToComp("undistort").catch((e) => notice("error", "Comp", e.message)) },
+            { label: "Lens chart, full screen…", title: "A checkerboard to film with the shot's lens; the lens step reads that film", run: () => this.matchmoveLensChart() },
         ];
+    },
+
+    /** The lens chart full screen in the viewer's window (the pop-out's when popped out). */
+    matchmoveLensChart() {
+        const doc = (this._viewerWindow ? this._viewerWindow() : window).document;
+        return openLensChart(doc);
     },
 
     // ── the Plate panel ──────────────────────────────────────────────────────
@@ -1234,6 +1318,10 @@ export const PrevizMatchmoveMixin = {
                 toggles[id] = b;
                 bar.append(b);
             }
+            const shape = el(doc, "button", "mm-btn mm-select-shape", "Box");
+            shape.title = "How a drag with Select picks tracks: a box, or a lasso drawn round them (Shift adds, Ctrl takes away)";
+            shape.onclick = () => { const s2 = this._mmCur(); s2.selectShape = s2.selectShape === "lasso" ? "box" : "lasso"; if (s2.tool !== "select") this.matchmoveTool("select"); this._mmPlateEnsure(); };
+            bar.append(shape);
             const fit = el(doc, "button", "mm-btn", "Fit");
             fit.title = "The whole plate in view (F)";
             fit.onclick = () => { this._mmCur().view = null; this._mmDraw(); };
@@ -1246,11 +1334,13 @@ export const PrevizMatchmoveMixin = {
             stage.append(canvas, empty);
             root.append(bar, stage);
             host.append(root);
-            ui = this._mmUI = { root, bar, tools, toggles, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
+            ui = this._mmUI = { root, bar, tools, toggles, shape, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
             this._mmWirePlate(ui);
         }
         for (const [id, b] of Object.entries(ui.tools)) b.classList.toggle("on", st.tool === id);
         for (const [id, b] of Object.entries(ui.toggles)) b.classList.toggle("on", !!st.show[id]);
+        ui.shape.textContent = st.selectShape === "lasso" ? "Lasso" : "Box";
+        ui.shape.classList.toggle("on", st.selectShape === "lasso");
         this._mmLoop();
         return ui;
     },
@@ -1437,6 +1527,36 @@ export const PrevizMatchmoveMixin = {
                 }
             }
         }
+        // measurements: their tracks joined on this frame (green: holds after the solve, orange: not yet / off)
+        for (const c of mm.constraints || []) {
+            const at = c.ids.map((id) => { const t = mm.tracks.find((q) => q.id === id); const k = t && D.keyAt(t, f); return k ? this._mmToScreen(st, k[1], k[2]) : null; });
+            if (at.filter(Boolean).length < 2) continue;
+            const r = D.constraintResult(mm.solve, c.id);
+            g.strokeStyle = c.on === false ? "rgba(150,150,150,0.6)" : r && r.ok ? "rgba(90,220,120,0.85)" : "rgba(255,170,60,0.85)";
+            g.lineWidth = 1.5;
+            g.setLineDash(c.kind === "distance" ? [] : [5, 3]);
+            g.beginPath();
+            let started = false;
+            for (const q of at) { if (!q) continue; if (started) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); started = true; } }
+            if (c.kind === "plane" && at.filter(Boolean).length >= 3) g.closePath();
+            g.stroke();
+            g.setLineDash([]);
+            if (c.kind === "distance" && at[0] && at[1]) {
+                g.fillStyle = g.strokeStyle;
+                g.font = "11px sans-serif";
+                g.fillText(`${Number(c.value.toFixed(3))} m`, (at[0][0] + at[1][0]) / 2 + 4, (at[0][1] + at[1][1]) / 2 - 4);
+            }
+        }
+        if (st.lasso && st.lasso.length > 1) {
+            g.strokeStyle = "#fff";
+            g.setLineDash([4, 3]);
+            g.beginPath();
+            g.moveTo(st.lasso[0][0], st.lasso[0][1]);
+            for (const [x, y] of st.lasso.slice(1)) g.lineTo(x, y);
+            g.closePath();
+            g.stroke();
+            g.setLineDash([]);
+        }
         if (st.box) {
             g.strokeStyle = "#fff";
             g.setLineDash([4, 3]);
@@ -1530,16 +1650,34 @@ export const PrevizMatchmoveMixin = {
                         };
                         up = () => { if (!first) this._mmChanged(st); else { this._mmRender(); this._mmDraw(); } };
                     } else {
-                        if (!e.shiftKey && !e.ctrlKey) st.sel.clear();
-                        st.box = [sx, sy, sx, sy];
-                        move = (ev) => { const [x, y] = pos(ev); st.box[2] = x; st.box[3] = y; this._mmDraw(); };
-                        up = () => {
-                            const [x0, y0] = this._mmToPlate(st, st.box[0], st.box[1]);
-                            const [x1, y1] = this._mmToPlate(st, st.box[2], st.box[3]);
-                            for (const id of D.tracksInRect(st.mm, f, x0, y0, x1, y1)) st.sel.add(id);
-                            st.box = null;
-                            this._mmRender(); this._mmDraw();
-                        };
+                        // a box, or a lasso (the bar's Box / Lasso switch): plain replaces, Shift adds, Ctrl takes away
+                        const remove = e.ctrlKey || e.metaKey;
+                        if (!e.shiftKey && !remove) st.sel.clear();
+                        const take = (ids) => { for (const id of ids) if (remove) st.sel.delete(id); else st.sel.add(id); };
+                        if (st.selectShape === "lasso") {
+                            st.lasso = [[sx, sy]];
+                            move = (ev) => {
+                                const [x, y] = pos(ev);
+                                const l = st.lasso[st.lasso.length - 1];
+                                if (Math.hypot(x - l[0], y - l[1]) >= 3) { st.lasso.push([x, y]); this._mmDraw(); }
+                            };
+                            up = () => {
+                                const poly = st.lasso.map(([x, y]) => this._mmToPlate(st, x, y));
+                                st.lasso = null;
+                                if (poly.length >= 3) take(D.tracksInPolygon(st.mm, f, poly));
+                                this._mmRender(); this._mmDraw();
+                            };
+                        } else {
+                            st.box = [sx, sy, sx, sy];
+                            move = (ev) => { const [x, y] = pos(ev); st.box[2] = x; st.box[3] = y; this._mmDraw(); };
+                            up = () => {
+                                const [x0, y0] = this._mmToPlate(st, st.box[0], st.box[1]);
+                                const [x1, y1] = this._mmToPlate(st, st.box[2], st.box[3]);
+                                take(D.tracksInRect(st.mm, f, x0, y0, x1, y1));
+                                st.box = null;
+                                this._mmRender(); this._mmDraw();
+                            };
+                        }
                     }
                     this._mmDraw();
                 }

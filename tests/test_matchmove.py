@@ -270,6 +270,149 @@ class Facts(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _true_points(seed=1):
+    """scene()'s 300 points, as it draws them."""
+    rng = np.random.default_rng(seed)
+    return np.c_[rng.uniform(-8, 8, 300), rng.uniform(-4, 4, 300), rng.uniform(8, 30, 300)]
+
+
+class Measurements(unittest.TestCase):
+    """Real distances and shapes kept by the solve (matchmove_solve.clean_constraints / _constrain), the focal
+    check that warns of a squashed solve, a pixel aspect, a phone's 35 mm equivalent."""
+
+    def test_distances_put_the_solve_in_metres_with_its_proportions(self):
+        tracks, _ = scene(n_frames=30)
+        X = _true_points()
+        ids = [t["id"] for t in tracks]
+        P = lambda i: X[int(i[1:])]  # noqa: E731
+        a, b, c, d = ids[0], ids[5], ids[10], ids[20]
+        cons = [{"id": "c1", "kind": "distance", "ids": [a, b], "value": float(np.linalg.norm(P(a) - P(b)))},
+                {"id": "c2", "kind": "distance", "ids": [c, d], "value": float(np.linalg.norm(P(c) - P(d)))}]
+        # held 20 % short and refined from there, as a phone's metadata may be
+        r = S.solve(tracks, W, H, focal_px=F * 0.8, refine_focal=True, constraints=cons)
+        self.assertEqual(r["units"], "m")
+        self.assertAlmostEqual(r["focal_px"], F, delta=F * 0.02)
+        self.assertTrue(all(q["ok"] for q in r["constraints"]), r["constraints"])
+        pts = {q["id"]: np.asarray(q["X"]) for q in r["points"]}
+        # a distance nobody measured comes out right too: 1 unit = 1 m
+        for e, f in ((ids[30], ids[40]), (ids[50], ids[60])):
+            if e in pts and f in pts:
+                self.assertAlmostEqual(np.linalg.norm(pts[e] - pts[f]) / np.linalg.norm(P(e) - P(f)), 1.0, delta=0.02)
+        self.assertTrue(any("moved the focal length" in n for n in r["notes"]), r["notes"])
+
+    def test_a_focal_length_held_wrong_is_said_to_squash_the_depth(self):
+        tracks, _ = scene(n_frames=30)
+        r = S.solve(tracks, W, H, focal_px=F * 0.8, refine_focal=False)
+        self.assertEqual(r["focal_check"]["better"], "long", r["focal_check"])
+        self.assertTrue(any("squashed" in n for n in r["notes"]), r["notes"])
+        ok = S.solve(tracks, W, H, focal_px=F, refine_focal=False)
+        self.assertIsNone(ok["focal_check"]["better"], ok["focal_check"])
+        self.assertFalse(ok["focal_check"]["weak"], ok["focal_check"])
+
+    def test_shapes_pull_points_into_a_plane_a_line_and_a_right_angle(self):
+        rng = np.random.default_rng(3)
+        P = {f"p{i}": np.array([rng.uniform(-2, 2), rng.normal(0, 0.1), rng.uniform(-2, 2)]) for i in range(8)}
+        P.update({f"l{i}": np.array([i * 1.0, 0.1 * rng.normal(), 0.1 * rng.normal()]) for i in range(5)})
+        P.update({"a": np.array([2.0, 0.3, 0.0]), "b": np.zeros(3), "e": np.array([0.4, 0.1, 2.0])})
+        cons = S.clean_constraints([{"id": "pl", "kind": "plane", "ids": [f"p{i}" for i in range(8)]},
+                                    {"id": "ln", "kind": "line", "ids": [f"l{i}" for i in range(5)]},
+                                    {"id": "ra", "kind": "right", "ids": ["a", "b", "e"]},
+                                    {"kind": "distance", "ids": ["a"], "value": 1},         # dropped: one track
+                                    {"kind": "right", "ids": ["a", "b"]}])                 # dropped: two
+        self.assertEqual([c["kind"] for c in cons], ["plane", "line", "right"])
+        before = {r["id"]: r["ok"] for r in S.constraint_report(cons, P)}
+        self.assertEqual(before, {"pl": False, "ln": False, "ra": False})
+        T = S.constraint_targets(cons, P)
+        after = {r["id"]: r for r in S.constraint_report(cons, {**P, **T})}
+        self.assertTrue(all(r["ok"] for r in after.values()), after)
+        self.assertAlmostEqual(after["ra"]["solved"], 90.0, places=3)
+
+    def test_measured_tracks_that_were_not_solved_are_said(self):
+        rep = S.constraint_report(S.clean_constraints([{"id": "d", "kind": "distance", "ids": ["x", "y"], "value": 2}]), {"x": np.zeros(3)})
+        self.assertFalse(rep[0]["ok"])
+        self.assertIn("not solved", rep[0]["text"])
+
+    def test_a_squeezed_plate_solves_with_its_pixel_aspect(self):
+        pa = 2.0
+        tracks, _ = scene(n_frames=30, f=F)
+        # the same camera seen through a 2x squeeze: every x half as far from the centre
+        sq = []
+        for t in tracks:
+            keys = [[k[0], W / 2 + (k[1] - W / 2) / pa, k[2], k[3]] for k in t["keys"]]
+            sq.append({**t, "keys": keys})
+        r = S.solve(sq, W, H, focal_px=F, refine_focal=True, pixel_aspect=pa)
+        self.assertLess(r["rms"], 0.6)
+        self.assertAlmostEqual(r["focal_px"], F, delta=F * 0.02)
+        self.assertEqual(r["pixel_aspect"], pa)
+        self.assertAlmostEqual(r["center"][0], W / 2, delta=1)
+        bad = S.solve(sq, W, H, focal_px=F, refine_focal=True)
+        self.assertGreater(abs(bad["focal_px"] - F) / F + bad["rms"], 0.1)
+
+    def test_a_phone_says_its_field_of_view_by_its_35mm_equivalent(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            p = os.path.join(tmp, "phone.mov")
+            open(p, "wb").close()
+            with open(os.path.join(tmp, "phone.camera.json"), "w") as fh:
+                fh.write('{"make": "Apple", "model": "iPhone 14", "focal_mm": 5.7, "focal35": 26}')
+            facts = MM.camera_facts(p, None, 1920, 1080)
+            # the 16:9 picture on a full-frame diagonal, not the "iphone" sensor of the list
+            want = 2 * math.degrees(math.atan(math.hypot(36, 24) * 16 / math.hypot(16, 9) / 2 / 26))
+            self.assertAlmostEqual(facts["fov_h"], want, delta=0.05)
+            self.assertIn("35 mm", facts["sources"]["sensor_mm"])
+            self.assertTrue(any("stabilised" in n for n in facts["notes"]), facts["notes"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class LensChart(unittest.TestCase):
+    """The checkerboard the viewer shows full screen (js/imageViewer_lensChart.js), filmed through a lens: the lens
+    step reads it."""
+
+    def layout(self, w, h, cols):
+        import json
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("needs node")
+        url = "file://" + os.path.join(ROOT, "js", "imageViewer_lensChart.js").replace("\\", "/")
+        out = subprocess.run([node, "--input-type=module", "-e",
+                              f"import {{ chartLayout }} from {json.dumps(url)}; console.log(JSON.stringify(chartLayout({w}, {h}, {cols})))"],
+                             capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return json.loads(out.stdout)
+
+    def test_the_chart_on_a_screen_filmed_with_a_lens_is_read(self):
+        sw, sh = 1920, 1080                                   # the monitor the chart is shown on
+        L = self.layout(sw, sh, 12)
+        self.assertGreaterEqual(L["x0"], L["cell"])
+        self.assertGreaterEqual(L["y0"], L["cell"])
+        w, h, f = 1280, 720, 1000.0
+        lens = {"k1": -0.06, "k2": 0.015}
+        # the screen 0.6 m wide, 0.75 m away, turned a little
+        Rb = S.rodrigues(np.array([0.12, -0.18, 0.02]))
+        tb = np.array([0, 0, 0.62])
+        size = 0.6 / sw
+        src = np.array([[0, 0], [sw, 0], [0, sh], [sw, sh]], float)
+        P = np.c_[(src - [sw / 2, sh / 2]) * size, np.zeros(4)] @ Rb.T + tb
+        dst = f * P[:, :2] / P[:, 2:3] + [w / 2, h / 2]
+        Hm = T.fit_homography(dst, src)
+        ys, xs = np.mgrid[0:h, 0:w] + 0.5
+        ux, uy = WP.lens_points(xs, ys, "undistort", lens["k1"], lens["k2"], w / 2, h / 2, math.hypot(w, h) / 2)
+        b = T.apply(Hm, np.c_[ux.ravel(), uy.ravel()])
+        i = np.floor((b[:, 0] - L["x0"]) / L["cell"])
+        j = np.floor((b[:, 1] - L["y0"]) / L["cell"])
+        on_board = (i >= 0) & (i < L["cols"]) & (j >= 0) & (j < L["rows"])
+        on_screen = (b[:, 0] >= 0) & (b[:, 0] < sw) & (b[:, 1] >= 0) & (b[:, 1] < sh)
+        img = np.where(on_screen, 0.9, 0.05)                  # white screen, dark room
+        img = np.where(on_board & ((i + j) % 2 == 0), 0.08, img)
+        g = MM._blur_gauss(img.reshape(h, w).astype(np.float32), 1.0)
+        r = MM.solve_lens_grid([g], w, h)
+        self.assertGreater(r["points"], (L["cols"] - 1) * (L["rows"] - 1) * 0.6)
+        self.assertAlmostEqual(r["k1"], lens["k1"], delta=0.006)
+        self.assertLess(r["error"], 0.5)
+
+
 try:
     from test_edit_takes import _load, web  # noqa: E402
 except Exception:  # noqa: BLE001

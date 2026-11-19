@@ -16,6 +16,7 @@ export const MATCHMOVE_AGENT_ACTIONS = [
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
+    "matchmove_measure",
 ];
 
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
@@ -40,7 +41,13 @@ export function matchmoveSummary(mm, st = {}) {
     const p = mm.plate;
     out.plate = p ? { path: p.path, frames: p.frames, width: p.width, height: p.height, fps: p.fps, kind: p.kind } : null;
     const c = mm.camera;
-    out.camera = { focal_mm: c.focalMm, sensor_mm: c.sensor, focal_known: !!c.focalKnown, model: c.model || "", lens: c.lens || "" };
+    out.camera = { focal_mm: c.focalMm, sensor_mm: c.sensor, focal_known: !!c.focalKnown, model: c.model || "", lens: c.lens || "",
+                   pixel_aspect: D.pixelAspect(mm), preset: c.preset || "" };
+    out.measurements = (mm.constraints || []).map((q) => {
+        const r = D.constraintResult(mm.solve, q.id);
+        return { id: q.id, kind: q.kind, ids: q.ids, ...(q.kind === "distance" ? { metres: q.value } : {}), on: q.on !== false,
+                 ...(r ? { holds: r.ok, result: r.text } : {}) };
+    });
     const L = mm.lens;
     out.lens = { source: L.source, k1: round(L.k1, 6), k2: round(L.k2, 6), center: L.center, fit_error_px: round(L.error),
                  coverage: round(L.coverage, 2), lines: L.lines.length, notes: L.notes || [],
@@ -71,6 +78,8 @@ export function matchmoveSummary(mm, st = {}) {
             frames_over_1px: runsWhere(per, (v) => v > 1).slice(0, 12),
             unsolved_frames: p ? runsWhere(per.map((_, f) => (sv.frames || {})[f]), (v) => !v).slice(0, 12) : [],
             notes: sv.notes || [],
+            units: sv.units || "",
+            ...(sv.focal_check ? { focal_check: sv.focal_check } : {}),
         };
     } else out.solve = null;
     out.built = mm.scene && mm.scene.group ? { group: mm.scene.group, camera: mm.scene.camera, plate: mm.scene.plate || null } : null;
@@ -151,9 +160,15 @@ export const PrevizAgentMatchmoveMixin = {
         return this._ammAnswer(st, { facts: st.facts || null });
     },
 
-    /** {focal_mm, sensor: [w, h] mm, known}: what the camera was; a known focal length is held by the solve unless refined. */
+    /** {preset (an id of CAMERA_PRESETS), focal_mm, sensor: [w, h] mm, known, pixel_aspect}: what the camera was; a known focal length is held by the solve unless refined. */
     async _asa_matchmove_camera(scene, a) {
         const st = await this._amm();
+        if (a.preset !== undefined && a.preset !== "" && !D.CAMERA_PRESETS.some((p) => p.id === a.preset)) {
+            throw new Error(`no camera preset ${a.preset}: ${D.CAMERA_PRESETS.map((p) => p.id).join(", ")}`);
+        }
+        if (a.pixel_aspect !== undefined && !(Number(a.pixel_aspect) >= 0.2 && Number(a.pixel_aspect) <= 5)) throw new Error("pixel_aspect is a pixel's width over its height, 0.2 .. 5");
+        if (a.preset) this._mmEdit("camera preset", (m) => D.applyCameraPreset(m, a.preset));
+        if (a.pixel_aspect !== undefined) this._mmEdit("pixel aspect", (m) => { m.camera.pixelAspect = Number(a.pixel_aspect); });
         if (a.focal_mm !== undefined && a.focal_mm !== null && !(Number(a.focal_mm) > 0)) throw new Error("focal_mm must be over 0 (or null: not known)");
         if (a.sensor !== undefined && !(Array.isArray(a.sensor) && a.sensor.length >= 2 && a.sensor.every((v) => Number(v) > 0))) {
             throw new Error("sensor is [width, height] in mm of the recorded part of the sensor");
@@ -346,7 +361,7 @@ export const PrevizAgentMatchmoveMixin = {
             if (!mm.solve) throw new Error("worst_share and error_over need a solve");
             const share = isNum(a.worst_share) ? Math.max(0, Math.min(0.5, Number(a.worst_share))) : 0;
             const px = isNum(a.error_over) ? Number(a.error_over) : Infinity;
-            for (const id of D.worstTracks(mm.solve, { share, px })) gone.add(id);
+            for (const id of D.withoutMeasured(mm, D.worstTracks(mm.solve, { share, px }))) gone.add(id);
         }
         if (isNum(a.shorter_than)) for (const id of D.shortTracks(mm, Math.round(Number(a.shorter_than)))) gone.add(id);
         if (a.all) for (const t of mm.tracks) gone.add(t.id);
@@ -368,6 +383,33 @@ export const PrevizAgentMatchmoveMixin = {
             }
         });
         return this._ammAnswer(st, { changed: ids.size });
+    },
+
+    // ── measurements ─────────────────────────────────────────────────────────
+
+    /**
+     * {add: {kind: distance | plane | line | right, ids (tracks, a right angle's in order end, corner, end), metres
+     * (a distance)}} | {remove: id} | {clear: true}: real measurements the next solve keeps (distances set the
+     * scale and with two or more the proportions; shapes pull the points into them).
+     */
+    async _asa_matchmove_measure(scene, a) {
+        const st = await this._amm();
+        let added = null;
+        if (a.clear) this._mmEdit("measurements cleared", (m) => { m.constraints = []; });
+        if (a.remove !== undefined) {
+            if (!st.mm.constraints.some((q) => q.id === String(a.remove))) throw new Error(`no measurement ${a.remove}`);
+            this._mmEdit("measurement removed", (m) => { m.constraints = m.constraints.filter((q) => q.id !== String(a.remove)); });
+        }
+        if (a.add) {
+            const ids = this._ammTrackIds(st, a.add.ids || []);
+            let err = null;
+            this._mmEdit("measurement", (m) => {
+                const r = D.addConstraint(m, a.add.kind, ids, a.add.metres ?? a.add.value);
+                if (r.error) err = r.error; else added = r.constraint.id;
+            });
+            if (err) throw new Error(err);
+        }
+        return this._ammAnswer(st, added ? { added } : {});
     },
 
     // ── the solve ────────────────────────────────────────────────────────────

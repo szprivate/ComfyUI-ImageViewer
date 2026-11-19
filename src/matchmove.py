@@ -71,6 +71,8 @@ SENSORS = [
     ("a7", (35.6, 23.8)),
     ("gh5", (17.3, 13.0)),
     ("gh6", (17.3, 13.0)),
+    # phones: the sensor differs per model and lens, so a phone's own 35 mm equivalent focal length is used
+    # before these (camera_facts); this is the main camera of a recent Pro, a last resort
     ("iphone", (9.8, 7.3)),
     ("pixel", (9.8, 7.4)),
     ("dji mini", (9.6, 7.2)),
@@ -200,6 +202,9 @@ def _video_facts(path):
             md = dict(c.metadata or {})
             for s in c.streams.video[:1]:
                 md.update({k: v for k, v in (s.metadata or {}).items() if k not in md})
+                sar = getattr(s, "sample_aspect_ratio", None) or getattr(s.codec_context, "sample_aspect_ratio", None)
+                if sar and float(sar) > 0 and abs(float(sar) - 1) > 1e-3:
+                    out["pixel_aspect"] = round(float(sar), 6)
     except Exception:  # noqa: BLE001
         return out
     for k, v in md.items():
@@ -261,6 +266,23 @@ def camera_facts(path, first_file=None, width=None, height=None):
                 src[k] = name + (f" ({got['_file']})" if "_file" in got else "")
     notes = []
     w, h = width, height
+    a = (w / h) if w and h else 1.5
+
+    def equivalent_frame(crop=1.0):
+        # the picture's own shape on a full-frame diagonal (43.3 mm), smaller by the crop factor
+        sh = FULL_FRAME_DIAGONAL / crop / math.sqrt(1 + a * a)
+        return [round(sh * a, 3), round(sh, 3)]
+
+    if "focal_mm" in facts and "focal35" in facts and "sensor_mm" not in facts and facts["focal_mm"] > 0:
+        # the camera's own 35 mm equivalent says its field of view better than a sensor from a list of models
+        # (a phone's lenses each have a sensor of their own, and video crops it)
+        facts["sensor_mm"] = equivalent_frame(facts["focal35"] / facts["focal_mm"])
+        src["sensor_mm"] = "the 35 mm equivalent focal length"
+    if "focal_mm" not in facts and "focal35" in facts:
+        facts["focal_mm"] = facts["focal35"]
+        facts["sensor_mm"] = equivalent_frame()
+        src["focal_mm"] = src.get("focal35", "")
+        src["sensor_mm"] = "35 mm equivalent (the picture's shape on a full-frame diagonal)"
     if "sensor_mm" not in facts:
         s = sensor_for(facts.get("model"))
         if s:
@@ -268,23 +290,14 @@ def camera_facts(path, first_file=None, width=None, height=None):
             src["sensor_mm"] = f"the {facts['model']}'s published sensor"
     if "sensor_mm" in facts and facts["sensor_mm"] and facts["sensor_mm"][1] is None and w and h:
         facts["sensor_mm"] = [facts["sensor_mm"][0], facts["sensor_mm"][0] * h / w]
-    if "focal_mm" in facts and "focal35" in facts and "sensor_mm" not in facts and w and h:
-        crop = facts["focal35"] / facts["focal_mm"]
-        diag = FULL_FRAME_DIAGONAL / crop
-        a = w / h
-        sh = diag / math.sqrt(1 + a * a)
-        facts["sensor_mm"] = [round(sh * a, 3), round(sh, 3)]
-        src["sensor_mm"] = "the 35 mm equivalent focal length"
-    if "focal_mm" not in facts and "focal35" in facts:
-        facts["focal_mm"] = facts["focal35"]
-        facts["sensor_mm"] = [36.0, 24.0]
-        src["focal_mm"] = src.get("focal35", "")
-        src["sensor_mm"] = "35 mm equivalent (full frame)"
     if facts.get("focal_mm") and facts.get("sensor_mm"):
         # The sensor's width as used by this picture: a picture narrower than the sensor's shape is a crop of
         # its height... the common case is the full width used.
         sw = float(facts["sensor_mm"][0])
         facts["fov_h"] = round(2 * math.degrees(math.atan(sw / 2 / float(facts["focal_mm"]))), 4)
+    if "iphone" in str(facts.get("model") or "").lower() or "apple" in str(facts.get("make") or "").lower():
+        notes.append("A phone's video is stabilised by cropping, so its field of view is a little narrower than its "
+                     "lens says: let the solve refine the focal length.")
     if not facts.get("focal_mm"):
         notes.append("The plate does not say its focal length: give it if you know it, else the solve finds it.")
     elif not facts.get("sensor_mm"):

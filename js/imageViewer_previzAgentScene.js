@@ -38,6 +38,7 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
+    "matchmove_measure",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",

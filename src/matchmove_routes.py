@@ -381,7 +381,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             else:
                 res = MS.solve(spec["tracks"], spec["w"], spec["h"], lens=spec["lens"], focal_px=spec["focal_px"],
                                mode=spec["mode"], refine_focal=spec["refine"], frames=spec["range"],
-                               progress=progress, cancel=lambda: job.get("cancel"))
+                               progress=progress, cancel=lambda: job.get("cancel"),
+                               constraints=spec["constraints"], pixel_aspect=spec["pixel_aspect"])
             job["result"] = res
             job.update(state="stopped" if job.get("cancel") else ("error" if res.get("error") else "done"),
                        error=res.get("error"))
@@ -392,7 +393,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
 
     async def solve_route(request):
         """POST {width, height, tracks, lens?, focal_px?, mode: free | tripod | auto, refine?, range?: [a, b],
-        object?: id, camera?: (the camera solve, for an object), scale?} starts a solve job."""
+        constraints?: [{kind, ids, value?}], pixel_aspect?, object?: id, camera?: (the camera solve, for an
+        object), scale?} starts a solve job."""
         body = await body_of(request)
         try:
             w, h = int(body["width"]), int(body["height"])
@@ -400,8 +402,11 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             rng = body.get("range")
             rng = (int(rng[0]), int(rng[1])) if isinstance(rng, list) and len(rng) == 2 else None
             scale = float(body["scale"]) if body.get("scale") else None
+            pa = float(body["pixel_aspect"]) if body.get("pixel_aspect") else 1.0
         except (KeyError, TypeError, ValueError):
-            return err("width, height, focal_px, range and scale are numbers")
+            return err("width, height, focal_px, range, scale and pixel_aspect are numbers")
+        if not (0.2 <= pa <= 5):
+            return err("pixel_aspect is out of range (0.2 .. 5)")
         if fp is not None and not (1 < fp < 1e6):
             return err("focal_px is out of range")
         tracks = MM.clean_tracks(body.get("tracks"))
@@ -412,7 +417,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         spec = {"w": w, "h": h, "tracks": tracks, "lens": clean_lens(body.get("lens")), "focal_px": fp,
                 "mode": body.get("mode") if body.get("mode") in ("free", "tripod", "auto") else "auto",
                 "refine": None if body.get("refine") is None else bool(body.get("refine")), "range": rng,
-                "object": obj, "camera": cam, "scale": scale}
+                "object": obj, "camera": cam, "scale": scale, "pixel_aspect": pa,
+                "constraints": MS.clean_constraints(body.get("constraints") if isinstance(body.get("constraints"), list) else [])}
         jid, job = new_job("solve", 0)
         threading.Thread(target=run_solve, args=(job, spec), daemon=True, name=f"mm-solve-{jid}").start()
         return web.json_response({"job": jid})
@@ -746,6 +752,13 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             return err(e)
         return web.json_response(res)
 
+    def _aspect(v):
+        try:
+            a = float(v or 1.0)
+        except (TypeError, ValueError):
+            return 1.0
+        return a if 0.2 <= a <= 5 else 1.0
+
     async def depth_place_route(request):
         """POST {run, images {frame: {filename, subfolder, type}}, cams {frame: {R, t}}, tracks {frame: [[u, v, X0,
         X1, X2]]}, focal, center?, lens?} -> the depth job's frames as points of the solve's world
@@ -777,7 +790,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         tracks = {k: v[:5000] for k, v in tracks.items() if isinstance(v, list)}
         try:
             res = await off(MT.depth_points, str(body.get("run") or ""), found, cams, tracks,
-                            focal=focal, center=center, lens=lens)
+                            focal=focal, center=center, lens=lens,
+                            pixel_aspect=_aspect(body.get("pixel_aspect")))
         except (MT.MatteError, ValueError, OSError, TypeError) as e:
             return err(e)
         return web.json_response(res)

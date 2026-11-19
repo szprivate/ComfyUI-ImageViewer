@@ -183,7 +183,7 @@ export const PrevizMatchmoveAIMixin = {
         }
         const got = await this._mmMatteRun(st, { engine: "depth", frames, workflow, what: "Reading depth", ask,
             scale: scale === null ? workScale(st.groundScale) : workScale(scale),
-            place: { url: "/imageviewer/mm_depth_place", body: { cams, tracks, focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null } } });
+            place: { url: "/imageviewer/mm_depth_place", body: { cams, tracks, focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null, pixel_aspect: sv.pixel_aspect || 1 } } });
         if (!got) return null;
         const pts = got.points.map((X, i) => ({ id: `d${i}`, p: D.pointToScene(X) }));
         const g = D.findGround(pts, D.groundCameras(sv), { tol: (st.groundTol || 1.5) / 100, maxTilt: 40 });
