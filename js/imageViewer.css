@@ -2900,6 +2900,18 @@ audio.src-media { width: 90%; }
 .fm-parity.ok { background: #142519; color: #6fd39d; }
 .fm-parity.bad { background: #2a1a12; color: #f0a060; cursor: help; }
 .fm-card-err { color: #e88; font-size: 11px; line-height: 1.4; }
+.fm-card-vol { color: #8fb8e8; font-size: 11px; line-height: 1.4; }
+.fm-card-line { color: #bbb; font-size: 12px; line-height: 1.4; }
+.fm-dim { color: #777; }
+.fm-storage { display: flex; flex-direction: column; gap: 10px; }
+.fm-volume { max-width: 640px; }
+.fm-vol-models summary { cursor: pointer; color: #ccc; font-size: 12px; }
+.fm-vol-model { color: #999; font-size: 11px; font-family: ui-monospace, monospace; padding-left: 12px; overflow-wrap: anywhere; }
+.fm-mkvol { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.fm-select, .fm-num { background: #121215; color: #ddd; border: 1px solid #333; border-radius: 4px; padding: 4px 6px; font: inherit; }
+.fm-num { width: 80px; }
+.fm-voloffer { grid-template-columns: 1.4fr 1fr .8fr .8fr 76px; }
+.fm-badge { margin-left: 6px; padding: 1px 5px; border-radius: 3px; background: #1d3a5c; color: #9cc8f5; font-size: 10px; }
 .fm-acts { display: flex; flex-wrap: wrap; gap: 5px; }
 .fm-empty { color: #888; padding: 30px; text-align: center; }
 .fm-job { padding: 10px; border-radius: 6px; background: #18181c; border: 1px solid #2c2c33; margin-bottom: 8px; display: flex; flex-direction: column; gap: 7px; }

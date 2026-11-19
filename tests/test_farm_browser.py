@@ -78,7 +78,14 @@ STUB = """(pv) => {
        tasks: tasks(8, 8, 0, 0), counts: {done: 8}},
     ],
     settings: {daily_cap_usd: 20, idle_stop_minutes: 10, eu_only: true, max_usd_per_hour: 1.5,
-               image: 'ghcr.io/example/comfy-farm:ws26', disk_gb: 80, gpu: 'RTX 5090', retries: 1},
+               image: 'ghcr.io/example/comfy-farm:ws26', disk_gb: 80, gpu: 'RTX 5090', retries: 1,
+               keep_models: true, volume_gb: 150},
+    volumes: [
+      {id: 'vast:3000', provider: 'vast', provider_id: '3000', name: 'V.3000', size_gb: 150, where: '36683', region: 'Germany, DE',
+       usd_per_month: 22.5, models: ['diffusion_models/moss_image_sft_int8_convrot.safetensors', 'text_encoders/qwen3.5_9b_w4a8_gptq.safetensors',
+       'vae/flux2-vae_small.safetensors'], models_gb: 19.4, models_at: now - 60, machines: ['vast-1'], created: now - 4000},
+      {id: 'runpod:nv1', provider: 'runpod', provider_id: 'nv1', name: 'agentY farm models', size_gb: 200, where: 'EU-RO-1',
+       region: 'EU-RO-1', usd_per_month: 14, models: [], models_gb: 0, models_at: 0, machines: [], created: now - 1000}],
     spend: {today: 3.12, cap: 20, per_hour: 1.81, days: {'2026-11-11': 1.2, '2026-11-12': 4.8, '2026-11-13': 0.9, '2026-11-14': 6.4, '2026-11-15': 3.12}},
     keys: {vast: true, runpod: true}, providers: ['vast', 'runpod', 'url'],
   };
@@ -94,6 +101,10 @@ STUB = """(pv) => {
         {provider: 'vast', offer_id: '12', gpu: 'RTX 5090', vram_gb: 32, usd_per_hour: 0.47, region: 'Germany, DE', reliability: 0.99, down_mbps: 900},
         {provider: 'vast', offer_id: '13', gpu: 'RTX 5090', vram_gb: 32, usd_per_hour: 0.54, region: 'Netherlands, NL', reliability: 0.98, down_mbps: 4500},
         {provider: 'vast', offer_id: '14', gpu: 'RTX 5090', vram_gb: 32, usd_per_hour: 1.92, region: 'Sweden, SE', reliability: 0.999, down_mbps: 8000, too_dear: true}]});
+      if (body.action === 'volume_offers') return ok({ok: true, state: S, offers: [
+        {provider: 'vast', offer_id: '900', machine_id: '36683', region: 'Germany, DE', free_gb: 800, usd_per_gb_month: 0.12},
+        {provider: 'vast', offer_id: '901', machine_id: '41002', region: 'Czechia, CZ', free_gb: 400, usd_per_gb_month: 0.15}]});
+      if (body.action === 'delete_volume') S.volumes = S.volumes.filter((v) => v.id !== body.id);
       if (body.action === 'stop') { const m = S.machines.find((x) => x.id === body.id); m.state = 'stopped'; m.task = null; m.uptime_s = 0; }
       if (body.action === 'submit') {
         const j = {id: 'j2', name: body.name, created: Date.now() / 1000, batch: body.batch, seed_mode: body.seed_mode, state: 'queued',
@@ -248,7 +259,7 @@ class FarmBrowserTests(unittest.TestCase):
         rent = pg.evaluate("() => window.__farmPosts.find((p) => p.action === 'rent')")
         self.assertEqual((rent["provider"], rent["offer_id"], rent["usd_per_hour"]), ("vast", "11", 0.44))
         pg.evaluate("() => window.__panel.farmOpen('setup')")
-        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-setup .fm-field').length === 8")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-setup .fm-field').length === 10")
         self.shot(pg, "farm-setup.png")
         pg.evaluate("""() => { const i = window.__panel.viewport.querySelector('.fm-setup input[data-key=daily_cap_usd]'); i.value = '35';
             [...window.__panel.viewport.querySelectorAll('.fm-setup .fm-btn')].find((b) => b.textContent === 'Save').click(); }""")
@@ -260,7 +271,7 @@ class FarmBrowserTests(unittest.TestCase):
     def test_an_edit_survives_the_refresh_until_saved(self):
         pg = self.page()
         pg.evaluate("() => window.__panel.farmOpen('setup')")
-        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-setup .fm-field').length === 8")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-setup .fm-field').length === 10")
         pg.evaluate("""() => { const i = window.__panel.viewport.querySelector('.fm-setup input[data-key=image]');
             i.focus(); i.value = 'ghcr.io/me/farm:2'; i.dispatchEvent(new Event('input', {bubbles: true})); i.blur(); }""")
         pg.wait_for_timeout(4500)                          # two refreshes of the farm while nothing has focus
@@ -270,6 +281,40 @@ class FarmBrowserTests(unittest.TestCase):
         pg.wait_for_function("() => window.__farmPosts.some((p) => p.action === 'settings')")
         st = pg.evaluate("() => window.__farmPosts.find((p) => p.action === 'settings').settings")
         self.assertEqual(st["image"], "ghcr.io/me/farm:2")
+        self.assertEqual(self.errors, [])
+
+    def test_storage_lists_volumes_their_models_and_makes_and_deletes_them(self):
+        pg = self.page()
+        pg.evaluate("() => window.__panel.farmOpen('storage')")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-storage .fm-volume').length === 2")
+        tab = pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-tab')].map((b) => b.textContent)")
+        self.assertIn("Storage (2)", tab)
+        first = pg.evaluate("() => window.__panel.viewport.querySelector('.fm-storage .fm-volume').textContent")
+        self.assertIn("150 GB", first)
+        self.assertIn("$22.50/month", first)
+        self.assertIn("3 models · 19.4 GB", first)
+        self.assertIn("Used by vast-1", first)
+        dels = pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-volume .fm-danger')].map((b) => b.disabled)")
+        self.assertEqual(dels, [True, False])                      # the one a machine uses cannot be deleted
+        grows = pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-volume')].map((c) => [...c.querySelectorAll('button')].some((b) => b.textContent === 'Grow…'))")
+        self.assertEqual(grows, [False, True])                     # only RunPod volumes grow
+        pg.evaluate("() => window.__panel.viewport.querySelector('.fm-volume details').open = true")
+        pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-storage .fm-btn')].find((b) => b.textContent === 'Find storage').click()")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-voloffer').length === 2")
+        price = pg.evaluate("() => window.__panel.viewport.querySelector('.fm-voloffer .fm-price').textContent")
+        self.assertEqual(price, "$18.00/month")                    # 150 GB at $0.12
+        self.shot(pg, "farm-storage.png")
+        pg.evaluate("() => window.__panel.viewport.querySelector('.fm-voloffer .fm-btn').click()")
+        txt = pg.evaluate("() => window.__panel.viewport.querySelector('.fm-confirm .fm-sec-text').textContent")
+        self.assertIn("lives on that one machine", txt)
+        pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-confirm .fm-btn')].find((b) => b.textContent === 'Make').click()")
+        pg.wait_for_function("() => window.__farmPosts.some((p) => p.action === 'create_volume')")
+        mk = pg.evaluate("() => window.__farmPosts.find((p) => p.action === 'create_volume')")
+        self.assertEqual((mk["provider"], mk["offer_id"], mk["size_gb"]), ("vast", "900", 150))
+        pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-volume')][1].querySelector('.fm-danger').click()")
+        pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-confirm .fm-btn')].find((b) => b.textContent === 'Delete').click()")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-storage .fm-volume').length === 1")
+        self.assertEqual(pg.evaluate("() => window.__farmPosts.at(-1)"), {"action": "delete_volume", "id": "runpod:nv1"})
         self.assertEqual(self.errors, [])
 
     def test_a_host_that_is_down_says_so(self):
