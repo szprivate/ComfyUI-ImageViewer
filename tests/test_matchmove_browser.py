@@ -264,6 +264,105 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_the_agent_tracks_solves_and_builds_through_its_actions(self):
+        """The agent's road: previzRigAgentRun (what /imageviewer/rig/agent sends the page) with matchmove_* actions,
+        from a page with no 3D tab up - one is brought up, the panels open, and each answer carries the summary."""
+        pg = self._page()
+        try:
+            pg.evaluate("""() => {
+                const real = window.fetch.bind(window);
+                window.__answers = {};
+                window.fetch = (url, init) => {
+                    if (String(url).includes('/rig/agent_done')) {
+                        const b = JSON.parse(init.body);
+                        if (b.state !== 'running') window.__answers[b.id] = b;
+                        return Promise.resolve(new Response('{}'));
+                    }
+                    return real(url, init);
+                };
+                let n = 0;
+                window.__agent = async (action, args) => {
+                    const id = `a${++n}`;
+                    await window.__panel.previzRigAgentRun({ id, action, args });
+                    return window.__answers[id];
+                };
+            }""")
+            # the two lists of actions agree, and the scene agent knows every matchmove one
+            names = pg.evaluate("""async () => {
+                const m = await import('/extensions/viewer/imageViewer_previzAgentMatchmove.js');
+                const s = await import('/extensions/viewer/imageViewer_previzAgentScene.js');
+                return { mm: m.MATCHMOVE_AGENT_ACTIONS, missing: m.MATCHMOVE_AGENT_ACTIONS.filter((a) => !s.SCENE_AGENT_ACTIONS.has(a)) }; }""")
+            self.assertEqual(names["missing"], [])
+            routes = sys.modules[self.pkg + ".rig_routes"].AGENT_ACTIONS
+            self.assertEqual([a for a in names["mm"] if a not in routes], [])
+
+            ask = lambda action, args=None: pg.evaluate("([a, b]) => window.__agent(a, b)", [action, args or {}])  # noqa: E731
+            r = ask("matchmove_info")
+            self.assertEqual(r["state"], "done", r)
+            self.assertIsNone(r["result"]["matchmove"]["plate"])
+            r = ask("matchmove_track")
+            self.assertEqual(r["state"], "error")
+            self.assertIn("no plate", r["error"])
+
+            r = ask("matchmove_open", {"plate": self.plate})
+            self.assertEqual(r["state"], "done", r)
+            mm = r["result"]["matchmove"]
+            self.assertEqual((mm["plate"]["width"], mm["plate"]["frames"]), (W, N))
+            self.assertTrue(pg.evaluate("() => window.__panel.isPrevizTab() && window.__panel.isPanelDocked('mmGuide')"))
+
+            r = ask("matchmove_lens", {"how": "set", "k1": 0, "k2": 0})
+            self.assertEqual(r["result"]["matchmove"]["lens"]["source"], "typed", r)
+            # a mask over the left edge keeps tracks from starting there
+            r = ask("matchmove_mask", {"name": "left", "keys": [{"frame": 0, "points": [[0, 0], [90, 0], [90, H], [0, H]]}]})
+            self.assertEqual(r["state"], "done", r)
+            self.assertEqual(r["result"]["matchmove"]["masks"][0]["name"], "left")
+            r = ask("matchmove_mask", {"keys": [{"frame": 0, "points": [[0, 0], [1, 1]]}]})
+            self.assertEqual(r["state"], "error")
+
+            r = ask("matchmove_track", {"features": 200})
+            self.assertEqual(r["state"], "done", r)
+            tracks = r["result"]["matchmove"]["tracks"]
+            self.assertGreater(tracks["total"], 40, tracks)
+            starts = pg.evaluate("() => window.__panel._mmCur().mm.tracks.map((t) => t.keys[0]).filter((k) => k[0] === 0 && k[1] < 85).length")
+            self.assertEqual(starts, 0)
+
+            r = ask("matchmove_track_delete", {"shorter_than": 4})
+            self.assertEqual(r["state"], "done", r)
+            r = ask("matchmove_solve", {"mode": "auto"})
+            self.assertEqual(r["state"], "done", r)
+            sv = r["result"]["matchmove"]["solve"]
+            self.assertLess(sv["rms_px"], 1.0, sv)
+            self.assertEqual(sv["frames"], N)
+            self.assertAlmostEqual(sv["focal_px"], F, delta=F * 0.05)
+            self.assertTrue(sv["worst_tracks"])
+            worst = sv["worst_tracks"][0][0]
+            r = ask("matchmove_track_delete", {"worst_share": 0.05})
+            self.assertGreater(r["result"]["deleted"], 0)
+            self.assertNotIn(worst, pg.evaluate("() => window.__panel._mmCur().mm.tracks.map((t) => t.id)"))
+            r = ask("matchmove_solve")
+            self.assertEqual(r["state"], "done", r)
+
+            r = ask("matchmove_build")
+            self.assertEqual(r["state"], "done", r)
+            built = r["result"]["matchmove"]["built"]
+            self.assertTrue(built and built["camera"], built)
+            pts = [q[0] for q in r["result"]["matchmove"]["solve"]["worst_tracks"][-3:]]
+            r = ask("matchmove_orient", {"how": "origin", "points": pts[:1]})
+            self.assertEqual(r["state"], "done", r)
+            r = ask("matchmove_orient", {"how": "scale", "points": pts[:2]})
+            self.assertEqual(r["state"], "error")             # no distance
+            r = ask("matchmove_geometry", {"kind": "locator", "points": pts[:1]})
+            self.assertEqual(r["state"], "done", r)
+            self.assertTrue(r["result"]["item"])
+            r = ask("matchmove_lens_export", {"to": "comp"})
+            self.assertEqual(r["state"], "done", r)
+            self.assertTrue(os.path.isfile(r["result"]["path"]), r)
+            r = ask("matchmove_save")
+            self.assertTrue(os.path.isfile(r["result"]["path"]), r)
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
 
 if __name__ == "__main__":
     unittest.main()

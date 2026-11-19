@@ -72,6 +72,7 @@ import { PrevizRigToolsMixin } from "./imageViewer_previzRigTools.js";
 import { PrevizRigAIMixin } from "./imageViewer_previzRigAI.js";
 import { PrevizAgentSceneMixin } from "./imageViewer_previzAgentScene.js";
 import { PrevizAgentTerrainMixin } from "./imageViewer_previzAgentTerrain.js";
+import { PrevizAgentMatchmoveMixin } from "./imageViewer_previzAgentMatchmove.js";
 import { PrevizRigPoseMixin } from "./imageViewer_previzRigPose.js";
 import { PrevizRigRoundTripMixin } from "./imageViewer_previzRigRoundTrip.js";
 import { PrevizRigExtrasMixin } from "./imageViewer_previzRigExtras.js";
@@ -1691,6 +1692,7 @@ Object.assign(
     PrevizRigAIMixin,
     PrevizAgentSceneMixin,
     PrevizAgentTerrainMixin,
+    PrevizAgentMatchmoveMixin,
     PrevizRigPoseMixin,
     PrevizRigRoundTripMixin,
     PrevizRigExtrasMixin,
