@@ -16,7 +16,7 @@ export const MATCHMOVE_AGENT_ACTIONS = [
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
-    "matchmove_measure",
+    "matchmove_measure", "matchmove_phone_export",
 ];
 
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
@@ -82,6 +82,15 @@ export function matchmoveSummary(mm, st = {}) {
             ...(sv.focal_check ? { focal_check: sv.focal_check } : {}),
         };
     } else out.solve = null;
+    // An iPhone film or photo (src/iphone_io.py): which camera, how it was turned, and whether it carries depth.
+    const ph = st.facts && st.facts.phone;
+    if (ph) {
+        const lens = ph.lens || {};
+        const dep = ph.depth;
+        out.phone = { camera: lens.camera || "", side: lens.side || "", rotation: ph.rotation || 0, software: ph.software || "",
+                      film: !!ph.tracks, motion: (ph.motion || []).slice(0, 8),
+                      depth: dep ? { width: dep.width, height: dep.height, ...(ph.tracks ? { samples: dep.samples } : {}) } : null };
+    }
     out.built = mm.scene && mm.scene.group ? { group: mm.scene.group, camera: mm.scene.camera, plate: mm.scene.plate || null } : null;
     return out;
 }
@@ -517,7 +526,8 @@ export const PrevizAgentMatchmoveMixin = {
      * {how: auto (every solved point) | points (track ids in `points`) | ai (SAM 3 looks for `prompt`, "ground" by
      * default) | depth (a depth model on a few frames; `workflow` picks it, `metres` (on) scales the world to metres with
      * the Metric one), scale? (ai / depth: the share of the plate's size the model runs at, 0.1..1, 1 = full), tolerance?
-     * (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
+     * (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground. how phone: the
+     * depth an iPhone's Cinematic film (or a HEIC photo) carries - no model, no ComfyUI job, not in metres.
      */
     async _asa_matchmove_ground(scene, a) {
         const st = await this._amm();
@@ -528,20 +538,24 @@ export const PrevizAgentMatchmoveMixin = {
         const scale = isNum(a.scale) ? Number(a.scale) : null;
         let g;
         if (how === "ai") g = await this.matchmoveGroundAI(a.prompt || "ground", { ask: false, scale });
-        else if (how === "depth") g = await this.matchmoveGroundDepth({ workflow: a.workflow || null, metres: a.metres !== false, ask: false, scale });
+        else if (how === "phone") {
+            const ph = st.facts && st.facts.phone;
+            if (!ph || !ph.depth || !ph.tracks) throw new Error("the plate is not an iPhone film with a depth track (a Cinematic film); use how depth");
+            g = await this.matchmoveGroundPhone();
+        } else if (how === "depth") g = await this.matchmoveGroundDepth({ workflow: a.workflow || null, metres: a.metres !== false, ask: false, scale });
         else if (how === "points") {
             const ids = this._ammTrackIds(st, a.points || []);
             if (ids.length < 3) throw new Error("points takes three or more track ids");
             g = this.matchmoveGroundFind({ ids, how: "region", tol });
         } else if (how === "auto") g = this.matchmoveGroundFind({ tol });
-        else throw new Error("how is auto, points, ai or depth");
+        else throw new Error("how is auto, points, ai, depth or phone");
         if (!g) throw new Error("not run (stopped, or the model files are not here)");
         if (g.error) throw new Error(g.error);
         if (a.flip) this.matchmoveGroundFlip();
         if (isNum(a.lift) && Number(a.lift)) { st.liftStep = Math.abs(Number(a.lift)); this.matchmoveGroundLift(Math.sign(Number(a.lift))); }
         const gi = st.groundInfo || {};
-        return this._ammAnswer(st, { ground: { points: g.count, of: gi.of, tilt: round(g.tilt, 2), below: g.below, ids: how === "depth" ? [] : g.ids.slice(0, 50),
-                                               ...(how === "depth" ? { camera_height: round(gi.height, 3), metres_per_unit_before: gi.metres, in_metres: !!gi.metres, model: gi.model } : {}) },
+        return this._ammAnswer(st, { ground: { points: g.count, of: gi.of, tilt: round(g.tilt, 2), below: g.below, ids: how === "depth" || how === "phone" ? [] : g.ids.slice(0, 50),
+                                               ...(how === "depth" || how === "phone" ? { camera_height: round(gi.height, 3), metres_per_unit_before: gi.metres, in_metres: !!gi.metres, model: gi.model } : {}) },
                                      orient: st.mm.orient });
     },
 
@@ -562,6 +576,16 @@ export const PrevizAgentMatchmoveMixin = {
         if (!id) throw new Error("not run (stopped, or the model files are not here: download them in the guide)");
         const m = st.mm.masks.find((q) => q.id === id);
         return this._ammAnswer(st, { mask: { id, name: m.name, frames: m.matte.frames.length } });
+    },
+
+    /** An iPhone Cinematic film's depth track as a 16-bit PNG sequence (one picture a frame, bright = near). */
+    async _asa_matchmove_phone_export() {
+        const st = await this._amm();
+        const ph = st.facts && st.facts.phone;
+        if (!ph || !ph.depth || !ph.tracks) throw new Error("the plate is not an iPhone film with a depth track (a Cinematic film)");
+        const d = await this.matchmovePhoneExport();
+        if (!d) throw new Error("not saved");
+        return this._ammAnswer(st, { depth: { pattern: d.pattern, frames: d.frames, width: d.width, height: d.height } });
     },
 
     async _asa_matchmove_save() {
