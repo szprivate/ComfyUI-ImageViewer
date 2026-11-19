@@ -269,7 +269,7 @@ class MenuBarPaneTests(unittest.TestCase):
                          name: box && box.querySelector('.cb-name') ? box.querySelector('.cb-name').value : null,
                          rows: box ? box.querySelectorAll('.cb-row').length : 0,
                          widgets: vis(pp.querySelector('.params-content')), title: P.paramsTitle.innerText,
-                         ids: Object.values(P.dockLayout).flatMap((r) => r.panels.map((x) => x.id)),
+                         ids: P.dockPanelEntries().map((x) => x.id),
                          alias: P.isPanelDocked('channels') === P.isPanelDocked('params') }; }""")
             # The Windows menu's Channel Box puts the Parameters panel away and back.
             pg.evaluate("() => { const P = window.__panel; P.previzMenuBarOpen('windows'); [...P.shadowRoot.querySelectorAll('button.previz-menu-item')].find((b) => /Channel Box/.test(b.textContent)).click(); }")

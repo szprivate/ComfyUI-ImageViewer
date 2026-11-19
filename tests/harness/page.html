@@ -29,7 +29,7 @@ try {
   window.__history = true;
   Object.assign(panel.style, { width: "1300px", height: "800px", left: "40px", top: "40px" });
   panel.setPanelDocked("params", false);
-  if (panel.dockLayout) panel.dockLayout.right.width = 560;
+  if (panel.dockSetRailSize) panel.dockSetRailSize("right", 560);
   panel.applyDockLayout();
   let setupErr = ""; try { await window.__ext.setup(); } catch (e) { setupErr = e.message; }
   window.__setupErr = setupErr;

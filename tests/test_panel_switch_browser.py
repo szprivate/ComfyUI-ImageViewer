@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-LAYOUT = """()=>{const L=__panel.dockLayout;return Object.fromEntries(['left','right','bottom'].map(s=>
+LAYOUT = """()=>{const L=__panel.dockRailsView();return Object.fromEntries(['left','right','bottom'].map(s=>
     [s,L[s].panels.filter(p=>!p.hidden&&!p.behind).map(p=>p.id)]))}"""
 MENU = """()=>{const m=__panel._previzAddMenu; if(!m) return null;
     return [...m.querySelectorAll('.previz-menu-head, .previz-menu-item')].map(e=>
@@ -178,7 +178,7 @@ class PanelSwitchTests(unittest.TestCase):
         L = pg.evaluate(LAYOUT)
         self.assertIn("dopeSheet", L["bottom"])
         self.assertNotIn("curves", L["bottom"])
-        state = pg.evaluate("""()=>{const L=__panel.dockLayout.bottom.panels;
+        state = pg.evaluate("""()=>{const L=__panel.dockRailsView().bottom.panels;
             const c=L.find(p=>p.id==='curves'), d=L.find(p=>p.id==='dopeSheet'); return [c.tab===d.tab, !!c.behind, !!d.behind]}""")
         self.assertEqual(state, [True, True, False], "still tabs of one place, the Dope Sheet in front")
 

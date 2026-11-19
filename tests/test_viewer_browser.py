@@ -82,7 +82,7 @@ class BrowserTests(unittest.TestCase):
 
     @staticmethod
     def layout(pg):
-        return pg.evaluate("""()=>{const L=__panel.dockLayout;return Object.fromEntries(['left','right','bottom'].map(s=>
+        return pg.evaluate("""()=>{const L=__panel.dockRailsView();return Object.fromEntries(['left','right','bottom'].map(s=>
             [s,L[s].panels.filter(p=>!p.hidden&&!p.behind).map(p=>p.id)]))}""")
 
     @staticmethod
@@ -534,11 +534,11 @@ class BrowserTests(unittest.TestCase):
                "bottom": {"height": 240, "panels": [{"id": "motionTimeline", "size": 1, "hidden": False}]}}
         self.assertTrue(pg.evaluate("(d)=>__panel.applyDockData(d)", old))
         pg.wait_for_timeout(200)
-        ids = pg.evaluate("()=>Object.values(__panel.dockLayout).flatMap(r=>r.panels.map(p=>p.id))")
+        ids = pg.evaluate("()=>__panel.dockPanelEntries().map(p=>p.id)")
         self.assertNotIn("motionLayers", ids)
         self.assertEqual(len(ids), len(set(ids)))
         # the panel it shared a tab with is simply a panel now; nothing is left behind
-        hist = pg.evaluate("()=>__panel.dockLayout.left.panels.find(p=>p.id==='history')")
+        hist = pg.evaluate("()=>__panel.dockRailsView().left.panels.find(p=>p.id==='history')")
         self.assertFalse(hist.get("tab"))
         self.assertFalse(hist.get("behind"))
         self.assertNotIn("motionLayers", str(pg.evaluate("()=>__panel.serializeDock()")))

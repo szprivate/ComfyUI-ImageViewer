@@ -312,16 +312,18 @@ class EditResolveToolsBrowserTests(Base):
         pg.evaluate("() => { const P = __panel; if (!P.isPanelDocked('editMixer')) P.editTlPanelToggle('editMixer'); P.editTlRefresh(); }")
         pg.wait_for_function("() => !!__panel.editMixerPanel.querySelector('.mix-body')", timeout=5000)
         # A place of its own: under the picture, right of the timeline (and a layout from before is moved there once).
-        self.assertEqual(pg.evaluate("() => { const b = __panel.dockLayout.bottom.panels.map(p => p.id); return [__panel._dockSideOf('editMixer'), b.indexOf('editMixer') === b.indexOf('editTimeline') + 1]; }"), ["bottom", True])
+        self.assertEqual(pg.evaluate("() => { const b = __panel._dockEntry('editMixer').list.map(p => p.id); return [__panel._dockSideOf('editMixer'), b.indexOf('editMixer') === b.indexOf('editTimeline') + 1]; }"), ["bottom", True])
         # Its title bar (the dock's drag handle) survives every redraw of the strips.
         title = "() => { const b = __panel.editMixerPanel.querySelector(':scope > .panel-titlebar'); return b ? b.querySelector('.pt-name').textContent : null; }"
         self.assertEqual(pg.evaluate(title), "Mixer")
-        moved = pg.evaluate("""() => { const P = __panel, L = P.dockLayout;
-            const [m] = L.bottom.panels.splice(L.bottom.panels.findIndex(p => p.id === 'editMixer'), 1); L.right.panels.push(m);
+        moved = pg.evaluate("""() => { const P = __panel;
+            P.dockPanelTo('editMixer', 'right');
             localStorage.removeItem('imageviewer.viewer.mixerBottom'); P.applyDockLayout();
-            const again = (L.right.panels.push(L.bottom.panels.splice(L.bottom.panels.findIndex(p => p.id === 'editMixer'), 1)[0]), P.applyDockLayout(), P._dockSideOf('editMixer'));
-            P.dockPanelTo('editMixer', 'bottom'); return again; }""")
-        self.assertEqual(moved, "right", "moved once; after that where the user puts it")
+            const home = P._dockSideOf('editMixer');
+            P.dockPanelTo('editMixer', 'right'); P.applyDockLayout();
+            const again = P._dockSideOf('editMixer');
+            P.dockPanelTo('editMixer', 'bottom'); return [home, again]; }""")
+        self.assertEqual(moved, ["bottom", "right"], "moved once; after that where the user puts it")
         strips = pg.evaluate("() => [...__panel.editMixerPanel.querySelectorAll('.mix-strip')].map(s => [s.dataset.track, !!s.querySelector('.mix-fader')])")
         self.assertEqual(strips, [["V1", False], ["A1", True], ["A2", True], ["master", True]])
         self.assertTrue(pg.evaluate("() => __panel._editMixOn()"))

@@ -1877,7 +1877,7 @@ class PaintBrowserTests(unittest.TestCase):
         # A layout saved before these panels existed gets them as tabs behind Properties, not as three more panels.
         got = pg.evaluate("""() => { const p = __panel;
             p.applyDockData({ right: { width: 300, panels: [{ id: 'paintLayers', size: 2 }, { id: 'paintProps', size: 2 }, { id: 'paintHistory', size: 1 }] } });
-            return p.dockLayout.right.panels.filter((e) => e.id.startsWith('paint')).map((e) => [e.id, !!e.tab, !!e.behind]); }""")
+            return p.dockRailsView().right.panels.filter((e) => e.id.startsWith('paint')).map((e) => [e.id, !!e.tab, !!e.behind]); }""")
         self.assertEqual(got, [["paintLayers", False, False], ["paintProps", True, False], ["paintTool", True, True],
                                ["paintEffects", True, True], ["paintGenerate", True, True], ["paintHistory", False, False]])
         self.assertEqual(self.errors, [])
