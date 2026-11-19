@@ -474,7 +474,8 @@ export const PrevizAgentMatchmoveMixin = {
     /**
      * {how: auto (every solved point) | points (track ids in `points`) | ai (SAM 3 looks for `prompt`, "ground" by
      * default) | depth (a depth model on a few frames; `workflow` picks it, `metres` (on) scales the world to metres with
-     * the Metric one), tolerance? (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
+     * the Metric one), scale? (ai / depth: the share of the plate's size the model runs at, 0.1..1, 1 = full), tolerance?
+     * (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
      */
     async _asa_matchmove_ground(scene, a) {
         const st = await this._amm();
@@ -482,9 +483,10 @@ export const PrevizAgentMatchmoveMixin = {
         if (!st.mm.scene || !st.mm.scene.group) throw new Error("build it in the scene first (matchmove_build)");
         const how = String(a.how || "auto");
         const tol = isNum(a.tolerance) ? Number(a.tolerance) : undefined;
+        const scale = isNum(a.scale) ? Number(a.scale) : null;
         let g;
-        if (how === "ai") g = await this.matchmoveGroundAI(a.prompt || "ground", { ask: false });
-        else if (how === "depth") g = await this.matchmoveGroundDepth({ workflow: a.workflow || null, metres: a.metres !== false, ask: false });
+        if (how === "ai") g = await this.matchmoveGroundAI(a.prompt || "ground", { ask: false, scale });
+        else if (how === "depth") g = await this.matchmoveGroundDepth({ workflow: a.workflow || null, metres: a.metres !== false, ask: false, scale });
         else if (how === "points") {
             const ids = this._ammTrackIds(st, a.points || []);
             if (ids.length < 3) throw new Error("points takes three or more track ids");
@@ -503,7 +505,8 @@ export const PrevizAgentMatchmoveMixin = {
 
     /**
      * {engine: objects (SAM 3, `prompt` = what to find) | background (a background remover: the subject), step?
-     * (every Nth frame, 1), from?, to?, object? (an object's id: its mask), workflow?}: a mask over the whole shot
+     * (every Nth frame, 1), from?, to?, object? (an object's id: its mask), workflow?, scale? (the share of the plate's
+     * size the model runs at, 0.1..1, 1 = full)}: a mask over the whole shot
      * from an AI model, one ComfyUI job. Track again after it.
      */
     async _asa_matchmove_ai_mask(scene, a) {
@@ -512,7 +515,8 @@ export const PrevizAgentMatchmoveMixin = {
         if (engine === "objects" && !String(a.prompt || "").trim()) throw new Error("say what to mask in prompt (person, car, water ...)");
         const id = await this.matchmoveAiMask({ engine, prompt: a.prompt || "", step: isNum(a.step) ? Number(a.step) : 1,
                                                 from: isNum(a.from) ? Number(a.from) : 0, to: isNum(a.to) ? Number(a.to) : null,
-                                                mode: a.object ? "object" : "exclude", object: String(a.object || ""), workflow: a.workflow || null, ask: false });
+                                                mode: a.object ? "object" : "exclude", object: String(a.object || ""), workflow: a.workflow || null, ask: false,
+                                                scale: isNum(a.scale) ? Number(a.scale) : 1 });
         if (!id) throw new Error("not run (stopped, or the model files are not here: download them in the guide)");
         const m = st.mm.masks.find((q) => q.id === id);
         return this._ammAnswer(st, { mask: { id, name: m.name, frames: m.matte.frames.length } });
