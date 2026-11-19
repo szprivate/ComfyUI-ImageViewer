@@ -156,7 +156,7 @@ export const FarmMixin = {
         spend.append(meter, spendText);
         const tabs = h("div", "fm-tabs");
         const views = {};
-        for (const [id, label] of [["machines", "Machines"], ["queue", "Queue"], ["setup", "Setup"]]) {
+        for (const [id, label] of [["machines", "Machines"], ["queue", "Queue"], ["storage", "Storage"], ["setup", "Setup"]]) {
             const b = h("button", "fm-tab", label);
             b.dataset.view = id;
             b.onclick = () => this._farmView(rec, id);
@@ -172,12 +172,13 @@ export const FarmMixin = {
         const note = h("div", "fm-note");
         const machines = h("div", "fm-page fm-machines");
         const queue = h("div", "fm-page fm-queue");
+        const storage = h("div", "fm-page fm-storage");
         const setup = h("div", "fm-page fm-setup");
-        body.append(note, machines, queue, setup);
+        body.append(note, machines, queue, storage, setup);
         const toast = h("div", "fm-toast");
         root.append(bar, body, toast);
         rec.el.append(root);
-        rec.ui = { root, bar, spend, fill, spendText, tabs: views, body, note, machines, queue, setup, toast, h };
+        rec.ui = { root, bar, spend, fill, spendText, tabs: views, body, note, machines, queue, storage, setup, toast, h };
         this._farmView(rec, rec.view || "machines");
         this._farmRender(rec);
     },
@@ -189,8 +190,10 @@ export const FarmMixin = {
         for (const [id, b] of Object.entries(ui.tabs)) b.classList.toggle("on", id === view);
         ui.machines.style.display = view === "machines" ? "" : "none";
         ui.queue.style.display = view === "queue" ? "" : "none";
+        ui.storage.style.display = view === "storage" ? "" : "none";
         ui.setup.style.display = view === "setup" ? "" : "none";
         if (view === "setup") this._farmSetup(rec, true);
+        if (view === "storage") this._farmStorage(rec, true);
     },
 
     _farmToast(rec, text, kind = "info") {
@@ -233,6 +236,9 @@ export const FarmMixin = {
         ui.tabs.machines.textContent = machines.length ? `Machines (${machines.length})` : "Machines";
         this._farmMachines(rec);
         this._farmQueue(rec);
+        const vols = d.volumes || [];
+        ui.tabs.storage.textContent = vols.length ? `Storage (${vols.length})` : "Storage";
+        if (rec.view === "storage") this._farmStorage(rec, false);
         if (rec.view === "setup") this._farmSetup(rec, false);
     },
 
@@ -282,6 +288,7 @@ export const FarmMixin = {
         }
         if (m.error) card.append(h("div", "fm-card-err", m.error));
         if (m.provider_error) card.append(h("div", "fm-card-err", m.provider_error));
+        if (m.volume_note) card.append(h("div", "fm-card-vol", m.volume_note));
         const acts = h("div", "fm-acts");
         const act = (label, cls, fn, title) => {
             const b = h("button", `fm-btn ${cls || ""}`, label);
@@ -441,6 +448,8 @@ export const FarmMixin = {
             ["image", "Machine image", "text", "The Docker image every machine starts from. Empty = the agentY farm image (ComfyUI with the farm helper)."],
             ["disk_gb", "Disk (GB)", "number", "Room for the models the workflows need."],
             ["retries", "Retries on another machine", "number", "A render that fails is tried this many more times."],
+            ["keep_models", "Keep models on storage", "checkbox", "Machines are rented with provider storage and keep the models there for the next one. See Storage."],
+            ["volume_gb", "Volume size (GB)", "number", "The size of a volume the farm makes on its own. Room for every model you render with."],
         ];
         const inputs = {};
         for (const [key, label, type, help] of fields) {
@@ -512,6 +521,121 @@ export const FarmMixin = {
         yes.onclick = async () => { yes.disabled = true; await fn(); d.shade.remove(); };
         d.foot.append(no, yes);
         return d;
+    },
+
+    // ── storage ──────────────────────────────────────────────────────────────
+
+    _farmStorage(rec, rebuild) {
+        const ui = rec.ui, h = ui.h, d = rec.data;
+        if (!d || d.ok === false) return;
+        const vols = d.volumes || [];
+        const sig = JSON.stringify(vols) + JSON.stringify(d.keys || {}) + String((d.settings || {}).keep_models);
+        if (!rebuild && (ui.storageSig === sig || ui.storage.contains(ui.storage.ownerDocument.activeElement))) return;
+        ui.storageSig = sig;
+        ui.storage.textContent = "";
+        const st = d.settings || {}, keys = d.keys || {};
+        const intro = h("div", "fm-sec");
+        intro.append(h("div", "fm-sec-title", "Storage for models"),
+            h("div", "fm-sec-text", (st.keep_models ? "On: new machines are rented with storage, and the models they download stay there. "
+                : "Off: every new machine downloads its models again (billed GPU time, and some vast.ai hosts charge for the traffic). Switch it on in Setup. ")
+                + "A vast.ai volume lives on one machine, so only offers on that machine find the models; a RunPod network volume "
+                + "belongs to a data centre, and pods are placed there."));
+        ui.storage.append(intro);
+        if (!vols.length) ui.storage.append(h("div", "fm-sec-text fm-empty", "No volumes yet."));
+        for (const v of vols) ui.storage.append(this._farmVolumeCard(rec, v));
+        const make = h("div", "fm-sec");
+        make.append(h("div", "fm-sec-title", "Make a volume"));
+        const row = h("div", "fm-mkvol");
+        const prov = h("select", "fm-select");
+        for (const [p, label] of [["vast", "vast.ai"], ["runpod", "RunPod"]]) {
+            const o = h("option", "", label + (keys[p] ? "" : " (no key)"));
+            o.value = p; o.disabled = !keys[p];
+            prov.append(o);
+        }
+        if (!keys.vast && keys.runpod) prov.value = "runpod";
+        const size = h("input", "fm-num");
+        size.type = "number"; size.min = "10"; size.step = "10"; size.value = String(st.volume_gb || 150);
+        const go = h("button", "fm-btn", "Find storage");
+        const list = h("div", "fm-offers fm-voloffers");
+        go.onclick = async () => {
+            list.textContent = "Reading offers…";
+            const r = await this._farmPost(rec, { action: "volume_offers", provider: prov.value }, { quiet: true });
+            list.textContent = "";
+            if (r.error) { list.append(h("div", "fm-card-err", r.error)); return; }
+            const offers = r.offers || [];
+            if (!offers.length) { list.append(h("div", "fm-sec-text", "No storage on offer right now.")); return; }
+            for (const o of offers) {
+                const line = h("div", "fm-offer fm-voloffer");
+                const per = Number(o.usd_per_gb_month) || 0;
+                line.append(h("span", "", o.region || o.where || "—"),
+                    h("span", "", o.machine_id ? `machine ${o.machine_id}` : "data centre"),
+                    h("span", "", o.free_gb ? `${o.free_gb} GB free` : ""),
+                    h("span", "fm-price", per ? `${money(per * (Number(size.value) || 0))}/month` : "—"));
+                const b = h("button", "fm-btn fm-primary", "Make");
+                b.onclick = () => this._farmConfirm(rec, `Make a ${size.value} GB volume${o.region ? " in " + o.region : ""}?`,
+                    (o.machine_id ? "It lives on that one machine: rent GPUs there to use it. Its size cannot change later. " : "Pods that use it run in this data centre. ")
+                    + "It bills storage every month until you delete it, also while no machine runs.",
+                    "Make", async () => {
+                        const res = await this._farmPost(rec, { action: "create_volume", provider: o.provider, offer_id: o.offer_id || "",
+                            where: o.where || "", size_gb: Number(size.value) || 0 });
+                        if (!res.error) { this._farmToast(rec, "Volume made."); this._farmStorage(rec, true); }
+                    });
+                line.append(b);
+                list.append(line);
+            }
+        };
+        row.append(prov, h("span", "fm-field-label", "Size (GB)"), size, go);
+        make.append(row, list);
+        ui.storage.append(make);
+    },
+
+    _farmVolumeCard(rec, v) {
+        const h = rec.ui.h;
+        const card = h("div", "fm-card fm-volume");
+        card.dataset.id = v.id;
+        const top = h("div", "fm-card-head");
+        top.append(h("span", "fm-card-name", v.name || v.id), h("span", "fm-chip", PROVIDER_LABEL[v.provider] || v.provider));
+        card.append(top);
+        const where = v.provider === "vast" ? `machine ${v.where}${v.region ? " · " + v.region : ""}` : `data centre ${v.where}`;
+        const cost = v.usd_per_month ? `${money(v.usd_per_month)}/month` : "storage cost on vast.ai";
+        card.append(h("div", "fm-card-line", `${Math.round(v.size_gb)} GB · ${where} · ${cost}`));
+        const used = (v.machines || []).length ? `Used by ${v.machines.join(", ")}` : "No machine uses it";
+        card.append(h("div", "fm-card-line", used));
+        const models = v.models || [];
+        if (models.length) {
+            const det = h("details", "fm-vol-models");
+            det.append(h("summary", "", `${models.length} model${models.length === 1 ? "" : "s"} · ${v.models_gb} GB`));
+            for (const name of models) det.append(h("div", "fm-vol-model", name));
+            card.append(det);
+        } else card.append(h("div", "fm-card-line fm-dim", v.models_at ? "No models on it yet" : "Models show once a machine with it is ready"));
+        const acts = h("div", "fm-acts");
+        if (v.provider === "runpod") {
+            const grow = h("button", "fm-btn", "Grow…");
+            grow.onclick = () => {
+                const size = h("input", "fm-num");
+                size.type = "number"; size.min = String(Math.round(v.size_gb) + 10); size.step = "10";
+                size.value = String(Math.round(v.size_gb) + 50);
+                const dlg = this._farmConfirm(rec, `Grow ${v.name}`, "A network volume can grow, not shrink. RunPod bills about $0.07 per GB a month.",
+                    "Grow", async () => {
+                        const res = await this._farmPost(rec, { action: "resize_volume", id: v.id, size_gb: Number(size.value) || 0 });
+                        if (!res.error) this._farmToast(rec, `${v.name} is now ${size.value} GB.`);
+                    });
+                if (dlg && dlg.body) dlg.body.append(size);
+            };
+            acts.append(grow);
+        }
+        const del = h("button", "fm-btn fm-danger", "Delete");
+        del.disabled = (v.machines || []).length > 0;
+        if (del.disabled) del.title = "Terminate the machines that use it first";
+        del.onclick = () => this._farmConfirm(rec, `Delete ${v.name}?`,
+            `The ${models.length || "stored"} model${models.length === 1 ? "" : "s"} on it are gone for good; the next machine downloads them again.`,
+            "Delete", async () => {
+                const res = await this._farmPost(rec, { action: "delete_volume", id: v.id });
+                if (!res.error) this._farmToast(rec, `${v.name} deleted.`);
+            });
+        acts.append(del);
+        card.append(acts);
+        return card;
     },
 
     _farmAddDlg(rec) {
@@ -593,7 +717,9 @@ export const FarmMixin = {
         table.append(head);
         for (const o of offers) {
             const r = h("div", `fm-offer${o.too_dear ? " dear" : ""}`);
-            r.append(h("span", "", o.gpu), h("span", "", o.vram_gb ? `${o.vram_gb} GB` : "—"), h("span", "", o.region || "—"),
+            const gpuCell = h("span", "", o.gpu);
+            if (o.has_volume) { gpuCell.append(h("span", "fm-badge", "models here")); gpuCell.title = "One of your volumes is on this machine"; }
+            r.append(gpuCell, h("span", "", o.vram_gb ? `${o.vram_gb} GB` : "—"), h("span", "", o.region || "—"),
                 h("span", "", o.reliability ? `${Math.round(o.reliability * 100)}%` : "—"),
                 h("span", "", o.down_mbps ? `${o.down_mbps} Mb/s` : "—"), h("span", "fm-price", money(o.usd_per_hour)));
             const b = h("button", "fm-btn fm-primary", o.too_dear ? "Too dear" : "Rent");
