@@ -539,7 +539,7 @@ export const View3DPathTraceMixin = {
         this.renderer.setSize(Math.round(width), Math.round(height), false);
         cam.aspect = width / height;
         if (r.item && this._renderGateFov) cam.fov = this._renderGateFov(r.item);
-        cam.updateProjectionMatrix();
+        if (r.item && this._lensProject) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
         const transparent = r.opts.background === "transparent";
         const wasBg = this.scene.background;
         // A colour background asked for is the background the rays see.

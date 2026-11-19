@@ -55,3 +55,15 @@ test("a scene keeps a camera's film back, fit, clipping and its own framing mask
     const plain = parseScene({ items: [{ id: "c2", kind: "camera", fov: 30 }] }).items[0];
     for (const k of ["filmback", "filmFit", "clip", "frameMask"]) assert.equal(plain[k], undefined);
 });
+
+test("the lens shift is kept, held to +-2, and moves the projection a share of the picture", () => {
+    assert.deepEqual(L.shiftOf(null), [0, 0]);
+    assert.deepEqual(L.shiftOf({ shift: [5, -0.1] }), [2, -0.1]);
+    assert.deepEqual(L.readLensFields({ shift: [0, 0] }), {});
+    assert.deepEqual(L.readLensFields({ shift: [0.1, 0] }).shift, [0.1, 0]);
+    assert.deepEqual(L.shiftTerms([0.5, -0.25]), [1, -0.5]);
+    // a picture taking half of the view moves half as far in the view
+    assert.deepEqual(L.shiftTerms([0.5, 0.5], 0.5, 0.25), [0.5, 0.25]);
+    const sc = parseScene({ items: [{ id: "c", kind: "camera", name: "C", shift: [0.2, 0.1] }] });
+    assert.deepEqual(sc.items[0].shift, [0.2, 0.1]);
+});

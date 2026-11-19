@@ -257,10 +257,27 @@ class FrameMaskBrowserTests(unittest.TestCase):
         self.assertNear(st["hole"]["h"], min(st["gate"]["h"], st["gate"]["w"] / 2.39), 2)
         self.shot(pg, "4-3d-gate.png")
 
-        # Split panes: no single picture to mask.
+        # A lens shift moves the picture without turning the camera: the projection carries it.
+        sh = pg.evaluate("""() => { const P = window.__panel, v = P._modelView();
+            const id = v._throughCam(); P.previzSelect(id); P.previzSetChannel('shift', 0, 0.25);
+            v.applyFrame(0); const e = v._entries.get(id);
+            return { shift: P.previzScene().items.find((i) => i.id === id).shift, e8: e.camera.projectionMatrix.elements[8] }; }""")
+        self.assertEqual(sh["shift"], [0.25, 0], sh)
+        self.assertGreater(sh["e8"], 0.1, sh)
+
+        # Split panes: the pane looking through the camera has its gate, and the mask in it.
         pg.evaluate("() => window.__panel._modelView().setPaneLayout('quad')")
-        pg.wait_for_timeout(200)
-        self.assertFalse(pg.evaluate(q3)["shown"])
+        pg.wait_for_timeout(300)
+        shown = pg.evaluate("""() => { const v = window.__panel._modelView();
+            return [...v.stage.querySelectorAll('.frame-mask-3d')].filter((e) => getComputedStyle(e).display !== 'none')
+                .map((e) => ({ camera: e.dataset.camera, w: e.getBoundingClientRect().width })); }""")
+        stage_w = pg.evaluate("() => window.__panel._modelView().stage.getBoundingClientRect().width")
+        self.assertEqual(len(shown), 1, shown)
+        self.assertTrue(shown[0]["camera"], shown)
+        self.assertLess(shown[0]["w"], stage_w / 2 + 2, shown)
+        gates = pg.evaluate("() => [...window.__panel._modelView().stage.querySelectorAll('.model-pane-gate')].filter((e) => e.style.display !== 'none').length")
+        self.assertEqual(gates, 1)
+        self.shot(pg, "5-3d-quad-gate.png")
         self.assertEqual(self.errors, [])
 
     def test_a_camera_has_its_own_mask_and_lens_in_the_channel_box(self):

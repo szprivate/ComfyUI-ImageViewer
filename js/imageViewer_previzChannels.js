@@ -48,7 +48,7 @@ const FOV = ["fov", "fov", null, "Field Of View", 1];
 // Numbers of a camera's shape that are not channels of their own: the focal length and the horizontal field of
 // view are the keyed `fov` read another way (LENS_PROPS), the rest are kept as they are (STATIC_PROPS).
 const LENS_PROPS = new Set(["focal", "hfov"]);
-const STATIC_PROPS = new Set(["resolution", "filmback", "clip", "maskOpacity"]);
+const STATIC_PROPS = new Set(["resolution", "filmback", "clip", "shift", "maskOpacity"]);
 
 // The sizes a camera is most often asked to be.
 const RESOLUTION_PRESETS = [
@@ -293,6 +293,13 @@ export const PrevizChannelsMixin = {
             numberRow("fb.1", "filmback", 1, "Aperture H (mm)", 0.1, t);
             selectRow("filmFit", "Film Fit", L.FILM_FITS.map((f) => [f, L.FILM_FIT_LABELS[f]]), (v) => this.previzSetFilmFit(v),
                       "How the picture lies on the film back: its width on the film's width (Horizontal), its height on the film's height (Vertical), inside it (Fill) or around it (Overscan)");
+            numberRow("shift.0", "shift", 0, "Lens Shift X", 0.01, t);
+            numberRow("shift.1", "shift", 1, "Lens Shift Y", 0.01, t);
+            for (const [id, text] of [["shift.0", "Moves the picture across the film back, as a share of its width (the camera does not turn)"],
+                                      ["shift.1", "Moves the picture up or down the film back, as a share of its height"]]) {
+                const lab = t.querySelector(`.cb-row[data-ch="${id}"] .cb-label`);
+                if (lab) lab.title = text;
+            }
             numberRow("clip.0", "clip", 0, "Near Clip", 0.01, t);
             numberRow("clip.1", "clip", 1, "Far Clip", 10, t);
             numberRow("res.0", "resolution", 0, "Resolution W", 1, t);
@@ -599,6 +606,7 @@ export const PrevizChannelsMixin = {
         if (prop === "resolution") return S.cameraResolution(item)[comp];
         if (prop === "filmback") return L.filmbackOf(item)[comp];
         if (prop === "clip") return L.clipOf(item)[comp];
+        if (prop === "shift") return L.shiftOf(item)[comp];
         if (prop === "maskOpacity") return item.frameMask ? item.frameMask.opacity : 0.75;
         if (LENS_PROPS.has(prop)) {
             const fov = S.currentValue(this.previzScene(), item, "fov", Math.round(this.currentFrame || 0));
@@ -658,6 +666,13 @@ export const PrevizChannelsMixin = {
                     if (comp === 1 && c[1] <= c[0]) c[1] = c[0] * 1.001;
                     item.clip = L.clipOf({ clip: c });
                 }
+                continue;
+            }
+            if (prop === "shift") {
+                if (item.kind !== "camera") continue;
+                const sh = L.shiftOf(item);
+                sh[comp] = Math.min(2, Math.max(-2, Math.round(v * 1e4) / 1e4));
+                if (sh[0] || sh[1]) item.shift = sh; else delete item.shift;
                 continue;
             }
             if (prop === "maskOpacity") {
