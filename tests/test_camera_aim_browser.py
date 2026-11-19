@@ -295,5 +295,46 @@ class CameraAimOriginTests(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_a_camera_looked_through_stands_still_when_the_controls_come_back_to_it(self):
+        """Sebastian 2026-11-19: "camera constantly jumps". The orbit controls' update() makes their camera look at
+        their centre; binding them to a scene camera whose centre was off its view axis (the pointer crossing into its
+        pane of a split layout, Look through, a reload) turned it - and dropped its roll. None of that may move it."""
+        pg = self._page()
+        try:
+            cid = self._add_camera(pg)
+            pg.evaluate("""async (id) => { const P = window.__panel; const it = P.previzSelectedItem();
+                it.rotation = [-10, 20, 30]; await P.previzChanged({ reload: true });
+                P.previzLookThrough(id); await new Promise((r) => setTimeout(r, 300)); }""", cid)
+            first = pg.evaluate(self.FACING, cid)
+            steps = pg.evaluate("""async (id) => { const P = window.__panel; const v = P._modelView(); const out = [];
+                const wait = () => new Promise((r) => setTimeout(r, 60));
+                const e = () => v._entries.get(id).root;
+                const pose = () => [...e().getWorldPosition(new v.libs.THREE.Vector3()).toArray(),
+                                    ...e().getWorldQuaternion(new v.libs.THREE.Quaternion()).toArray()];
+                out.push(['start', pose()]);
+                // An orbit centre nowhere near the camera's view axis.
+                v.controls.target.set(-30, 12, 40);
+                v.setPaneLayout('quad'); await wait(); out.push(['quad', pose()]);
+                const persp = v._paneState().views.indexOf('persp');
+                for (let k = 0; k < 4; k++) {
+                    v._paneActivate((persp + 1) % 4); await wait();
+                    v._paneActivate(persp); await wait(); out.push(['back ' + k, pose()]);
+                }
+                v.setPaneLayout('single'); await wait(); out.push(['single', pose()]);
+                v.controls.target.set(25, -8, -14);
+                P.previzLookThroughSet(null); await wait(); P.previzLookThroughSet(id); await wait(); out.push(['look through again', pose()]);
+                await P.previzChanged({ reload: true }); await wait(); out.push(['reload', pose()]);
+                return out; }""", cid)
+            last = pg.evaluate(self.FACING, cid)
+        finally:
+            pg.close()
+        base = steps[0][1]
+        for name, pose in steps:
+            for a, b in zip(base, pose):
+                self.assertAlmostEqual(a, b, places=4, msg=name)
+        self.assertAlmostEqual(first["roll"], last["roll"], places=3)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == "__main__":
     unittest.main()

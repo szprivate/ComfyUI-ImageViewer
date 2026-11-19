@@ -857,11 +857,41 @@ export class Model3DView {
         if (!this.controls) return;
         const cam = this.activeCameraObject();
         if (this.controls.object === cam) return;
-        const target = this.controls.target.clone();
+        this._bindControls(cam, this.controls.target.clone());
+    }
+
+    /**
+     * The orbit controls go over to `cam`, circling `target`. Nothing on screen
+     * may move by that: OrbitControls.update() makes its camera look at the
+     * centre, so a centre off the camera's own view axis turned the camera
+     * towards it - a scene camera looked through jumped whenever the controls
+     * came back to it (the pointer crossing into its pane, a reload, Look
+     * through), and lost its roll (Sebastian 2026-11-19: "camera constantly
+     * jumps"). So a perspective camera's centre goes onto its view axis at the
+     * target's depth, and a scene camera is not update()d at all (its place is
+     * the scene's; the controls update it on each step of a drag).
+     */
+    _bindControls(cam, target) {
+        if (!this.controls) return;
+        const { THREE } = this.libs;
+        const t = target.clone();
+        if (cam.isPerspectiveCamera) {
+            cam.updateMatrixWorld();
+            const pos = cam.getWorldPosition(new THREE.Vector3());
+            const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+            let d = t.clone().sub(pos).dot(fwd);
+            if (!(d > 1e-3)) d = Math.max(1, t.distanceTo(pos));
+            t.copy(pos).addScaledVector(fwd, d);
+        }
         this.controls.object = cam;
-        this.controls.target.copy(target);
-        this.controls.update();
+        this.controls.target.copy(t);
+        if (!this._isSceneCamera(cam)) this.controls.update();
         if (this.gizmo) this.gizmo.camera = cam;
+    }
+
+    /** A scene camera's object (one the scene places), not the free camera or a pane's own. */
+    _isSceneCamera(cam) {
+        return !!(cam && cam !== this.camera && cam.userData && cam.userData.imageViewerItemId);
     }
 
     /**
@@ -2558,20 +2588,18 @@ export class Model3DView {
         this.scene3d.activeCamera = id || null;
         const cam = this.activeCameraObject();
         if (this.controls) {
-            this.controls.object = cam;
-            if (this.gizmo) this.gizmo.camera = cam;
             // Looking through a camera, the orbit pivot sits in front of it, so
             // dragging turns the shot rather than swinging it around the origin.
             // A camera with a look-at target orbits that target.
             const aimEntry = id ? this._entries.get(id) : null;
+            let at = this.controls.target.clone();
             if (aimEntry && aimEntry.aimTarget) {
-                this.controls.target.copy(aimEntry.aimTarget);
+                at = aimEntry.aimTarget.clone();
             } else if (id) {
                 const dir = new this.libs.THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new this.libs.THREE.Quaternion()));
-                const at = cam.getWorldPosition(new this.libs.THREE.Vector3()).add(dir.multiplyScalar(5));
-                this.controls.target.copy(at);
+                at = cam.getWorldPosition(new this.libs.THREE.Vector3()).add(dir.multiplyScalar(5));
             }
-            this.controls.update();
+            this._bindControls(cam, at);
         }
         this.applyFrame(this.sceneFrame);
         this._syncSelection();
