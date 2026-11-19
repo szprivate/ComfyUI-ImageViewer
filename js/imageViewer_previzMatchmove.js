@@ -72,6 +72,8 @@ const STYLE = `
 .mm-progress { height: 4px; background: #333; border-radius: 2px; overflow: hidden; margin: 4px 0; }
 .mm-progress > div { height: 100%; background: #ff6600; width: 0; }
 .mm-plate { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.mm-main-host { position: absolute; inset: 0; z-index: 200; display: flex; flex-direction: column; background: #151515; }
+.mm-main-host > .mm-plate { flex: 1 1 0; min-height: 0; }
 .mm-pbar { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid #333; flex-wrap: nowrap; overflow: hidden; }
 .mm-pbar .mm-btn { padding: 2px 7px; font-size: 11px; }
 .mm-pbar .mm-btn.on { background: #ff6600; border-color: #ff6600; color: #fff; }
@@ -304,6 +306,7 @@ export const PrevizMatchmoveMixin = {
 
     /** Both panels go with the 3D tab and come back with the next one (as Layers does). */
     _mmHide() {
+        if (this._mmMain) { this.matchmovePlateMain(false); this._mmMainWas = true; }
         const want = this._mmWant || (this._mmWant = new Set());
         for (const id of ["mmGuide", "mmPlate"]) {
             if (this.isPanelDocked && this.isPanelDocked(id)) { want.add(id); this.setPanelDocked(id, false); }
@@ -315,10 +318,63 @@ export const PrevizMatchmoveMixin = {
         if (!want) return;
         for (const id of want) this.setPanelDocked(id, true);
         want.clear();
+        if (this._mmMainWas) { this._mmMainWas = false; this.matchmovePlateMain(true); }
+    },
+
+    // ── the Plate in the main view ───────────────────────────────────────────
+    // Sebastian 2026-11-19: "The Plate panel should become a main panel, so I can switch easily between the
+    // 3D view and the Plate". The same Plate (its state, tools and keys) is laid over the main view's body,
+    // as a layer of its own; the 3D view stays under it, so switching back is instant.
+
+    /** Whether the Plate is on screen: in the main view, or as its dock panel. */
+    _mmPlateShown() {
+        return !!this._mmMain || !!(this.isPanelDocked && this.isPanelDocked("mmPlate"));
+    },
+
+    /** Where the Plate is drawn now: the main view's layer, the dock panel, or nowhere (null). */
+    _mmPlateHost() {
+        if (this._mmMain) {
+            const body = this.dockViewBody;
+            if (!body) return null;
+            let h = body.querySelector(":scope > .mm-main-host");
+            if (!h) {
+                h = el(body.ownerDocument, "div", "mm-main-host");
+                body.append(h);
+            }
+            return h;
+        }
+        return this.isPanelDocked && this.isPanelDocked("mmPlate") ? this.mmPlatePanel : null;
+    },
+
+    /** The Plate in the main view (on), back in its panel / the 3D view (off); no argument switches. */
+    matchmovePlateMain(on) {
+        if (on === undefined) on = !this._mmMain;
+        on = !!on;
+        if (on && !(this.isPrevizTab && this.isPrevizTab())) return false;
+        if (on === !!this._mmMain) return on;
+        if (on) {
+            this._mmMainHadPanel = !!(this.isPanelDocked && this.isPanelDocked("mmPlate"));
+            this._mmMain = true;
+            if (this._mmMainHadPanel) this.setPanelDocked("mmPlate", false);
+            if (!this._mmCur(false)) this._mmCur();
+        } else {
+            this._mmMain = false;
+            const body = this.dockViewBody;
+            const h = body && body.querySelector(":scope > .mm-main-host");
+            if (this._mmUI && h && h.contains(this._mmUI.root)) this._mmUI.root.remove();
+            if (h) h.remove();
+            if (this._mmMainHadPanel) this.setPanelDocked("mmPlate", true);
+            this._mmMainHadPanel = false;
+        }
+        const ui = this._mmPlateEnsure();
+        if (on && ui) ui.stage.focus({ preventScroll: true });
+        this._mmDraw();
+        return on;
     },
 
     _mmPanelShown(id) {
         if (id === "mmGuide") this._mmRender(true);
+        else if (this._mmMain) { this._mmMainHadPanel = false; this.matchmovePlateMain(false); }   // the panel opened: the Plate goes there
         else this._mmPlateEnsure();
     },
 
@@ -1181,6 +1237,10 @@ export const PrevizMatchmoveMixin = {
         // the gate in square pixels: a 2x squeezed plate is twice as wide on screen
         const cam = S.makeCameraItem(S.uniqueName(scene, "Matchmove camera"), { fov: fovv, resolution: [Math.round(p.width * pxa), p.height] });
         cam.parent = group.id;
+        // The film back the solve measured its focal length on (the plate's width = the sensor's width), so
+        // the Channel Box's Focal Length reads the lens in millimetres.
+        const sensor = mm.camera && Array.isArray(mm.camera.sensor) ? mm.camera.sensor.map(Number) : null;
+        if (sensor && sensor[0] > 0 && sensor[1] > 0) cam.lens = { aperture: sensor.slice(0, 2), fit: "horizontal", shift: [0, 0], near: 0, far: 0 };
         const frames = Object.keys(sv.frames).map(Number).sort((a, b) => a - b);
         let prev = null;
         for (const f of frames) {
@@ -1311,6 +1371,7 @@ export const PrevizMatchmoveMixin = {
             "-",
             { label: tick(docked("mmGuide"), "Matchmove guide"), run: () => this.togglePanelDocked("mmGuide") },
             { label: tick(docked("mmPlate"), "Plate"), run: () => this.togglePanelDocked("mmPlate") },
+            { label: tick(!!this._mmMain, "Plate in the main view"), cmd: "MatchmovePlateMain", run: () => this.matchmovePlateMain() },
             "-",
             ...D.MM_STEPS.map((s) => ({ label: tick(mm && mm.step === s.id, s.title), disabled: !(mm && (mm.plate || s.id === "plate")),
                                         run: () => { this.matchmoveOpen(); this._mmCur().mm.step = s.id; this._mmRender(); } })),
@@ -1334,8 +1395,10 @@ export const PrevizMatchmoveMixin = {
     matchmoveTool(tool) {
         const st = this._mmCur();
         if (!st) return;
-        if (!this.isPanelDocked("mmPlate")) this.setPanelDocked("mmPlate", true);
-        if (this.dockTabFront) this.dockTabFront("mmPlate");
+        if (!this._mmMain) {
+            if (!this.isPanelDocked("mmPlate")) this.setPanelDocked("mmPlate", true);
+            if (this.dockTabFront) this.dockTabFront("mmPlate");
+        }
         if (tool !== "add" && st.tool === "add") st.trackGroup = null;
         st.tool = tool;
         st.drawing = null;
@@ -1344,12 +1407,17 @@ export const PrevizMatchmoveMixin = {
     },
 
     _mmPlateEnsure() {
-        const host = this.mmPlatePanel;
-        if (!host || !this.isPanelDocked || !this.isPanelDocked("mmPlate")) return null;
+        const host = this._mmPlateHost();
+        if (!host) return null;
         const st = this._mmCur();
         if (!st) return null;
         this._mmStyle(host);
         let ui = this._mmUI;
+        // the same Plate moves between the panel and the main view (same document): keep it, its view and wiring
+        if (ui && ui.root.parentNode !== host && ui.root.ownerDocument === host.ownerDocument) {
+            host.querySelectorAll(":scope > .mm-plate").forEach((n) => n.remove());
+            host.append(ui.root);
+        }
         if (!ui || !ui.root.isConnected || ui.root.parentNode !== host) {
             host.querySelectorAll(":scope > .mm-plate").forEach((n) => n.remove());
             const doc = host.ownerDocument;
@@ -1380,8 +1448,11 @@ export const PrevizMatchmoveMixin = {
             const fit = el(doc, "button", "mm-btn", "Fit");
             fit.title = "The whole plate in view (F)";
             fit.onclick = () => { this._mmCur().view = null; this._mmDraw(); };
+            const main = el(doc, "button", "mm-btn mm-main-btn", "Main view");
+            main.title = "Show the Plate in the main view, in place of the 3D view (Shift+P); again to go back";
+            main.onclick = () => this.matchmovePlateMain();
             const info = el(doc, "span", "mm-info", "");
-            bar.append(fit, info);
+            bar.append(fit, main, info);
             const stage = el(doc, "div", "mm-stage");
             stage.tabIndex = 0;
             const canvas = el(doc, "canvas");
@@ -1389,13 +1460,15 @@ export const PrevizMatchmoveMixin = {
             stage.append(canvas, empty);
             root.append(bar, stage);
             host.append(root);
-            ui = this._mmUI = { root, bar, tools, toggles, shape, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
+            ui = this._mmUI = { root, bar, tools, toggles, shape, main, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
             this._mmWirePlate(ui);
         }
         for (const [id, b] of Object.entries(ui.tools)) b.classList.toggle("on", st.tool === id);
         for (const [id, b] of Object.entries(ui.toggles)) b.classList.toggle("on", !!st.show[id]);
         ui.shape.textContent = st.selectShape === "lasso" ? "Lasso" : "Box";
         ui.shape.classList.toggle("on", st.selectShape === "lasso");
+        ui.main.textContent = this._mmMain ? "Back to 3D" : "Main view";
+        ui.main.classList.toggle("on", !!this._mmMain);
         this._mmLoop();
         return ui;
     },
@@ -1407,7 +1480,7 @@ export const PrevizMatchmoveMixin = {
         const win = ui.root.ownerDocument.defaultView || window;
         const tick = () => {
             ui.raf = 0;
-            if (!ui.root.isConnected || !this.isPanelDocked("mmPlate") || !this.isPrevizTab || !this.isPrevizTab()) return;
+            if (!ui.root.isConnected || !this._mmPlateShown() || !this.isPrevizTab || !this.isPrevizTab()) return;
             const f = Math.round(this.currentFrame || 0);
             const w = ui.stage.clientWidth, h = ui.stage.clientHeight;
             if (f !== ui.lastFrame || w !== ui.lastW || h !== ui.lastH || ui.dirty) {

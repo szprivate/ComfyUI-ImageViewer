@@ -17,6 +17,7 @@
 // The arithmetic (`parseRatio`, `maskRect`) is pure and tested under node
 // (tests/test_frame_masks.mjs).
 import { setEditIcon } from "./imageViewer_editIcons.js";
+import { gateMask } from "./imageViewer_cameraLens.js";
 
 const STORE = "imageviewer.viewer.frameMasks";
 
@@ -190,11 +191,11 @@ export const FrameMasksMixin = {
      * kept part as a hole whose shadow is the shade, its line and its label.
      * A signature on the element skips a redraw that would change nothing.
      */
-    _frameMaskFill(el, w, h) {
-        const m = maskOf(this._frameMask());
+    _frameMaskFill(el, w, h, state) {
+        const st = state || this._frameMask();
+        const m = maskOf(st);
         const r = m && maskRect(w, h, m.ratio);
         if (!r) { el.style.display = "none"; el.dataset.ratio = ""; return; }
-        const st = this._frameMask();
         const sig = `${w}|${h}|${m.ratio}|${st.opacity}|${st.line}|${st.label}|${m.label}`;
         el.style.display = "block";
         if (el._fmSig === sig) return;
@@ -255,26 +256,41 @@ export const FrameMasksMixin = {
     },
 
     /**
-     * Model3DView's `onGate`: `g` = the rectangle to mask in the stage's pixels
-     * (the camera gate, or the whole stage), or null (split panes). The mask
-     * goes inside the stage, under the gate's frame and label.
+     * Model3DView's `onGate`: the rectangles to mask in the stage's pixels, a list of {x, y, w, h, id} - the
+     * camera gate of each view looking through a camera (`id` that camera), or the whole stage with one
+     * view and no camera - or null / [] for none. A camera with a mask of its own
+     * (imageViewer_cameraLens.js, the Channel Box's Mask row) has that one in its gate; every other gate
+     * the viewer's. The masks go inside the stage, under the gates' frames and labels.
      */
     _frameMaskGate(g) {
         // Kept on the panel: the view tells its first gate while it is still being made.
-        this._fmGate = g || null;
+        const list = !g ? [] : Array.isArray(g) ? g.filter(Boolean) : [g];
+        this._fmGate = list;
         const view = this._model3d;
         if (!view || !view.stage) return;
-        let el = view._fmEl;
-        if (!el || el.parentNode !== view.stage) {
-            const doc = view.stage.ownerDocument || document;
-            el = doc.createElement("div");
-            el.className = "frame-mask frame-mask-3d";
-            view.stage.appendChild(el);
-            view._fmEl = el;
-        }
-        if (!g || !g.w || !g.h || !maskOf(this._frameMask())) { el.style.display = "none"; return; }
-        Object.assign(el.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` });
-        this._frameMaskFill(el, g.w, g.h);
+        const doc = view.stage.ownerDocument || document;
+        const els = (view._fmEls || []).filter((e) => e.parentNode === view.stage);
+        if (view._fmEl && view._fmEl.parentNode === view.stage && !els.includes(view._fmEl)) els.unshift(view._fmEl);
+        const scene = this.previzScene ? this.previzScene() : null;
+        const viewer = this._frameMask();
+        list.forEach((r, i) => {
+            let el = els[i];
+            if (!el) {
+                el = doc.createElement("div");
+                el.className = "frame-mask frame-mask-3d";
+                view.stage.appendChild(el);
+                els[i] = el;
+            }
+            const item = r.id && scene ? (scene.items || []).find((it) => it && it.id === r.id) : null;
+            const { st, mask } = gateMask(item, viewer);
+            el.dataset.camera = r.id || "";
+            if (!r.w || !r.h || !mask) { el.style.display = "none"; return; }
+            Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+            this._frameMaskFill(el, r.w, r.h, st);
+        });
+        for (let i = list.length; i < els.length; i++) els[i].style.display = "none";
+        view._fmEls = els;
+        view._fmEl = els[0] || null;
     },
 
     /** The menu: on / off, the ratios, a ratio of one's own, opacity, line and label. */

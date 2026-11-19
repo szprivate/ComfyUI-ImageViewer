@@ -224,6 +224,8 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzRenderDialog() },
     { key: "PrevizPlayblast", label: "Previz: Playblast…",
       enabled: _previz, run: (p) => p.previzPlayblastDialog() },
+    { key: "MatchmovePlateMain", label: "Matchmove: Plate in the Main View / Back to 3D", combo: { key: "P", shift: true },
+      enabled: (p) => !!(p && p._mmMain) || (_previz(p) && !!p.matchmovePlateMain), run: (p) => p.matchmovePlateMain() },
     { key: "View3DDopeSheet", label: "3D View: Show / Hide Dope Sheet",
       enabled: _previz, run: (p) => p.togglePanelDocked("dopeSheet") },
 

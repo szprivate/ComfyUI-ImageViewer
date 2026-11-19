@@ -110,6 +110,7 @@ class UsdSceneTests(unittest.TestCase):
                  "position": [0, 0, 2], "rotation": [0, 0, 0], "scale": [1, 1, 1], "tracks": {},
                  "usd": {"overs": {"Back": {"visible": False}}, "variants": {"": {"look": "metal"}}}},
                 {"id": "cam", "kind": "camera", "name": "Shot cam", "parent": None, "fov": 40,
+                 "lens": {"aperture": [24.89, 18.66], "fit": "horizontal", "shift": [0.1, 0], "near": 0.5, "far": 900},
                  "resolution": [1920, 1080], "position": [0, 1, 5], "rotation": [0, 0, 0], "scale": [1, 1, 1],
                  "tracks": {}},
                 {"id": "key", "kind": "light", "name": "Key", "parent": None,
@@ -188,6 +189,15 @@ class UsdSceneTests(unittest.TestCase):
         d = m.TransformDir((0, 0, -1))
         self.assertAlmostEqual(d[1], -1, places=5)
         self.assertTrue(stage.GetPrimAtPath("/previz/Shot_cam").IsA(UsdGeom.Camera))
+        # The camera's film back as the picture uses it, its lens shift, its clipping and the focal length
+        cam = UsdGeom.Camera(stage.GetPrimAtPath("/previz/Shot_cam"))
+        self.assertAlmostEqual(cam.GetHorizontalApertureAttr().Get(), 24.89, places=3)
+        self.assertAlmostEqual(cam.GetVerticalApertureAttr().Get(), 24.89 * 9 / 16, places=3)
+        self.assertAlmostEqual(cam.GetHorizontalApertureOffsetAttr().Get(), 2.489, places=3)
+        self.assertAlmostEqual(tuple(cam.GetClippingRangeAttr().Get())[1], 900, places=3)
+        import math
+        focal = cam.GetFocalLengthAttr().Get(0) or cam.GetFocalLengthAttr().Get()
+        self.assertAlmostEqual(focal, 24.89 * 9 / 16 / 2 / math.tan(math.radians(20)), places=2)
         card = stage.GetPrimAtPath("/previz/Plate/Card")
         self.assertTrue(card.IsA(UsdGeom.Mesh))
         tex = stage.GetPrimAtPath("/previz/Plate/Look/picture")

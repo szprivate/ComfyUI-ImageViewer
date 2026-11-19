@@ -351,9 +351,30 @@ def _animated_range(item):
 
 # ── export ───────────────────────────────────────────────────────────────────
 
-def _fov_to_focal(fov_degrees):
+def _fov_to_focal(fov_degrees, aperture_v=APERTURE_V):
     half = math.radians(max(1.0, min(179.0, float(fov_degrees or 35))) / 2.0)
-    return (APERTURE_V / 2.0) / max(1e-6, math.tan(half))
+    return (aperture_v / 2.0) / max(1e-6, math.tan(half))
+
+
+def camera_film(item):
+    """The film a camera's picture takes, as js/imageViewer_cameraLens.js's ``gateFilm``: (width mm, height mm,
+    lens) - the lens's film back (36 x 24 when it has none) met with the picture's shape by its sensor fit."""
+    lens = item.get("lens") if isinstance(item.get("lens"), dict) else {}
+    ap = lens.get("aperture")
+    try:
+        aw, ah = (float(ap[0]), float(ap[1])) if isinstance(ap, (list, tuple)) and len(ap) == 2 else (APERTURE_H, APERTURE_V)
+    except (TypeError, ValueError):
+        aw, ah = APERTURE_H, APERTURE_V
+    if not (aw > 0.1 and ah > 0.1):
+        aw, ah = APERTURE_H, APERTURE_V
+    res_w, res_h = _resolution(item)
+    ar = res_w / res_h
+    fit = lens.get("fit") if lens.get("fit") in ("fill", "horizontal", "vertical") else "fill"
+    if fit == "fill":
+        fit = "horizontal" if ar >= aw / ah else "vertical"
+    if fit == "horizontal":
+        return aw, aw / ar, lens
+    return ah * ar, ah, lens
 
 
 def _focal_to_fov(focal, vertical_aperture):
@@ -802,10 +823,23 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             # The film back takes the shape of the picture: the vertical
             # aperture (and so the vertical fov) stays put, and the horizontal
             # one follows the resolution's aspect.
-            res_w, res_h = _resolution(item)
-            cam.CreateHorizontalApertureAttr(APERTURE_V * res_w / res_h)
-            cam.CreateVerticalApertureAttr(APERTURE_V)
-            cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10000.0))
+            # Its lens (js/imageViewer_cameraLens.js): the film back met with the picture's shape, the lens
+            # shift as aperture offsets (shares of the picture -> millimetres), its clipping planes.
+            gw, gh, lens = camera_film(item)
+            cam.CreateHorizontalApertureAttr(gw)
+            cam.CreateVerticalApertureAttr(gh)
+            shift = lens.get("shift") if isinstance(lens.get("shift"), (list, tuple)) else [0, 0]
+            try:
+                sx, sy = float(shift[0]), float(shift[1])
+            except (TypeError, ValueError, IndexError):
+                sx = sy = 0.0
+            if sx:
+                cam.CreateHorizontalApertureOffsetAttr(sx * gw)
+            if sy:
+                cam.CreateVerticalApertureOffsetAttr(sy * gh)
+            near = float(lens.get("near") or 0) or 0.01
+            far = float(lens.get("far") or 0) or 10000.0
+            cam.CreateClippingRangeAttr(Gf.Vec2f(near, max(far, near * 1.001)))
             xformable = cam
         elif kind == "primitive":
             xformable = _define_shape(stage, prim_path, item)
@@ -874,7 +908,7 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             _set_xform(UsdGeom.Xformable(prim), pos,
                        item.get("rotation") or [0, 0, 0], item.get("scale") or [1, 1, 1])
             if kind == "camera":
-                UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35)))
+                UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35), camera_film(item)[1]))
         else:
             first, last = span
             focal_attr = UsdGeom.Camera(prim).CreateFocalLengthAttr() if kind == "camera" else None
@@ -887,7 +921,7 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
                            rot, scl,
                            time=Usd.TimeCode(frame))
                 if focal_attr is not None:
-                    focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame)), Usd.TimeCode(frame))
+                    focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame), camera_film(item)[1]), Usd.TimeCode(frame))
         if offset is not None:
             # Frozen transformations: a matrix under translate / rotate / scale,
             # which is exactly where scene3d's `offset` sits.

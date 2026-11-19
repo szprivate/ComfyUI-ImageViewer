@@ -102,7 +102,7 @@ export const PrevizAgentMatchmoveMixin = {
     _ammPanels() {
         if (!this.setPanelDocked) return;
         if (!(this.isPanelDocked && this.isPanelDocked("mmGuide"))) this.setPanelDocked("mmGuide", true);
-        if (!(this.isPanelDocked && this.isPanelDocked("mmPlate"))) {
+        if (!this._mmMain && !(this.isPanelDocked && this.isPanelDocked("mmPlate"))) {
             this.setPanelDocked("mmPlate", true);
             if (this.dockTabFront) this.dockTabFront("mmPlate");
         }

@@ -257,10 +257,16 @@ class FrameMaskBrowserTests(unittest.TestCase):
         self.assertNear(st["hole"]["h"], min(st["gate"]["h"], st["gate"]["w"] / 2.39), 2)
         self.shot(pg, "4-3d-gate.png")
 
-        # Split panes: no single picture to mask.
+        # Split panes: only the pane looking through the camera is masked, in its own gate.
         pg.evaluate("() => window.__panel._modelView().setPaneLayout('quad')")
-        pg.wait_for_timeout(200)
-        self.assertFalse(pg.evaluate(q3)["shown"])
+        pg.wait_for_timeout(300)
+        shown = pg.evaluate("""() => { const v = window.__panel._modelView();
+            return [...v.stage.querySelectorAll('.frame-mask-3d')].filter((e) => getComputedStyle(e).display !== 'none')
+                .map((e) => ({ camera: e.dataset.camera, w: e.getBoundingClientRect().width })); }""")
+        stage_w = pg.evaluate("() => window.__panel._modelView().stage.getBoundingClientRect().width")
+        self.assertEqual(len(shown), 1, shown)
+        self.assertTrue(shown[0]["camera"], shown)
+        self.assertLess(shown[0]["w"], stage_w / 2 + 2, shown)
         self.assertEqual(self.errors, [])
 
     def test_a_cuts_tab_in_the_edit_space_is_masked_too(self):

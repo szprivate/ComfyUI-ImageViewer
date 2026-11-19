@@ -26,6 +26,8 @@
 // traced last), the others draw raster.
 // Clean-room: written from how the layouts behave, no code from any program.
 
+import { cameraResolution } from "./imageViewer_scene3d.js";
+
 const KEY = "imageviewer.viewer.view3dPanes";
 
 export const PANE_VIEWS = [
@@ -511,8 +513,67 @@ export const View3DPanesMixin = {
             cam.top = half; cam.bottom = -half;
         } else {
             cam.aspect = aspect;
+            // Looking through a scene camera: its gate fitted inside the pane, the view a little wider
+            // around it (as the one view does, _applyLens), with the camera's lens shift and clipping.
+            const id = isPerspKind(kind) ? this.paneThroughId(kind) : null;
+            const entry = id && this._entries ? this._entries.get(id) : null;
+            if (entry && entry.camera === cam) {
+                const g = this._paneGateRect(entry.item, w, h);
+                const f = (this._renderGateFov ? this._renderGateFov(entry.item) : entry.item.fov) || 35;
+                cam.fov = 2 * Math.atan(Math.tan(f * Math.PI / 360) * (h / g.h)) * 180 / Math.PI;
+                this._lensProject(cam, entry.item, g.w / w, g.h / h);
+                return;
+            }
         }
         cam.updateProjectionMatrix();
+    },
+
+    /** A camera's gate inside a w x h pane (the shot's shape, as large as fits less the overscan), pane pixels. */
+    _paneGateRect(item, w, h) {
+        const [rw, rh] = cameraResolution(item);
+        const ar = rw / rh;
+        const OVERSCAN = 1.15;
+        const gh = Math.min(h, w / ar) / OVERSCAN;
+        const gw = gh * ar;
+        return { x: (w - gw) / 2, y: (h - gh) / 2, w: gw, h: gh };
+    },
+
+    /** Every pane looking through a scene camera, with its gate in the stage's pixels: [{x, y, w, h, id, slot}]. */
+    _paneGates() {
+        const out = [];
+        if (this._panePlain()) return out;
+        for (const p of this._paneRects()) {
+            if (p.w < 2 || p.h < 2 || !isPerspKind(p.kind)) continue;
+            const id = this.paneThroughId(p.kind);
+            const entry = id && this._entries ? this._entries.get(id) : null;
+            if (!entry || !entry.camera) continue;
+            const g = this._paneGateRect(entry.item, p.w, p.h);
+            out.push({ x: p.x + g.x, y: p.y + g.y, w: g.w, h: g.h, id, slot: p.slot });
+        }
+        return out;
+    },
+
+    /** Draw each pane's gate (frame, the shade around it, the camera's name and size) and tell the masks. */
+    _paneGateSync() {
+        const gates = this._paneGates();
+        const bySlot = new Map(gates.map((g) => [g.slot, g]));
+        for (const [slot, el] of Object.entries(this._paneEls || {})) {
+            if (!el.gate) continue;
+            const g = bySlot.get(Number(slot));
+            const box = this._paneRects().find((p) => p.slot === Number(slot));
+            if (!g || !box) { if (el.gate.style.display !== "none") el.gate.style.display = "none"; continue; }
+            const entry = this._entries.get(g.id);
+            const [rw, rh] = cameraResolution(entry.item);
+            const text = `${entry.item.name}  ${rw} × ${rh}`;
+            const sig = `${g.x - box.x}|${g.y - box.y}|${g.w}|${g.h}|${text}`;
+            el.gate.style.display = "";
+            if (el.gate._sig === sig) continue;
+            el.gate._sig = sig;
+            const px = (v) => `${Math.round(v)}px`;
+            Object.assign(el.gateFrame.style, { left: px(g.x - box.x), top: px(g.y - box.y), width: px(g.w), height: px(g.h) });
+            el.gateLabel.textContent = text;
+        }
+        this._gateTell(null);
     },
 
     // ── The active pane ──────────────────────────────────────────────────────
@@ -684,6 +745,7 @@ export const View3DPanesMixin = {
         const act = this._paneActiveBox();
         if (act) this._paneFitCam(this.activeCameraObject(), this.paneActiveKind(), act.w, act.h);
         this._paneGizmoFit(this.activeCameraObject(), act);
+        this._paneGateSync();
         return true;
     },
 
@@ -789,9 +851,19 @@ export const View3DPanesMixin = {
             const shade = d.createElement("span");
             shade.className = "model-pane-shade";
             shade.style.display = "none";
-            box.append(label, shade, axes.svg);
+            // The gate of a camera looked through in this pane (_paneGateSync).
+            const gate = d.createElement("div");
+            gate.className = "model-pane-gate";
+            gate.style.display = "none";
+            const gateFrame = d.createElement("div");
+            gateFrame.className = "model-pane-gateframe";
+            const gateLabel = d.createElement("div");
+            gateLabel.className = "model-gate-label";
+            gateFrame.append(gateLabel);
+            gate.append(gateFrame);
+            box.append(gate, label, shade, axes.svg);
             layer.append(box);
-            this._paneEls[p.slot] = { box, label, shade, axes };
+            this._paneEls[p.slot] = { box, label, shade, axes, gate, gateFrame, gateLabel };
         }
         const dividers = [];
         if (s.layout === "2h" || s.layout === "3" || s.layout === "quad") dividers.push("x");

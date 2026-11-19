@@ -638,6 +638,61 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.close()
 
 
+    def test_a_cameras_lens_and_mask_and_the_plate_in_the_main_view(self):
+        """A camera's Channel Box has its focal length, both fields of view, its film back, sensor fit, shift and
+        clipping, and a framing mask of its own: looked through, that mask is drawn in its gate (another camera
+        without one shows the viewer's). The Plate goes into the main view and back with Shift+P and its button."""
+        pg = self._page()
+        try:
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(400)
+            cam = pg.evaluate("""() => { const P = window.__panel; const c = P.previzAddCamera(); c.fov = 30;
+                P.previzSelect(c.id); P.previzChanged(); P._previzRenderChannels && P._previzRenderChannels();
+                return c.id; }""")
+            pg.wait_for_timeout(300)
+            rows = pg.evaluate("""() => [...window.__panel.container.querySelectorAll('#channels-panel .cb-row')].map((r) => r.dataset.ch)""")
+            for ch in ("focal", "fov", "hfov", "aperture.0", "aperture.1", "filmBack", "sensorFit", "shift.0", "clip.1", "mask"):
+                self.assertIn(ch, rows, rows)
+            # Typing a focal length writes the field of view; a new film back keeps the focal length.
+            out = pg.evaluate("""(id) => { const P = window.__panel; P.previzSetChannel('focal', 0, 50);
+                const c = P.previzScene().items.find((i) => i.id === id); const fov1 = c.fov;
+                P.previzSetCameraLens({ aperture: [24.89, 18.66] });
+                return { fov1, fov2: c.fov, lens: c.lens }; }""", cam)
+            self.assertAlmostEqual(out["fov1"], 2 * math.degrees(math.atan(36 * 9 / 16 / 2 / 50)), places=3)
+            self.assertAlmostEqual(out["fov2"], 2 * math.degrees(math.atan(24.89 * 9 / 16 / 2 / 50)), places=3)
+            self.assertEqual(out["lens"]["aperture"], [24.89, 18.66])
+            # Its own mask, drawn in its gate when looked through.
+            pg.evaluate("""(id) => { const P = window.__panel; P.previzSetCameraMask({ on: true, key: '2.39' });
+                P.previzLookThroughSet(id); }""", cam)
+            pg.wait_for_function("""(id) => [...window.__panel._model3d.stage.querySelectorAll('.frame-mask-3d')]
+                .some((e) => e.dataset.camera === id && e.style.display !== 'none' && e.dataset.ratio)""", arg=cam, timeout=10000)
+            ratio = pg.evaluate("""(id) => [...window.__panel._model3d.stage.querySelectorAll('.frame-mask-3d')]
+                .find((e) => e.dataset.camera === id).dataset.ratio""", cam)
+            self.assertAlmostEqual(float(ratio), 2.39, places=3)
+            self._shot(pg, "mm_camera_mask")
+
+            # The Plate in the main view, and back.
+            pg.evaluate("() => window.__panel.matchmovePlateMain(true)")
+            st = pg.evaluate("""() => { const P = window.__panel; const h = P.dockViewBody.querySelector(':scope > .mm-main-host');
+                return { host: !!h, plate: !!(h && h.querySelector('.mm-plate')), panel: P.isPanelDocked('mmPlate'),
+                         label: P._mmUI.main.textContent }; }""")
+            self.assertEqual(st, {"host": True, "plate": True, "panel": False, "label": "Back to 3D"}, st)
+            self._shot(pg, "mm_plate_main")
+            pg.evaluate("() => window.__panel._mmUI.main.click()")
+            st = pg.evaluate("""() => { const P = window.__panel;
+                return { host: !!P.dockViewBody.querySelector(':scope > .mm-main-host'), panel: P.isPanelDocked('mmPlate'),
+                         inPanel: P.mmPlatePanel.contains(P._mmUI.root) }; }""")
+            self.assertEqual(st, {"host": False, "panel": True, "inPanel": True}, st)
+            # Shift+P over the viewer switches too.
+            box = pg.evaluate("() => { const r = window.__panel._model3d.stage.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+            pg.mouse.move(*box)
+            pg.keyboard.press("Shift+P")
+            pg.wait_for_timeout(200)
+            self.assertTrue(pg.evaluate("() => !!window.__panel._mmMain"))
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_measurements_lasso_select_and_the_lens_chart(self):
         """Tracks picked with a lasso in the Plate panel (Ctrl takes away), two real distances measured from the
         guide: the solve comes back in metres with a third distance right; the built locators lassoed in the 3D view;

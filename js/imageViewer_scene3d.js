@@ -78,6 +78,7 @@ import { readItemRef, readSceneLayers } from "./imageViewer_sceneLayers.js";
 import { pruneConstraints, readConstraints, readWeightStatic, writeWeightStatic } from "./imageViewer_constraintData.js";
 import { readDrivers } from "./imageViewer_rigDrivers.js";
 import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.js";
+import { cleanCameraMask, cleanLens } from "./imageViewer_cameraLens.js";
 import { readUsdFields } from "./imageViewer_usdData.js";
 
 export const SCENE_VERSION = 1;
@@ -1325,6 +1326,11 @@ export function parseScene(raw) {
             // Its look-at target, off unless switched on (imageViewer_cameraAim.js).
             const aim = readAim(raw.aim);
             if (aim) item.aim = aim;
+            // Its film back and lens (imageViewer_cameraLens.js) and its own framing mask; absent = the defaults.
+            const lens = cleanLens(raw.lens);
+            if (lens) item.lens = lens;
+            const mask = cleanCameraMask(raw.mask);
+            if (mask) item.mask = mask;
         } else if (offsetOf(raw)) {
             item.offset = offsetOf(raw);
         }

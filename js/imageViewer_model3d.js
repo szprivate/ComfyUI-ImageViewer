@@ -14,6 +14,7 @@
 //
 // Rendering is on demand. A still model costs nothing once drawn; the loop only
 // runs while the camera is settling or an animation plays.
+import { lensSettings, shiftTerms } from "./imageViewer_cameraLens.js";
 import { api } from "../../scripts/api.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { app } from "../../scripts/app.js";
@@ -2033,8 +2034,29 @@ export class Model3DView {
             cam.fov = f;
             cam.aspect = rw / rh;
         }
-        cam.updateProjectionMatrix();
+        if (active) {
+            const g = this._gateRect(item);
+            this._lensProject(cam, item, g.w / g.vw, g.h / g.vh);
+        } else this._lensProject(cam, item, 1, 1);
         if (entry.helper) entry.helper.update();
+    }
+
+    /**
+     * A scene camera's projection from its lens (imageViewer_cameraLens.js): its clipping planes when it
+     * sets them, then the lens shift - the picture moved across the film back, `fx` x `fy` being the
+     * share of the view the picture takes (the gate's, looking through it with overscan). Call it in
+     * place of updateProjectionMatrix for a scene camera.
+     */
+    _lensProject(cam, item, fx = 1, fy = 1) {
+        const lens = item && item.kind === "camera" ? lensSettings(item) : null;
+        if (lens && lens.near > 0) cam.near = lens.near;
+        if (lens && lens.far > 0) cam.far = lens.far;
+        cam.updateProjectionMatrix();
+        if (!lens || (!lens.shift[0] && !lens.shift[1])) return;
+        const [a, b] = shiftTerms(lens.shift, fx, fy);
+        cam.projectionMatrix.elements[8] += a;
+        cam.projectionMatrix.elements[9] += b;
+        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
     }
 
     /** Show the gate while looking through a camera, and only then. */
@@ -2068,17 +2090,20 @@ export class Model3DView {
     /**
      * Tell the panel what a framing mask (imageViewer_frameMasks.js) masks: the
      * gate `g` while looking through a camera, else the whole stage with one
-     * view on it, else (split panes) nothing.
+     * view on it, else (split panes) the gate of each pane looking through a
+     * camera. Each rectangle names its camera, whose own mask goes there.
      */
     _gateTell(g) {
         if (!this.hooks.onGate) return;
-        let r = null;
-        if (g) r = { x: g.x, y: g.y, w: g.w, h: g.h };
-        else if (this.stage && this._panePlain()) r = { x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight };
-        const sig = r ? `${r.x}|${r.y}|${r.w}|${r.h}` : "";
+        let list = [];
+        if (g) list = [{ x: g.x, y: g.y, w: g.w, h: g.h, id: this._throughCam() || null }];
+        else if (this.stage && this._panePlain()) list = [{ x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight, id: null }];
+        // Split views: the gate of each view looking through a camera (imageViewer_view3dPanes.js).
+        else if (this._paneGates) list = this._paneGates();
+        const sig = list.map((r) => `${r.x}|${r.y}|${r.w}|${r.h}|${r.id}`).join(";");
         if (sig === this._gateTellSig) return;
         this._gateTellSig = sig;
-        this.hooks.onGate(r);
+        this.hooks.onGate(list);
     }
 
     // ── The pivot ────────────────────────────────────────────────────────────
@@ -2771,7 +2796,7 @@ export class Model3DView {
         // A scene camera renders its gate: its own fov, not the overscanned
         // one the viewport shows around it.
         if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        cam.updateProjectionMatrix();
+        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
         // Rendered as the viewport draws it: bloom and tone mapping included.
         this._worldResize(W, H);
         this._worldRender(cam);
@@ -2808,7 +2833,7 @@ export class Model3DView {
         const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
         cam.aspect = W / H;
         if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        cam.updateProjectionMatrix();
+        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
 
         // A world shown as points is measured by its meshes.
         const atlasBack = this._atlasDepthBegin();

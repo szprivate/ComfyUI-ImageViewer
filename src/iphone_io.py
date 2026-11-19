@@ -1050,7 +1050,13 @@ def film_facts(path):
         info = read_film(path)
     except (PhoneError, OSError, struct.error, ValueError, IndexError) as e:
         return {"_error": str(e)}
-    keys = info["keys"]
+    # The movie's own keys, then the picture track's: a newer iOS writes the lens there (an iPhone 14 on
+    # iOS 26 did: lens_model and the 35 mm focal length on track 1 only).
+    keys = dict(info["keys"])
+    for t in info.get("tracks") or []:
+        if t.get("role") == "picture":
+            for k, v in (t.get("meta") or {}).items():
+                keys.setdefault(k, v)
     ud = info["udta"]
     out = {}
 
