@@ -679,7 +679,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         return p if path_access.within(p, base) else None
 
     async def matte_workflows_route(request):
-        """POST {engine: objects | background} -> {engine, action, workflows, choice}."""
+        """POST {engine: objects | background | depth} -> {engine, action, workflows, choice}."""
         from . import matchmove_matte as MT
         body = await body_of(request)
         try:
@@ -745,6 +745,42 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             return err(e)
         return web.json_response(res)
 
+    async def depth_place_route(request):
+        """POST {run, images {frame: {filename, subfolder, type}}, cams {frame: {R, t}}, tracks {frame: [[u, v, X0,
+        X1, X2]]}, focal, center?, lens?} -> the depth job's frames as points of the solve's world
+        (``matchmove_matte.depth_points``)."""
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        images = body.get("images") if isinstance(body.get("images"), dict) else {}
+        cams = body.get("cams") if isinstance(body.get("cams"), dict) else {}
+        tracks = body.get("tracks") if isinstance(body.get("tracks"), dict) else {}
+        try:
+            focal = float(body.get("focal"))
+        except (TypeError, ValueError):
+            return err("'focal' (the solve's focal length in pixels) is needed")
+        if not focal > 0:
+            return err("'focal' must be above 0")
+        center = body.get("center")
+        center = [float(center[0]), float(center[1])] if isinstance(center, list) and len(center) == 2 else None
+        lens = body.get("lens") if isinstance(body.get("lens"), dict) else None
+        found = {}
+        for f, img in list(images.items())[:MT.MAX_FRAMES]:
+            q = output_ref(img)
+            if q and os.path.isfile(q) and path_access.may_serve(q):
+                try:
+                    found[int(f)] = q
+                except ValueError:
+                    continue
+        if not found:
+            return err("the workflow's depth maps were not found", 404)
+        tracks = {k: v[:5000] for k, v in tracks.items() if isinstance(v, list)}
+        try:
+            res = await off(MT.depth_points, str(body.get("run") or ""), found, cams, tracks,
+                            focal=focal, center=center, lens=lens)
+        except (MT.MatteError, ValueError, OSError, TypeError) as e:
+            return err(e)
+        return web.json_response(res)
+
     async def matte_sample_route(request):
         """POST {matte, points {frame: [[id, x, y], ...]}} -> {votes {id: [on, seen]}}."""
         from . import matchmove_matte as MT
@@ -766,6 +802,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         add("POST", f"{prefix}/mm_matte", matte_route)
         add("POST", f"{prefix}/mm_matte_place", matte_place_route)
         add("POST", f"{prefix}/mm_matte_sample", matte_sample_route)
+        add("POST", f"{prefix}/mm_depth_place", depth_place_route)
         add("GET", f"{prefix}/mm_plate", plate_route)
         add("GET", f"{prefix}/mm_frame", frame_route)
         add("GET", f"{prefix}/mm_job", job_route)

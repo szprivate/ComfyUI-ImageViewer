@@ -6,6 +6,9 @@
 //                 above it), or among the tracks inside a shape drawn round the floor on the plate (the Ground
 //                 tool), or among the tracks SAM 3 sees on "the ground" on a few frames (AI); then raised, lowered
 //                 or flipped by hand. Each is one undo step of the matchmove and moves the built Matchmove group.
+//                 Or from depth: a depth model (Depth Anything 3) on a few frames, each frame's depth scaled onto
+//                 the solved tracks and put into the solve's world (POST mm_depth_place), so a floor with no
+//                 tracks on it is still there; the Metric model also says how big a scene unit is in metres.
 //   AI masks    - a matte over the whole shot from a ComfyUI workflow, ONE job for every frame asked for
 //                 (POST /imageviewer/mm_matte, the server's matchmove_matte.py): SAM 3 by words, or a background
 //                 remover. The mattes become a mask the tracker keeps features off (or gives to an object).
@@ -127,9 +130,7 @@ export const PrevizMatchmoveAIMixin = {
         const st = this._mmCur();
         if (!st || !st.mm.solve) throw new Error("Solve the camera first.");
         const prompt = String(words || st.groundPrompt || "ground").trim() || "ground";
-        const solvedFrames = Object.keys(st.mm.solve.frames).map(Number).sort((a, b) => a - b);
-        const n = Math.min(AI_GROUND_FRAMES, solvedFrames.length);
-        const frames = [...new Set(Array.from({ length: n }, (_, i) => solvedFrames[Math.round((i * (solvedFrames.length - 1)) / Math.max(1, n - 1))]))];
+        const frames = this._mmSpreadFrames(st, AI_GROUND_FRAMES);
         const matte = await this._mmMatteRun(st, { engine: "objects", prompt, frames, what: `Looking for "${prompt}"`, ask });
         if (!matte) return null;
         const solved = new Set(st.mm.solve.points.map((q) => q.id));
@@ -151,6 +152,57 @@ export const PrevizMatchmoveAIMixin = {
         return this.matchmoveGroundFind({ ids, how: "ai" });
     },
 
+    /** n solved frames spread evenly over the solve. */
+    _mmSpreadFrames(st, n) {
+        const solved = Object.keys(st.mm.solve.frames).map(Number).sort((a, b) => a - b);
+        const k = Math.min(n, solved.length);
+        return [...new Set(Array.from({ length: k }, (_, i) => solved[Math.round((i * (solved.length - 1)) / Math.max(1, k - 1))]))];
+    },
+
+    /**
+     * The ground from depth: a depth model on a few frames of the solve (one job), each frame's depth scaled onto
+     * its solved tracks and taken into the solve's world as points; findGround among them (the cameras above) and
+     * the world set on it. With a metric model and `metres`, the world is also scaled so a unit is a metre.
+     * Answers findGround's result with {metres, height} (or {error}, or null when not run).
+     */
+    async matchmoveGroundDepth({ workflow = null, metres = true, ask = true } = {}) {
+        const st = this._mmCur();
+        if (!st || !st.mm.solve) throw new Error("Solve the camera first.");
+        const sv = st.mm.solve;
+        const frames = this._mmSpreadFrames(st, AI_GROUND_FRAMES);
+        const solved = new Map(sv.points.map((q) => [q.id, q.X]));
+        const cams = {}, tracks = {};
+        for (const f of frames) {
+            cams[f] = { R: sv.frames[f].R, t: sv.frames[f].t };
+            tracks[f] = st.mm.tracks.filter((t) => solved.has(t.id))
+                .map((t) => { const k = D.keyAt(t, f); return k ? [k[1], k[2], ...solved.get(t.id)] : null; }).filter(Boolean);
+        }
+        const got = await this._mmMatteRun(st, { engine: "depth", frames, workflow, what: "Reading depth", ask,
+            place: { url: "/imageviewer/mm_depth_place", body: { cams, tracks, focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null } } });
+        if (!got) return null;
+        const pts = got.points.map((X, i) => ({ id: `d${i}`, p: D.pointToScene(X) }));
+        const g = D.findGround(pts, D.groundCameras(sv), { tol: (st.groundTol || 1.5) / 100, maxTilt: 40 });
+        if (g.error) {
+            st.groundInfo = { how: "depth", error: g.error };
+            notice("warn", "No ground in the depth", g.error);
+            this._mmRender();
+            return g;
+        }
+        const mpu = metres && got.metric && got.metres_per_unit > 0 ? got.metres_per_unit : null;
+        const base = mpu ? { R: st.mm.orient.R.slice(), t: st.mm.orient.t.slice(), s: mpu } : st.mm.orient;
+        const o = D.orientFound(base, g, pts);
+        if (o.error) { notice("warn", "Not oriented", o.error); return o; }
+        this._mmApplyOrient(st, o, mpu ? "ground and metres from depth" : "ground from depth");
+        const heights = frames.map((f) => D.orientApply(st.mm.orient, D.cameraToItem(sv.frames[f].R, sv.frames[f].t).position)[1]).sort((a, b) => a - b);
+        const height = heights[heights.length >> 1];
+        st.groundInfo = { how: "depth", count: g.count, of: pts.length, tilt: g.tilt, below: g.below, rms: g.rms, size: g.size, ids: [],
+                          metres: mpu, metric: !!got.metric, height, model: got.workflow, frames: got.frames.length };
+        if (got.skipped && got.skipped.length) notice("info", `${got.skipped.length} frame(s) left out`, got.skipped.map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
+        this._mmRender();
+        this._mmDraw();
+        return { ...g, metres: mpu, height };
+    },
+
     /** The Scene step's ground section (after Build). */
     _mmGroundSection(ctx) {
         const { st, doc } = ctx;
@@ -166,11 +218,32 @@ export const PrevizMatchmoveAIMixin = {
         words.style.width = "90px";
         words.onchange = () => { st.groundPrompt = words.value; };
         this._mmRow(ctx, "", this._mmBtn(ctx, "Find with AI", () => this.matchmoveGroundAI(words.value), { title: "SAM 3 looks for these words on a few frames; the tracks on it are the ground's" }), words);
+        const dl = this._mmMatteLists && this._mmMatteLists.get("depth");
+        if (!dl) this._mmMatteList("depth").then(() => this._mmRender()).catch(() => {});
+        else if (dl.workflows.length) {
+            const dw = st.depthWorkflow && dl.workflows.some((w) => w.id === st.depthWorkflow) ? st.depthWorkflow : dl.choice;
+            const pick = this._mmSelect(ctx, dl.workflows.map((w) => [w.id, `${w.label.replace(/\s*\(.*\)$/, "")}${(w.missing || []).some((m) => m.kind !== "node") ? " (downloads)" : ""}`]),
+                                        dw, (v) => { st.depthWorkflow = v; this._mmRender(); });
+            pick.style.maxWidth = "150px";
+            const m = el(doc, "input");
+            m.type = "checkbox";
+            m.checked = st.depthMetres !== false;
+            m.disabled = dw !== "comp_da3_metric";
+            m.onchange = () => { st.depthMetres = m.checked; };
+            m.title = "Scale the world so one unit is one metre (the Metric model only)";
+            this._mmRow(ctx, "", this._mmBtn(ctx, "Find with depth", () => this.matchmoveGroundDepth({ workflow: dw, metres: m.checked }),
+                                             { title: "A depth model on a few frames: the floor is found in its depth, even where there are no tracks" }),
+                        pick, m, el(doc, "span", "", "metres"));
+        } else this._mmNote(ctx, "Find with depth needs ComfyUI's Depth Anything 3 nodes (a recent ComfyUI).");
         const gi = st.groundInfo;
         if (gi && gi.error) this._mmNote(ctx, gi.error, "warn");
         else if (gi) {
             const by = { auto: "found among all points", region: "inside the drawn shape", ai: "on what SAM 3 took for the ground" }[gi.how] || "";
-            this._mmNote(ctx, `Ground from ${gi.count} of ${gi.of} points (${by}), ${gi.tilt.toFixed(1)}° off level for the cameras${gi.below ? `, ${gi.below} point(s) below it` : ""}. They are picked in the Plate panel: unpick strays and use "Ground from picked".`,
+            if (gi.how === "depth") {
+                const h = gi.metres ? `${gi.height.toFixed(2)} m` : `${gi.height.toFixed(2)} units`;
+                this._mmNote(ctx, `Ground from the depth of ${gi.frames} frame(s): ${gi.count} of ${gi.of} depth points, ${gi.tilt.toFixed(1)}° off level for the cameras. The camera is ${h} above it${gi.metres ? `; one unit is a metre (a solve unit was ${gi.metres.toFixed(3)} m)` : ""}.`,
+                             gi.tilt > 15 || gi.height <= 0 ? "warn" : "");
+            } else this._mmNote(ctx, `Ground from ${gi.count} of ${gi.of} points (${by}), ${gi.tilt.toFixed(1)}° off level for the cameras${gi.below ? `, ${gi.below} point(s) below it` : ""}. They are picked in the Plate panel: unpick strays and use "Ground from picked".`,
                          gi.tilt > 15 ? "warn" : "");
         }
         const step = this._mmNum(ctx, st.liftStep || 0.1, (v) => { st.liftStep = v > 0 ? v : 0.1; }, { width: "52px", min: 0 });
@@ -246,12 +319,12 @@ export const PrevizMatchmoveAIMixin = {
      * One AI matte job over `frames` of the plate: {pattern, frames, width, height, covered, ...} or null when not
      * run (models not fetched, stopped before anything came). Shows as the guide's busy line, Stop stops it.
      */
-    async _mmMatteRun(st, { engine, prompt = "", frames, workflow = null, what = "AI mask", ask = true }) {
+    async _mmMatteRun(st, { engine, prompt = "", frames, workflow = null, what = "AI mask", ask = true, place = null }) {
         if (st.busy) throw new Error("Something runs already.");
         const mm = st.mm;
         const list = await this._mmMatteList(engine);
         const wid = workflow && list.workflows.some((w) => w.id === workflow) ? workflow : list.choice;
-        if (!wid) throw new Error(engine === "objects" ? "SAM 3 is not in this ComfyUI (its SAM3 nodes are needed)." : "No background remover is installed in this ComfyUI.");
+        if (!wid) throw new Error({ objects: "SAM 3 is not in this ComfyUI (its SAM3 nodes are needed).", depth: "Depth Anything 3 is not in this ComfyUI (a recent ComfyUI has its nodes)." }[engine] || "No background remover is installed in this ComfyUI.");
         const item = list.workflows.find((w) => w.id === wid);
         const busy = st.busy = { what, done: 0, total: frames.length, stop: null, stopped: false };
         this._mmRender();
@@ -278,7 +351,7 @@ export const PrevizMatchmoveAIMixin = {
                 images = e.images;                         // stopped part way: keep what came
                 notice("info", "Stopped", `${Object.keys(images).length} of ${prep.frames.length} frame(s) came back.`);
             }
-            const placed = await post("/imageviewer/mm_matte_place", { run: prep.run, images });
+            const placed = await post(place ? place.url : "/imageviewer/mm_matte_place", { ...(place ? place.body : {}), run: prep.run, images });
             if (prep.skipped && prep.skipped.length) notice("warn", `${prep.skipped.length} frame(s) left out`, prep.skipped.slice(0, 3).map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
             return { ...placed, workflow: wid, engine, prompt };
         } catch (e) {

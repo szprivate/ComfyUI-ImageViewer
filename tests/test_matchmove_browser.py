@@ -46,6 +46,46 @@ def _free_port():
         return s.getsockname()[1]
 
 
+def plate_scene():
+    """The plate's dots and, per frame, its camera (R, C): pc = R (X - C)."""
+    rng = np.random.default_rng(7)
+    X = np.c_[rng.uniform(-9, 9, 700), rng.uniform(-4, 4, 700), rng.uniform(7, 22, 700)]
+    fl = np.random.default_rng(11)
+    X = np.r_[X, np.c_[fl.uniform(-10, 10, 260), np.full(260, FLOOR_Y), fl.uniform(14, 32, 260)]]
+    cams = []
+    for f in range(N):
+        a = f / N
+        ang = 0.12 * a
+        R = np.array([[math.cos(ang), 0, -math.sin(ang)], [0, 1, 0], [math.sin(ang), 0, math.cos(ang)]])
+        cams.append((R, np.array([2.2 * a, 0.25 * math.sin(a * 4), 0.6 * a])))
+    return X, cams
+
+
+def render_depth(folder, pkg, metres_per_unit=0.5):
+    """What a metric depth model would say of the plate: z-depth in metres - the floor, each dot as a disc of its
+    own depth, far away above the floor: depth.<frame>.exr (32-bit float, as ComfyUI saves them)."""
+    import importlib
+    CW = importlib.import_module(pkg + ".comp_write")
+    X, cams = plate_scene()
+    os.makedirs(folder, exist_ok=True)
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float64) + 0.5
+    dy = (yy - H / 2) / F
+    for f, (R, C) in enumerate(cams):
+        z = np.where(dy > 1e-3, (FLOOR_Y - C[1]) / np.maximum(dy, 1e-9), 80.0).clip(0, 80.0)
+        pc = (X - C) @ R.T
+        for x, y, zz in pc:
+            if zz <= 0.5:
+                continue
+            u, v = F * x / zz + W / 2, F * y / zz + H / 2
+            x0, x1, y0, y1 = int(max(0, u - 4)), int(min(W, u + 5)), int(max(0, v - 4)), int(min(H, v + 5))
+            if x1 <= x0 or y1 <= y0:
+                continue
+            z[y0:y1, x0:x1] = np.minimum(z[y0:y1, x0:x1], zz)
+        d = (z * metres_per_unit).astype(np.float32)
+        with open(os.path.join(folder, f"depth.{f}.exr"), "wb") as fh:
+            fh.write(CW.exr_bytes({"R": d, "G": d, "B": d}, depth="float", compression="none"))
+
+
 def render_plate(folder):
     """N frames of 700 dots in space and 260 on a floor below them, seen by a camera that slides right and turns a little: plate.####.png."""
     from PIL import Image
@@ -342,10 +382,10 @@ class MatchmoveBrowserTests(unittest.TestCase):
         for f in range(N):
             Image.fromarray((white(f, yy, xx) * 255).astype(np.uint8)).save(os.path.join(d, f"{name}.{f}.png"))
 
-    def _fake_comfy(self, pg, name):
+    def _fake_comfy(self, pg, name, ext="png", sub="fakematte"):
         """The page's road to ComfyUI stood in for: no model check, SAM 3's canvas graph a small prompt, the queue a
         promise and every frame's picture one of _fake_mattes'."""
-        pg.evaluate("""(name) => {
+        pg.evaluate("""([name, ext, sub]) => {
             const P = window.__panel;
             P._mmModelsReady = async () => true;
             P._paintPrompt = async (item) => item.format !== 'ui' ? null : {
@@ -356,8 +396,8 @@ class MatchmoveBrowserTests(unittest.TestCase):
                 '5': { class_type: 'SaveImage', inputs: { images: ['4', 0], filename_prefix: 'x' }, _meta: { title: 'paint:output' } } };
             P._paintQueue = async (graph) => { window.__queued = graph; return 'p1'; };
             P._cpAiWaitAll = async (pid, outputs) => Object.fromEntries(Object.keys(outputs).map((f) =>
-                [f, { filename: `${name}.${f}.png`, subfolder: 'fakematte', type: 'output' }]));
-        }""", name)
+                [f, { filename: `${name}.${f}.${ext}`, subfolder: sub, type: 'output' }]));
+        }""", [name, ext, sub])
 
     def test_the_agent_tracks_solves_and_builds_through_its_actions(self):
         """The agent's road: previzRigAgentRun (what /imageviewer/rig/agent sends the page) with matchmove_* actions,
@@ -463,6 +503,22 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertLess(r["result"]["ground"]["tilt"], 3, r)
             self.assertEqual(self._heights(pg), {"on_floor": True, "above": True})
             self.assertEqual(pg.evaluate("() => window.__panel._mmCur().groundInfo.how"), "ai")
+            # The ground from depth (Depth Anything 3 Metric, stood in): level, and in metres - the camera was 4.6
+            # plate units above the floor, and a plate unit is half a metre here.
+            render_depth(os.path.join(self.dirs["output"], "fakedepth"), self.pkg)
+            self._fake_comfy(pg, "depth", "exr", "fakedepth")
+            G = sys.modules[self.pkg + ".paint_generate"]
+            real, G.missing = G.missing, lambda g, fp, nc: []                  # its model "is here"
+            try:
+                r = ask("matchmove_ground", {"how": "depth"})
+            finally:
+                G.missing = real
+            self.assertEqual(r["state"], "done", r)
+            g = r["result"]["ground"]
+            self.assertTrue(g["in_metres"], g)
+            self.assertLess(g["tilt"], 3, g)
+            self.assertAlmostEqual(g["camera_height"], 4.6 * 0.5, delta=0.15)
+            self.assertGreater(g["points"], 1000, g)
             # A mask over the whole shot from a background remover: a box on the left, frame by frame.
             self._fake_mattes("left", lambda f, y, x: x < 120)
             self._fake_comfy(pg, "left")
