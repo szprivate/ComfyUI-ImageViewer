@@ -65,7 +65,7 @@ export const View3DToolsMixin = {
     _dispHidden() {
         if (!this._dispOff) {
             let saved = null;
-            try { saved = JSON.parse(this.win.localStorage.getItem(STORE) || "null"); } catch (_) { saved = null; }
+            try { saved = JSON.parse(this.win.localStorage.getItem(STORE + ((this.hooks && this.hooks.storeSuffix) || "")) || "null"); } catch (_) { saved = null; }
             this._dispOff = new Set(Array.isArray(saved && saved.off) ? saved.off : []);
             this._dispXray = !!(saved && saved.xray);
         }
@@ -74,7 +74,7 @@ export const View3DToolsMixin = {
 
     _dispSave() {
         try {
-            this.win.localStorage.setItem(STORE, JSON.stringify({ off: [...this._dispHidden()], xray: !!this._dispXray }));
+            this.win.localStorage.setItem(STORE + ((this.hooks && this.hooks.storeSuffix) || ""), JSON.stringify({ off: [...this._dispHidden()], xray: !!this._dispXray }));
         } catch (_) { /* private window: kept for this page only */ }
     },
 

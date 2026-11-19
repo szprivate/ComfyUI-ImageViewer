@@ -55,6 +55,8 @@ const GROUPS = [
         { label: "Agent code", run: (p) => p.codeBarOpen(), checked: (p) => !!(p.isViewTab && p.vtKindOf() === "code") },
         { label: "Dataset", run: (p) => p.loraBarOpen(), checked: (p) => !!(p.isViewTab && p.vtKindOf() === "dataset") },
         { label: "agentY", panel: "agentChat" },
+        // Another open tab beside the picture (imageViewer_view2.js).
+        { label: "Second view", panel: "view2" },
     ] },
     { id: "3d", title: "3D", icon: "box", items: [
         { label: "Open 3D\u2026", run: (p) => p.spaceOpen("3d"), checked: (p) => !!(p.isPrevizTab && p.isPrevizTab()) },
@@ -240,7 +242,8 @@ export const BarGroupsMixin = {
         };
         const in3d = !!(this.isPrevizTab && this.isPrevizTab());
         add("Viewer", [{ id: "history", label: "History" }, { id: "browser", label: "Files" },
-                       { id: "params", label: in3d ? "Channel Box" : "Parameters" }, { id: "agentChat", label: "agentY" }]);
+                       { id: "params", label: in3d ? "Channel Box" : "Parameters" }, { id: "agentChat", label: "agentY" },
+                       { id: "view2", label: "Second view" }]);
         for (const g of GROUPS) {
             if (g.id === "comfy") continue;
             add(g.title, g.items.filter((it) => it.panel && this._barGroupCan(it)

@@ -905,9 +905,19 @@ export class Model3DView {
     }
 
     /** The perspective view's camera: a scene camera looked through, or the free one. */
+    /**
+     * The scene camera the main perspective looks through: the scene's own, unless the hooks
+     * choose one (a second view of the same scene looks through its own, imageViewer_view2.js).
+     */
+    _throughCam() {
+        if (!this.scene3d) return null;
+        if (this.hooks.perspThrough) return this.hooks.perspThrough(this.scene3d) || null;
+        return this.scene3d.activeCamera || null;
+    }
+
     _perspCameraObject() {
         if (this._walk) return this.camera;
-        const id = this.scene3d && this.scene3d.activeCamera;
+        const id = this._throughCam();
         const entry = id ? this._entries.get(id) : null;
         return (entry && entry.camera) || this.camera;
     }
@@ -1857,7 +1867,7 @@ export class Model3DView {
         this._syncControlsCamera();
         const { THREE } = this.libs;
         const D = Math.PI / 180;
-        const activeId = this.scene3d.activeCamera;
+        const activeId = this._throughCam();
         const fps = this.scene3d.fps || 24;
         // Display layers (imageViewer_sceneLayers.js): hidden, template, reference.
         const layers = displayStates(this.scene3d);
@@ -2012,7 +2022,7 @@ export class Model3DView {
         if (!cam || this._sizeBackup) return;
         const item = entry.item;
         const f = fov || 35;
-        const active = this.scene3d && this.scene3d.activeCamera === item.id;
+        const active = this._throughCam() === item.id;
         if (active) {
             const g = this._gateRect(item);
             const half = Math.tan((f * Math.PI / 180) / 2) * (g.vh / g.h);
@@ -2031,7 +2041,7 @@ export class Model3DView {
     _syncGate() {
         const ui = this.ui;
         if (!ui || !ui.gate) return;
-        const id = this.scene3d && this.scene3d.activeCamera;
+        const id = this._throughCam();
         const entry = id && !this._walk ? this._entries.get(id) : null;
         // The gate is drawn over the whole stage: only with one perspective view on it.
         if (!entry || !entry.camera || !this._panePlain()) {
@@ -2508,7 +2518,7 @@ export class Model3DView {
         this.gizmo.camera = this.activeCameraObject();
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
-        if (entry.item.kind === "camera" && entry.item.id === this.scene3d.activeCamera) this.gizmo.detach();
+        if (entry.item.kind === "camera" && entry.item.id === this._throughCam()) this.gizmo.detach();
         else if (this.gizmoMode === "select") this.gizmo.detach();
         else if (this.pivotMode && entry.body) {
             // A stand-in at the pivot point: dragging the item's own root would

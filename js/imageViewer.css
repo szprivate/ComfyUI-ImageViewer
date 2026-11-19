@@ -2951,3 +2951,23 @@ audio.src-media { width: 90%; }
 .fm-livecell { width: 168px; display: flex; flex-direction: column; gap: 3px; }
 .fm-live.small .fm-live-img { height: 96px; max-height: 96px; object-fit: cover; }
 .fm-livecap { color: #999; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* The second view (imageViewer_view2.js): another open tab - a 3D scene, a picture - in a panel. */
+.view2-panel {
+    width: 300px; min-width: 240px; flex-shrink: 0;
+    background: #111; border: 1px solid #333; border-radius: 6px;
+    display: flex; flex-direction: column; position: relative; z-index: 20;
+    box-sizing: border-box; overflow: hidden;
+    color: #ddd; font-family: sans-serif; font-size: 12px; cursor: default;
+}
+.v2-root { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.v2-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: 1px solid #2a2a2a; min-width: 0; }
+.v2-bar select { min-width: 0; max-width: 50%; background: #1b1b1b; color: #ddd; border: 1px solid #3a3a3a; border-radius: 4px; font-size: 11px; padding: 2px 4px; }
+.v2-info { margin-left: auto; color: #888; font-size: 11px; white-space: nowrap; }
+.v2-stage { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1a1a1a; }
+.v2-stage > .model-view { z-index: 1; }
+.v2-pic { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.v2-pic > img, .v2-pic > video { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+.v2-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; text-align: center; color: #777; }
+/* It edits nothing: no gizmo tools there. */
+.v2-stage .model-toolcol { display: none; }
