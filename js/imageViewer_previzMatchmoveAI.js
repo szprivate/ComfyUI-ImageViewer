@@ -185,6 +185,13 @@ export const PrevizMatchmoveAIMixin = {
             scale: scale === null ? workScale(st.groundScale) : workScale(scale),
             place: { url: "/imageviewer/mm_depth_place", body: { cams, tracks, focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null, pixel_aspect: sv.pixel_aspect || 1 } } });
         if (!got) return null;
+        return this._mmGroundFromDepth(st, got, frames, metres);
+    },
+
+    /** The depth points of a solve (an answer of mm_depth_place / mm_phone_depth) -> the ground found among them
+     * and the world set on it. */
+    _mmGroundFromDepth(st, got, frames, metres) {
+        const sv = st.mm.solve;
         const pts = got.points.map((X, i) => ({ id: `d${i}`, p: D.pointToScene(X) }));
         const g = D.findGround(pts, D.groundCameras(sv), { tol: (st.groundTol || 1.5) / 100, maxTilt: 40 });
         if (g.error) {
@@ -201,11 +208,40 @@ export const PrevizMatchmoveAIMixin = {
         const heights = frames.map((f) => D.orientApply(st.mm.orient, D.cameraToItem(sv.frames[f].R, sv.frames[f].t).position)[1]).sort((a, b) => a - b);
         const height = heights[heights.length >> 1];
         st.groundInfo = { how: "depth", count: g.count, of: pts.length, tilt: g.tilt, below: g.below, rms: g.rms, size: g.size, ids: [],
-                          metres: mpu, metric: !!got.metric, height, model: got.workflow, frames: got.frames.length };
+                          metres: mpu, metric: !!got.metric, height, model: got.workflow, frames: got.frames.length, reading: got.reading || null };
         if (got.skipped && got.skipped.length) notice("info", `${got.skipped.length} frame(s) left out`, got.skipped.map((x) => `frame ${x.frame}: ${x.why}`).join("; "));
         this._mmRender();
         this._mmDraw();
         return { ...g, metres: mpu, height };
+    },
+
+    /**
+     * The ground from the phone's own depth: a Cinematic iPhone film carries a depth track, read on a few frames
+     * of the solve and placed as Find with depth places a model's (no model, no ComfyUI job). Its units are not
+     * known, so the world is not scaled to metres.
+     */
+    async matchmoveGroundPhone() {
+        const st = this._mmCur();
+        if (!st || !st.mm.solve) throw new Error("Solve the camera first.");
+        const sv = st.mm.solve;
+        const frames = this._mmSpreadFrames(st, AI_GROUND_FRAMES);
+        const solved = new Map(sv.points.map((q) => [q.id, q.X]));
+        const cams = {}, tracks = {};
+        for (const f of frames) {
+            cams[f] = { R: sv.frames[f].R, t: sv.frames[f].t };
+            tracks[f] = st.mm.tracks.filter((t) => solved.has(t.id))
+                .map((t) => { const k = D.keyAt(t, f); return k ? [k[1], k[2], ...solved.get(t.id)] : null; }).filter(Boolean);
+        }
+        st.busy = { what: "Reading the phone's depth" };
+        this._mmRender();
+        let got;
+        try {
+            got = await this._mmPost("/imageviewer/mm_phone_depth", { path: st.mm.plate.path, frames, cams, tracks,
+                                                                     focal: sv.focal_px, center: sv.center || null, lens: st.mm.lens || null, pixel_aspect: sv.pixel_aspect || 1 });
+        } finally {
+            st.busy = null;
+        }
+        return this._mmGroundFromDepth(st, got, frames, false);
     },
 
     /** The Scene step's ground section (after Build). */
@@ -243,13 +279,17 @@ export const PrevizMatchmoveAIMixin = {
                                              { title: "A depth model on a few frames: the floor is found in its depth, even where there are no tracks" }),
                         pick, m, el(doc, "span", "", "metres"));
         } else this._mmNote(ctx, "Find with depth needs ComfyUI's Depth Anything 3 nodes (a recent ComfyUI).");
+        const ph = st.facts && st.facts.phone;
+        if (ph && ph.depth && ph.tracks)
+            this._mmRow(ctx, "", this._mmBtn(ctx, "Find with the phone's depth", () => this.matchmoveGroundPhone(),
+                                             { title: "This Cinematic film's own depth track on a few frames: no model needed" }));
         const gi = st.groundInfo;
         if (gi && gi.error) this._mmNote(ctx, gi.error, "warn");
         else if (gi) {
             const by = { auto: "found among all points", region: "inside the drawn shape", ai: "on what SAM 3 took for the ground" }[gi.how] || "";
             if (gi.how === "depth") {
                 const h = gi.metres ? `${gi.height.toFixed(2)} m` : `${gi.height.toFixed(2)} units`;
-                this._mmNote(ctx, `Ground from the depth of ${gi.frames} frame(s): ${gi.count} of ${gi.of} depth points, ${gi.tilt.toFixed(1)}° off level for the cameras. The camera is ${h} above it${gi.metres ? `; one unit is a metre (a solve unit was ${gi.metres.toFixed(3)} m)` : ""}.`,
+                this._mmNote(ctx, `Ground from the ${gi.model === "phone" ? "phone's " : ""}depth of ${gi.frames} frame(s): ${gi.count} of ${gi.of} depth points, ${gi.tilt.toFixed(1)}° off level for the cameras. The camera is ${h} above it${gi.metres ? `; one unit is a metre (a solve unit was ${gi.metres.toFixed(3)} m)` : ""}.`,
                              gi.tilt > 15 || gi.height <= 0 ? "warn" : "");
             } else this._mmNote(ctx, `Ground from ${gi.count} of ${gi.of} points (${by}), ${gi.tilt.toFixed(1)}° off level for the cameras${gi.below ? `, ${gi.below} point(s) below it` : ""}. They are picked in the Plate panel: unpick strays and use "Ground from picked".`,
                          gi.tilt > 15 ? "warn" : "");

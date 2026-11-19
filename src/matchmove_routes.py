@@ -27,6 +27,7 @@ MAX_JOBS = 16
 MAX_SIDE = 4096           # the frame route's largest picture
 MM_SUFFIX = ".mm.json"
 MM_MAX_BYTES = 64 * 1024 * 1024
+PHOTO_EXTS = (".heic", ".heif", ".hif")
 
 
 _FRAME_NO = re.compile(r"^(.*?)(\d{3,})(\.[A-Za-z0-9]+)$")
@@ -64,6 +65,16 @@ class Plate:
         _, self.info = self.src.info(self.node)
         self.lock = threading.Lock()
         self.used = time.time()
+        # a phone's film is stored on its side and turned on playback (the track's matrix): turned here too
+        self.turn = 0
+        if self.info.get("kind") == "video" and os.path.splitext(path)[1].lower() in (".mov", ".mp4", ".m4v", ".qt"):
+            try:
+                from . import iphone_io
+                self.turn = int((iphone_io.read_film(path, timed=False).get("picture") or {}).get("rotation") or 0)
+            except Exception:  # noqa: BLE001 - not a film this reader knows: as it is
+                self.turn = 0
+        if self.turn in (90, 270) and self.info.get("width") and self.info.get("height"):
+            self.info = dict(self.info, width=self.info["height"], height=self.info["width"])
 
     @property
     def frames(self):
@@ -77,7 +88,11 @@ class Plate:
         n = max(0, min(self.frames - 1, int(n)))
         with self.lock:
             self.used = time.time()
-            return self.src(self.node, n)
+            img = self.src(self.node, n)
+        k = {90: -1, 180: 2, 270: 1}.get(self.turn, 0)
+        if k and img is not None:
+            img = np.ascontiguousarray(np.rot90(img, k))
+        return img
 
     def close(self):
         self.src.close()
@@ -119,6 +134,13 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         path = as_sequence(abspath(raw))
         if not path:
             return None, ("no plate named", 400)
+        if os.path.splitext(path)[1].lower() in PHOTO_EXTS:
+            if not path_access.may_serve(path):
+                return None, ("not allowed", 403)
+            try:
+                path = photo_plate(path)
+            except Exception as e:  # noqa: BLE001 - a photo this reader cannot open
+                return None, (f"{os.path.basename(path)}: {e}", 404)
         probe = comp_io.frame_path(path, comp_io.sequence_numbers(path)[0]) if comp_io.is_sequence(path) and comp_io.sequence_numbers(path) else path
         if not path_access.may_serve(probe):
             return None, (path_access.serve_refusal(probe) if hasattr(path_access, "serve_refusal") else "not allowed", 403)
@@ -135,6 +157,46 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                     old = min(plates, key=lambda k: plates[k].used)
                     plates.pop(old).close()
             return p, None
+
+    def plate_size(p):
+        w, h = p.info.get("width"), p.info.get("height")
+        if not (w and h):
+            img = p.picture(0)
+            h, w = img.shape[:2]
+        return int(w), int(h)
+
+    def phone_dir():
+        base = folder_paths.get_input_directory() if folder_paths else os.path.join(os.path.expanduser("~"), ".comfyui_image_viewer")
+        return os.path.join(base, "matchmove", "phone")
+
+    def photo_plate(path):
+        """A HEIC as a plate: its picture as a PNG (turned as shown), its depth as a 16-bit PNG beside it and its
+        camera facts as ``<name>.png.json`` (which ``camera_facts`` reads) - written once per file."""
+        from . import iphone_io
+        st = os.stat(path)
+        key = hashlib.sha1(f"{os.path.abspath(path)}|{st.st_size}|{st.st_mtime_ns}".encode()).hexdigest()[:10]
+        stem = re.sub(r"[^\w.-]+", "_", os.path.splitext(os.path.basename(path))[0])[:60]
+        folder = phone_dir()
+        png = os.path.join(folder, f"{stem}_{key}.png")
+        if os.path.isfile(png):
+            return png
+        os.makedirs(folder, exist_ok=True)
+        info = iphone_io.read_photo(path, pictures=True)
+        from PIL import Image
+        Image.fromarray(info["_picture"]).save(png + ".part.png")
+        facts = iphone_io.photo_facts(path)
+        facts = {k: v for k, v in facts.items() if not k.startswith("_")}
+        if info.get("_depth") is not None:
+            dpath = os.path.join(folder, f"{stem}_{key}_depth.png")
+            d16 = (np.clip(info["_depth"], 0, 1) * 65535 + 0.5).astype(np.uint16)
+            Image.fromarray(d16).save(dpath)
+            facts.setdefault("phone", {})["depth_file"] = dpath
+            facts["phone"]["depth_reading"] = iphone_io.depth_meaning(info["depth"])
+        facts.setdefault("phone", {})["original"] = path
+        with open(png + ".json", "w", encoding="utf-8") as fh:
+            json.dump(facts, fh, indent=1, default=str)
+        os.replace(png + ".part.png", png)
+        return png
 
     def new_job(kind, total=0):
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
@@ -177,7 +239,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         facts = await off(MM.camera_facts, p.path, first_file, w, h)
         return web.json_response({"path": p.path, "name": os.path.basename(p.path), "kind": info.get("kind"),
                                   "frames": p.frames, "first": info.get("first", 0), "width": w, "height": h,
-                                  "fps": info.get("fps") or 24, "timecode": info.get("timecode"), "camera": facts},
+                                  "fps": info.get("fps") or 24, "timecode": info.get("timecode"), "camera": facts,
+                                  "turn": p.turn},
                                  headers={"Cache-Control": "no-cache"})
 
     def frame_jpeg(p, n, most, lens, quality=85):
@@ -812,6 +875,127 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             return err(e)
         return web.json_response({"votes": votes})
 
+    # ── the phone's own data ─────────────────────────────────────────────────
+
+    async def phone_route(request):
+        """GET ?path= everything an iPhone film or photo holds (keys, tracks, timed metadata, depth): what the
+        plate step's Phone section lists."""
+        from . import iphone_io
+        raw = abspath(request.query.get("path"))
+        if not raw or not os.path.isfile(raw) or not path_access.may_serve(raw):
+            return err("not allowed or not there", 403)
+        try:
+            if iphone_io.is_photo(raw):
+                info = iphone_io.public(await off(iphone_io.read_photo, raw))
+            elif iphone_io.is_film(raw):
+                info = iphone_io.public(await off(iphone_io.read_film, raw))
+            else:
+                return err("not a film or a HEIC photo")
+        except (iphone_io.PhoneError, OSError, ValueError, IndexError) as e:
+            return err(e)
+        return web.json_response(json.loads(json.dumps(info, default=str)))
+
+    def phone_depth_png(p, n, most=640):
+        from . import matchmove_matte as MT
+        w, h = plate_size(p)
+        k = max(1, math.ceil(max(w, h) / most))
+        maps = MT.phone_depth_maps(p.path, [n], p.info.get("fps") or 30, w // k, h // k, p.turn)
+        if n not in maps:
+            return None
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.fromarray((np.clip(maps[n], 0, 1) * 255 + 0.5).astype(np.uint8)).save(buf, "PNG")
+        return buf.getvalue()
+
+    async def phone_depth_view_route(request):
+        """GET ?path=&frame= a Cinematic film's depth at that plate frame as a grey PNG (as stored: bright = near)."""
+        from . import iphone_io
+        p, why = await off(plate_of, request.query.get("path"))
+        if why:
+            return err(*why)
+        try:
+            data = await off(phone_depth_png, p, int(request.query.get("frame") or 0))
+        except (iphone_io.PhoneError, ValueError, OSError) as e:
+            return err(e, 404)
+        if not data:
+            return err("no depth at that frame", 404)
+        return web.Response(body=data, content_type="image/png", headers={"Cache-Control": "max-age=300"})
+
+    async def phone_depth_route(request):
+        """POST {path, frames [plate frames], cams {frame: {R, t}}, tracks {frame: [[u, v, X0, X1, X2]]}, focal,
+        center?, lens?, reading?} -> the phone's depth on those frames as points of the solve's world (the answer
+        of ``mm_depth_place``, plus ``reading`` - disparity or depth - and its ``spread``)."""
+        from . import iphone_io
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        p, why = await off(plate_of, body.get("path"))
+        if why:
+            return err(*why)
+        try:
+            focal = float(body.get("focal"))
+        except (TypeError, ValueError):
+            return err("'focal' (the solve's focal length in pixels) is needed")
+        if not focal > 0:
+            return err("'focal' must be above 0")
+        frames = [int(f) for f in (body.get("frames") or []) if isinstance(f, (int, float))][:MT.MAX_FRAMES]
+        if not frames:
+            return err("'frames' names no frames")
+        cams = body.get("cams") if isinstance(body.get("cams"), dict) else {}
+        tracks = body.get("tracks") if isinstance(body.get("tracks"), dict) else {}
+        tracks = {k: v[:5000] for k, v in tracks.items() if isinstance(v, list)}
+        center = body.get("center")
+        center = [float(center[0]), float(center[1])] if isinstance(center, list) and len(center) == 2 else None
+        lens = body.get("lens") if isinstance(body.get("lens"), dict) else None
+        reading = body.get("reading") if body.get("reading") in MT.PHONE_READINGS else None
+        try:
+            res = await off(MT.phone_depth_points, p.path, frames, cams, tracks, fps=p.info.get("fps") or 30,
+                            size=await off(plate_size, p), focal=focal, center=center,
+                            lens=lens, turn=p.turn, reading=reading, pixel_aspect=_aspect(body.get("pixel_aspect")))
+        except (MT.MatteError, iphone_io.PhoneError, ValueError, OSError, TypeError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    def phone_export(p, every):
+        """The depth track as a 16-bit grey PNG sequence at plate frames (bright = near, as stored), beside the
+        HEIC copies: <input>/matchmove/phone/<film>_depth/<film>_depth.####.png."""
+        from . import matchmove_matte as MT
+        stem = re.sub(r"[^\w.-]+", "_", os.path.splitext(os.path.basename(p.path))[0])[:60]
+        folder = os.path.join(phone_dir(), f"{stem}_depth")
+        os.makedirs(folder, exist_ok=True)
+        from PIL import Image
+        w, h = plate_size(p)
+        from . import iphone_io
+        dep = iphone_io.read_film(p.path, timed=False)["depth"]
+        dw, dh = (dep["width"], dep["height"]) if (dep["width"] > dep["height"]) == (w > h) else (dep["height"], dep["width"])
+        written = 0
+        for n in range(0, p.frames, max(1, every)):
+            maps = MT.phone_depth_maps(p.path, [n], p.info.get("fps") or 30, dw, dh, p.turn)
+            if n in maps:
+                Image.fromarray((np.clip(maps[n], 0, 1) * 65535 + 0.5).astype(np.uint16)).save(
+                    os.path.join(folder, f"{stem}_depth.{n:04d}.png"))
+                written += 1
+        return {"pattern": os.path.join(folder, f"{stem}_depth.####.png"), "frames": written,
+                "width": dw, "height": dh}
+
+    async def phone_export_route(request):
+        """POST {path, every?} writes a Cinematic film's depth as a picture sequence (see ``phone_export``)."""
+        from . import iphone_io
+        body = await body_of(request)
+        p, why = await off(plate_of, body.get("path"))
+        if why:
+            return err(*why)
+        try:
+            every = max(1, int(body.get("every") or 1))
+            res = await off(phone_export, p, every)
+        except (iphone_io.PhoneError, ValueError, OSError, TypeError, KeyError) as e:
+            return err(e)
+        return web.json_response(res)
+
+    for prefix in ("/imageviewer", "/api/imageviewer"):
+        add("GET", f"{prefix}/mm_phone", phone_route)
+        add("GET", f"{prefix}/mm_phone_depth_view", phone_depth_view_route)
+        add("POST", f"{prefix}/mm_phone_depth", phone_depth_route)
+        add("POST", f"{prefix}/mm_phone_export", phone_export_route)
     for prefix in ("/imageviewer", "/api/imageviewer"):
         add("POST", f"{prefix}/mm_matte_workflows", matte_workflows_route)
         add("POST", f"{prefix}/mm_matte", matte_route)
