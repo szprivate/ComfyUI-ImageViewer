@@ -71,6 +71,33 @@ function transformChannels(item) {
     return [...TRANSFORM, ...PIVOT];
 }
 
+// Which sections of the Channel Box are folded, by key (_cbGroup).
+const FOLDS_KEY = "imageviewer.viewer.channelBoxFolds";
+function readFolds() {
+    try { const v = JSON.parse(localStorage.getItem(FOLDS_KEY) || "{}"); return v && typeof v === "object" ? v : {}; }
+    catch (_) { return {}; }
+}
+
+const KIND_TITLES = {
+    camera: "Camera", light: "Light", environment: "Environment", terrain: "Terrain", scatter: "Scatter",
+    depthmesh: "Depth Mesh", imageplane: "Image Plane", model: "Model", group: "Group",
+};
+/** The heading of an item's own properties: "Camera Properties", "Box Properties", "IK Control Properties". */
+export function cbPropsTitle(item) {
+    if (!item) return "Properties";
+    if (S.isLocator(item)) return "Locator Properties";
+    if (item.kind === "control") return `${item.control && item.control.type === "ik" ? "IK " : ""}Control Properties`;
+    if (item.kind === "light" && item.light && item.light.type) {
+        const t = String(item.light.type);
+        return `${t[0].toUpperCase()}${t.slice(1)} Light Properties`;
+    }
+    if (item.kind === "primitive") {
+        const t = String((item.primitive && item.primitive.type) || "shape");
+        return `${t[0].toUpperCase()}${t.slice(1)} Properties`;
+    }
+    return `${KIND_TITLES[item.kind] || "Object"} Properties`;
+}
+
 export const PrevizChannelsMixin = {
 
     // ── The Parameters panel is the Channel Box on a 3D tab ──────────────────
@@ -195,9 +222,8 @@ export const PrevizChannelsMixin = {
             }));
         }
 
-        const table = doc.createElement("div");
-        table.className = "cb-table";
-        root.append(table);
+        // Transform, the item's own properties, attributes ...: sections that fold (Sebastian 2026-11-20).
+        const table = this._cbGroup(root, "transform", "Transform");
         const numberRow = (id, prop, comp, label, step, section = table) => {
             valid.add(id);
             const row = doc.createElement("div");
@@ -255,17 +281,13 @@ export const PrevizChannelsMixin = {
             ui.rows.set("visible", { row, input: sel, kind: "visible" });
         }
 
-        // The shape's own attributes, under a heading of their own.
-        const shape = (title) => {
-            root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "SHAPES" }));
-            root.append(Object.assign(doc.createElement("div"), { className: "cb-shape", textContent: title }));
-            const t = doc.createElement("div");
-            t.className = "cb-table";
-            root.append(t);
-            return t;
-        };
+        // The item's own properties, named by what it is ("Camera Properties"), in a section of their own;
+        // `key` "reference" is a camera's reference picture (imageViewer_previzWorld.js).
+        const shape = (key = "object") => key === "reference"
+            ? this._cbGroup(root, "reference", "Camera Reference")
+            : this._cbGroup(root, "object", cbPropsTitle(item));
         if (item.kind === "camera") {
-            const t = shape(`${item.name}Shape`);
+            const t = shape();
             // A select row of the camera's shape: `opts` [[value, text]], `kind` names it in ui.rows.
             const selectRow = (id, label, opts, onchange, tip = "") => {
                 valid.add(id);
@@ -361,11 +383,11 @@ export const PrevizChannelsMixin = {
             }
         } else if (item.kind === "control" && item.control && item.control.type === "ik") {
             // 1 follows this IK control, 0 the limb's FK controls; keyable.
-            const t = shape(`${item.name}Shape`);
+            const t = shape();
             numberRow("ikfk", "ikfk", null, "IK Blend", 0.1, t);
         } else if (S.isLocator(item)) {
             // A locator's Size: the cross's half length (not its scale, which its children take).
-            const t = shape(`${item.name}Shape`);
+            const t = shape();
             const row = doc.createElement("div");
             row.className = "cb-row";
             row.dataset.ch = "locatorSize";
@@ -385,7 +407,7 @@ export const PrevizChannelsMixin = {
             t.append(row);
             ui.rows.set("locatorSize", { row, input: inp, kind: "locator" });
         } else if (item.kind === "imageplane") {
-            const t = shape(`${item.name}Shape`);
+            const t = shape();
             // Path: the picture, film or sequence on the plane - typed, pasted or picked (… ) - and the frame
             // its film or sequence starts on (Sebastian 2026-11-19: swap the plate after it came in).
             const pr = doc.createElement("div");
@@ -473,7 +495,7 @@ export const PrevizChannelsMixin = {
                 ui.rows.set(field, { row: r2, input: sel, kind: "plane", field });
             }
         } else if (item.kind === "primitive") {
-            const t = shape(`${item.name}Shape`);
+            const t = shape();
             const row = doc.createElement("div");
             row.className = "cb-row";
             const tag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Colour" });
@@ -493,18 +515,12 @@ export const PrevizChannelsMixin = {
         // the extra channels of imageViewer_scene3d.js, keyable like the rest.
         const attrs = Object.keys(item.attrs || {});
         if (attrs.length) {
-            root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "ATTRIBUTES" }));
-            const t = doc.createElement("div");
-            t.className = "cb-table";
-            root.append(t);
+            const t = this._cbGroup(root, "attributes", "Attributes");
             for (const n of attrs) numberRow(`attr:${n}`, `attr:${n}`, null, n, 0.1, t);
         }
         const morphs = this._cbMorphs(item);
         if (morphs.length) {
-            root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "BLENDSHAPES" }));
-            const t = doc.createElement("div");
-            t.className = "cb-table";
-            root.append(t);
+            const t = this._cbGroup(root, "blendshapes", "Blendshapes");
             for (const n of morphs) numberRow(`bs:${n}`, `bs:${n}`, null, n, 0.01, t);
         }
         // World settings, and a camera's reference (imageViewer_previzWorld.js).
@@ -519,6 +535,32 @@ export const PrevizChannelsMixin = {
 
         // A channel selection outlives a redraw, as long as its rows are still here.
         this._cbSel = new Set([...(this._cbSel || [])].filter((id) => valid.has(id)));
+    },
+
+    /**
+     * A section of the box that folds: its heading (a click folds or unfolds it, kept per viewer in
+     * localStorage FOLDS_KEY by `key`), and the body the rows go into, which is returned.
+     */
+    _cbGroup(root, key, title) {
+        const doc = root.ownerDocument;
+        const wrap = Object.assign(doc.createElement("div"), { className: "cb-group" });
+        wrap.dataset.group = key;
+        const head = Object.assign(doc.createElement("div"), { className: "cb-section cb-group-head", title: "Click to fold or unfold" });
+        head.append(Object.assign(doc.createElement("span"), { className: "cb-chev" }),
+                    Object.assign(doc.createElement("span"), { className: "cb-group-title", textContent: title }));
+        const body = Object.assign(doc.createElement("div"), { className: "cb-table cb-group-body" });
+        wrap.classList.toggle("folded", !!readFolds()[key]);
+        head.addEventListener("pointerdown", (e) => e.stopPropagation());
+        head.onclick = () => {
+            const folds = readFolds();
+            const on = !wrap.classList.contains("folded");
+            wrap.classList.toggle("folded", on);
+            if (on) folds[key] = true; else delete folds[key];
+            try { localStorage.setItem(FOLDS_KEY, JSON.stringify(folds)); } catch (_) { /* private window */ }
+        };
+        wrap.append(head, body);
+        root.append(wrap);
+        return body;
     },
 
     /** Put the current numbers in, and colour what is keyed. */

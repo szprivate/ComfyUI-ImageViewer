@@ -245,8 +245,7 @@ export const PrevizWorldMixin = {
     _cbWorldRows(ui, item, shape, doc) {
         const fields = worldFields(item).filter((f) => !f.needs || getPath(item, f.needs));
         if (!fields.length) return;
-        const title = item.kind === "camera" ? "Reference" : `${item.name} settings`;
-        const t = shape(title);
+        const t = shape(item.kind === "camera" ? "reference" : "object");
         for (const f of fields) {
             const row = doc.createElement("div");
             row.className = "cb-row";

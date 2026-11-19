@@ -300,8 +300,8 @@ export const PrevizConstraintsMixin = {
         const list = item && item.constraints;
         if (!list || !list.length) return;
         const scene = this.previzScene();
-        const root = ui.root;
-        root.append(Object.assign(doc.createElement("div"), { className: "cb-section", textContent: "CONSTRAINTS" }));
+        // A section of the box that folds (previzChannels' _cbGroup); the blocks go into its body.
+        const root = this._cbGroup ? this._cbGroup(ui.root, "constraints", "Constraints") : ui.root;
         for (const c of list) {
             const head = doc.createElement("div");
             head.className = "cb-shape cb-constraint";
