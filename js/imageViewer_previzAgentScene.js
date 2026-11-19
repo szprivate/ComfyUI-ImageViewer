@@ -18,6 +18,8 @@ import * as Q from "./imageViewer_clipSeqData.js";
 import * as L from "./imageViewer_sceneLayers.js";
 import * as A from "./imageViewer_agentSceneData.js";
 import { bakedCopy } from "./imageViewer_constraints.js";
+import * as CL from "./imageViewer_cameraLens.js";
+import { FRAME_MASKS, parseRatio } from "./imageViewer_frameMasks.js";
 import { canvasContext } from "./imageViewer_exportUI.js";
 
 /** Every action this mixin answers (none needs a character). */
@@ -359,13 +361,55 @@ export const PrevizAgentSceneMixin = {
         } else if (a.rotation !== undefined && a.rotation !== null) { put("rotation", vec(a.rotation, "rotation")); changed.push("rotation"); }
         if (Number(a.fov) > 0) { S.setStaticValue(cam, "fov", Number(a.fov)); changed.push("fov"); }
         if (Array.isArray(a.resolution) && a.resolution.length === 2) { cam.resolution = a.resolution.map((v) => Math.max(16, Math.round(Number(v)))); changed.push("resolution"); }
+        // The lens (imageViewer_cameraLens.js): film back first, so a focal length given with it is on that film.
+        if (Array.isArray(a.filmback) && a.filmback.length === 2 && a.filmback.every((v) => Number(v) > 0)) {
+            cam.filmback = CL.filmbackOf({ filmback: a.filmback.map(Number) }); changed.push("filmback");
+        }
+        if (CL.FILM_FITS.includes(a.film_fit)) {
+            if (a.film_fit === "horizontal") delete cam.filmFit; else cam.filmFit = a.film_fit;
+            changed.push("film_fit");
+        }
+        const [rw, rh] = S.cameraResolution(cam);
+        if (Number(a.focal_mm) > 0) { S.setStaticValue(cam, "fov", CL.fovFromFocal(cam, Number(a.focal_mm), rw / rh)); changed.push("focal_mm"); }
+        if (Array.isArray(a.clip) && a.clip.length === 2 && a.clip.every((v) => Number(v) > 0)) {
+            cam.clip = CL.clipOf({ clip: a.clip.map(Number) }); changed.push("clip");
+        }
+        if (a.frame_mask !== undefined && a.frame_mask !== null) {
+            // "viewer" = the viewer's mask, "off", a ratio ("2.39", "16:9"), or {ratio, opacity}.
+            const m = typeof a.frame_mask === "object" ? a.frame_mask : { ratio: a.frame_mask };
+            const r = String(m.ratio ?? "");
+            if (r === "viewer") delete cam.frameMask;
+            else {
+                const preset = FRAME_MASKS.find((p) => p.key === r || p.label === r);
+                if (r !== "off" && !preset && !parseRatio(r)) throw new Error(`frame_mask: "${r}" is no aspect ratio (2.39, 16:9, off, viewer)`);
+                cam.frameMask = CL.readCameraMask({
+                    ...(cam.frameMask || {}), on: r !== "off",
+                    key: r === "off" ? ((cam.frameMask && cam.frameMask.key) || "2.39") : preset ? preset.key : "custom",
+                    custom: preset || r === "off" ? ((cam.frameMask && cam.frameMask.custom) || "") : r,
+                    ...(Number.isFinite(Number(m.opacity)) && m.opacity !== null ? { opacity: Number(m.opacity) } : {}),
+                });
+            }
+            changed.push("frame_mask");
+        }
         if (a.active !== false) scene.activeCamera = cam.id;
         this.previzChanged({ reload: true });
-        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed, keyed: keying ? f : null };
-        const known = new Set(["camera", "item", "position", "look_at", "rotation", "fov", "resolution", "active", "frame"]);
+        const out = { camera: cam.name, active: scene.activeCamera === cam.id, changed, keyed: keying ? f : null,
+                      lens: this._asaLens(scene, cam, f) };
+        const known = new Set(["camera", "item", "position", "look_at", "rotation", "fov", "resolution", "active", "frame",
+                               "filmback", "film_fit", "focal_mm", "clip", "frame_mask"]);
         const ignored = Object.keys(a).filter((k) => !known.has(k));
         if (ignored.length) out.ignored = ignored;
         return out;
+    },
+
+    /** A camera's lens as numbers, for the answers. */
+    _asaLens(scene, cam, f) {
+        const fov = S.currentValue(scene, cam, "fov", f);
+        const [rw, rh] = S.cameraResolution(cam);
+        const r = (v) => Math.round(v * 1000) / 1000;
+        return { focal_mm: r(CL.focalOf(cam, fov, rw / rh)), fov_v: r(fov), fov_h: r(CL.horizontalFov(fov, rw / rh)),
+                 filmback: CL.filmbackOf(cam), film_fit: CL.filmFitOf(cam), clip: CL.clipOf(cam),
+                 frame_mask: cam.frameMask ? (cam.frameMask.on ? (cam.frameMask.key === "custom" ? cam.frameMask.custom : cam.frameMask.key) : "off") : "viewer" };
     },
 
     /** The subject's box over frames (meshes and, for a character, its bones - which carry the animation). */

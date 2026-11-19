@@ -23,6 +23,8 @@ import { openFilePicker } from "./imageViewer_exportUI.js";
 // What an image plane's Path picker offers: pictures, films and the frames of sequences.
 const PLANE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".exr", ".tif", ".tiff", ".dpx", ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"];
 import { constraintOf, parseWeightProp, weightRange } from "./imageViewer_constraintData.js";
+import * as L from "./imageViewer_cameraLens.js";
+import { FRAME_MASKS } from "./imageViewer_frameMasks.js";
 import { AIM_LABELS, AIM_PROPS, ROLL_PROP, aimOn, aimSettings, defaultAimTarget, isAimProp } from "./imageViewer_cameraAim.js";
 
 // id → [prop, component, label, step]; component is null for a lone number.
@@ -43,6 +45,10 @@ const PIVOT = [
     ["pivot.2", "pivot", 2, "Pivot Z", 0.1],
 ];
 const FOV = ["fov", "fov", null, "Field Of View", 1];
+// Numbers of a camera's shape that are not channels of their own: the focal length and the horizontal field of
+// view are the keyed `fov` read another way (LENS_PROPS), the rest are kept as they are (STATIC_PROPS).
+const LENS_PROPS = new Set(["focal", "hfov"]);
+const STATIC_PROPS = new Set(["resolution", "filmback", "clip", "maskOpacity"]);
 
 // The sizes a camera is most often asked to be.
 const RESOLUTION_PRESETS = [
@@ -140,7 +146,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}|${item.frameMask ? `${item.frameMask.on}:${item.frameMask.key}` : ""}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);
@@ -260,7 +266,35 @@ export const PrevizChannelsMixin = {
         };
         if (item.kind === "camera") {
             const t = shape(`${item.name}Shape`);
-            numberRow(FOV[0], FOV[1], FOV[2], FOV[3], FOV[4], t);
+            // A select row of the camera's shape: `opts` [[value, text]], `kind` names it in ui.rows.
+            const selectRow = (id, label, opts, onchange, tip = "") => {
+                valid.add(id);
+                const r = doc.createElement("div");
+                r.className = "cb-row";
+                r.dataset.ch = id;
+                const tg = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: label });
+                if (tip) tg.title = tip;
+                const sl = doc.createElement("select");
+                sl.className = "cb-val cb-sel";
+                for (const [v, txt] of opts) sl.append(Object.assign(doc.createElement("option"), { value: v, textContent: txt }));
+                sl.onchange = () => onchange(sl.value);
+                r.append(tg, sl);
+                t.append(r);
+                ui.rows.set(id, { row: r, input: sl, kind: id });
+            };
+            // The lens (imageViewer_cameraLens.js): the focal length and both fields of view are one number,
+            // the keyed `fov`, read through the film back and how the picture lies on it.
+            numberRow("focal", "focal", null, "Focal Length (mm)", 0.5, t);
+            numberRow(FOV[0], FOV[1], FOV[2], "Vertical FOV", FOV[4], t);
+            numberRow("hfov", "hfov", null, "Horizontal FOV", 1, t);
+            selectRow("filmPreset", "Film Back", [["", "—"], ...L.FILMBACK_PRESETS.map(([n, w, h]) => [`${w}x${h}`, `${n}  ${w} × ${h}`])],
+                      (v) => { const [w, h] = v.split("x").map(Number); if (w && h) this.previzSetFilmback([w, h]); });
+            numberRow("fb.0", "filmback", 0, "Aperture W (mm)", 0.1, t);
+            numberRow("fb.1", "filmback", 1, "Aperture H (mm)", 0.1, t);
+            selectRow("filmFit", "Film Fit", L.FILM_FITS.map((f) => [f, L.FILM_FIT_LABELS[f]]), (v) => this.previzSetFilmFit(v),
+                      "How the picture lies on the film back: its width on the film's width (Horizontal), its height on the film's height (Vertical), inside it (Fill) or around it (Overscan)");
+            numberRow("clip.0", "clip", 0, "Near Clip", 0.01, t);
+            numberRow("clip.1", "clip", 1, "Far Clip", 10, t);
             numberRow("res.0", "resolution", 0, "Resolution W", 1, t);
             numberRow("res.1", "resolution", 1, "Resolution H", 1, t);
             const row = doc.createElement("div");
@@ -279,6 +313,30 @@ export const PrevizChannelsMixin = {
             row.append(tag, sel);
             t.append(row);
             ui.rows.set("preset", { row, input: sel, kind: "preset" });
+            // Its own framing mask, drawn while it is looked through (imageViewer_frameMasks.js); "viewer" = the
+            // viewer's mask (the button right of Toggle Overlays).
+            selectRow("frameMask", "Framing Mask",
+                      [["viewer", "As the viewer's"], ["off", "off"], ...FRAME_MASKS.map((m) => [m.key, m.label]), ["custom", "Own ratio…"]],
+                      (v) => this.previzSetCameraMask(v),
+                      "Dims the picture outside an aspect ratio while looking through this camera");
+            if (item.frameMask && item.frameMask.on) {
+                if (item.frameMask.key === "custom") {
+                    valid.add("maskRatio");
+                    const r = doc.createElement("div");
+                    r.className = "cb-row";
+                    r.dataset.ch = "maskRatio";
+                    const tg = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Mask Ratio" });
+                    const inp = doc.createElement("input");
+                    inp.className = "cb-val";
+                    inp.placeholder = "2.39 or 21:9";
+                    inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") inp.blur(); });
+                    inp.onchange = () => this.previzSetCameraMask("custom", { custom: inp.value });
+                    r.append(tg, inp);
+                    t.append(r);
+                    ui.rows.set("maskRatio", { row: r, input: inp, kind: "maskRatio" });
+                }
+                numberRow("maskOpacity", "maskOpacity", null, "Mask Opacity", 0.05, t);
+            }
             // Look At: off by default; on, the camera faces its target and the
             // target's numbers are channels (imageViewer_cameraAim.js).
             {
@@ -475,15 +533,27 @@ export const PrevizChannelsMixin = {
             r.row.classList.toggle("selected", !!(this._cbSel && this._cbSel.has(id)));
             if (r.kind === "number") {
                 if (focused !== r.input) r.input.value = fmt(this._cbValue(item, r.prop, r.comp));
-                const keyable = r.prop !== "resolution";
-                const keys = keyable ? S.track(item, r.prop) : [];
+                const keyable = !STATIC_PROPS.has(r.prop);
+                const keys = keyable ? S.track(item, LENS_PROPS.has(r.prop) ? "fov" : r.prop) : [];
                 r.row.classList.toggle("keyed", keys.length > 0);
                 r.row.classList.toggle("keyed-now", keys.some((k) => k.f === frame));
                 // Locked (Lock Selected): greyed out, nothing typed or dragged changes it.
-                const locked = this._cbItems().some((it) => S.isChannelLocked(it, r.prop, r.comp));
+                const locked = this._cbItems().some((it) => LENS_PROPS.has(r.prop) ? S.isChannelLocked(it, "fov", null)
+                                                                                    : S.isChannelLocked(it, r.prop, r.comp));
                 r.row.classList.toggle("locked", locked);
                 r.input.readOnly = locked;
                 r.input.title = locked ? "Locked: right-click › Unlock Selected" : "";
+            } else if (r.kind === "filmPreset") {
+                const [w, h] = L.filmbackOf(item);
+                const match = L.FILMBACK_PRESETS.find(([, pw, ph]) => pw === w && ph === h);
+                if (focused !== r.input) r.input.value = match ? `${w}x${h}` : "";
+            } else if (r.kind === "filmFit") {
+                if (focused !== r.input) r.input.value = L.filmFitOf(item);
+            } else if (r.kind === "frameMask") {
+                const m = item.frameMask;
+                if (focused !== r.input) r.input.value = !m ? "viewer" : !m.on ? "off" : m.key;
+            } else if (r.kind === "maskRatio") {
+                if (focused !== r.input) r.input.value = (item.frameMask && item.frameMask.custom) || "";
             } else if (r.kind === "visible") {
                 r.input.value = item.visible === false ? "off" : "on";
             } else if (r.kind === "aim") {
@@ -527,6 +597,14 @@ export const PrevizChannelsMixin = {
 
     _cbValue(item, prop, comp) {
         if (prop === "resolution") return S.cameraResolution(item)[comp];
+        if (prop === "filmback") return L.filmbackOf(item)[comp];
+        if (prop === "clip") return L.clipOf(item)[comp];
+        if (prop === "maskOpacity") return item.frameMask ? item.frameMask.opacity : 0.75;
+        if (LENS_PROPS.has(prop)) {
+            const fov = S.currentValue(this.previzScene(), item, "fov", Math.round(this.currentFrame || 0));
+            const a = this._cbAspect(item);
+            return prop === "focal" ? L.focalOf(item, fov, a) : L.horizontalFov(fov, a);
+        }
         // What is on screen: every animation layer counted.
         const v = S.currentValue(this.previzScene(), item, prop, Math.round(this.currentFrame || 0));
         return comp === null ? v : v[comp];
@@ -567,6 +645,34 @@ export const PrevizChannelsMixin = {
         for (const item of items) {
             const start = from && from.has(item.id) ? from.get(item.id) : null;
             const v = start !== null && typeof value === "function" ? value(start) : value;
+            if (prop === "filmback" || prop === "clip") {
+                if (item.kind !== "camera") continue;
+                if (prop === "filmback") {
+                    const fb = L.filmbackOf(item);
+                    fb[comp] = Math.min(200, Math.max(0.1, v));
+                    this._cbFilmback(item, fb, frame);
+                } else {
+                    const c = L.clipOf(item);
+                    c[comp] = Math.max(1e-5, v);
+                    if (comp === 0 && c[1] <= c[0]) c[1] = c[0] * 10;
+                    if (comp === 1 && c[1] <= c[0]) c[1] = c[0] * 1.001;
+                    item.clip = L.clipOf({ clip: c });
+                }
+                continue;
+            }
+            if (prop === "maskOpacity") {
+                if (item.kind !== "camera" || !item.frameMask) continue;
+                item.frameMask = { ...item.frameMask, opacity: Math.min(1, Math.max(0, v)) };
+                continue;
+            }
+            if (LENS_PROPS.has(prop)) {
+                // The focal length or the horizontal field of view: written as the keyed vertical one.
+                if (item.kind !== "camera") continue;
+                const a = this._cbAspect(item);
+                const fov = prop === "focal" ? L.fovFromFocal(item, Math.max(0.1, v), a) : L.fovFromHorizontal(v, a);
+                this._cbWrite(item, "fov", Math.min(170, Math.max(1, fov)), frame);
+                continue;
+            }
             if (prop === "resolution") {
                 if (item.kind !== "camera") continue;
                 const res = S.cameraResolution(item);
@@ -720,6 +826,73 @@ export const PrevizChannelsMixin = {
     },
 
     /** A camera's picture size, for every selected camera. */
+    /** The picture's shape (width / height) of a camera. */
+    _cbAspect(item) {
+        const [w, h] = S.cameraResolution(item);
+        return w / h;
+    },
+
+    /**
+     * A new film back on a camera. As a camera body is changed for another: the lens stays, so the focal length
+     * is kept and the field of view follows - unless the field of view is keyed, which is then kept.
+     */
+    _cbFilmback(item, fb, frame) {
+        const keyed = S.track(item, "fov").length > 0;
+        const a = this._cbAspect(item);
+        const focal = L.focalOf(item, S.currentValue(this.previzScene(), item, "fov", frame), a);
+        item.filmback = L.filmbackOf({ filmback: fb });
+        if (!keyed) item.fov = Math.min(170, Math.max(1, L.fovFromFocal(item, focal, a)));
+    },
+
+    previzSetFilmback(fb) {
+        const cams = this._cbItems().filter((it) => it.kind === "camera");
+        if (!cams.length) return;
+        this.previzSnapshot("set film back");
+        const frame = Math.round(this.currentFrame || 0);
+        for (const cam of cams) this._cbFilmback(cam, fb, frame);
+        this.previzChanged();
+    },
+
+    /** How the picture lies on the film back; keeps the focal length as a new film back does. */
+    previzSetFilmFit(fit) {
+        if (!L.FILM_FITS.includes(fit)) return;
+        const cams = this._cbItems().filter((it) => it.kind === "camera");
+        if (!cams.length) return;
+        this.previzSnapshot("set film fit");
+        const frame = Math.round(this.currentFrame || 0);
+        for (const cam of cams) {
+            const keyed = S.track(cam, "fov").length > 0;
+            const a = this._cbAspect(cam);
+            const focal = L.focalOf(cam, S.currentValue(this.previzScene(), cam, "fov", frame), a);
+            if (fit === "horizontal") delete cam.filmFit; else cam.filmFit = fit;
+            if (!keyed) cam.fov = Math.min(170, Math.max(1, L.fovFromFocal(cam, focal, a)));
+        }
+        this.previzChanged();
+    },
+
+    /**
+     * A camera's own framing mask: "viewer" (none of its own: the viewer's), "off", a preset's key or "custom"
+     * (`patch.custom` its ratio). Kept opacity, line and label carry over.
+     */
+    previzSetCameraMask(key, patch = {}) {
+        const cams = this._cbItems().filter((it) => it.kind === "camera");
+        if (!cams.length) return;
+        this.previzSnapshot("set framing mask");
+        for (const cam of cams) {
+            if (key === "viewer") { delete cam.frameMask; continue; }
+            const was = cam.frameMask || {};
+            const base = this._frameMask ? this._frameMask() : {};
+            cam.frameMask = L.readCameraMask({
+                opacity: was.opacity ?? base.opacity, line: was.line ?? base.line, label: was.label ?? base.label,
+                custom: was.custom || "",
+                ...(key === "off" ? { on: false, key: was.key || base.key } : { on: true, key }),
+                ...patch,
+            });
+        }
+        this.previzChanged();
+        if (this.frameMaskSync) { this._fmSig = null; this.frameMaskSync(); }
+    },
+
     previzSetResolution(res) {
         const cams = this._cbItems().filter((it) => it.kind === "camera");
         if (!cams.length) return;
@@ -834,7 +1007,7 @@ export const PrevizChannelsMixin = {
         const props = new Set();
         for (const id of this._cbSel || []) {
             const r = this._cbUI && this._cbUI.rows.get(id);
-            if (r && r.kind === "number" && r.prop !== "resolution") props.add(r.prop);
+            if (r && r.kind === "number" && !STATIC_PROPS.has(r.prop)) props.add(LENS_PROPS.has(r.prop) ? "fov" : r.prop);
         }
         return [...props];
     },
@@ -869,7 +1042,7 @@ export const PrevizChannelsMixin = {
         const out = [];
         for (const id of this._cbSel || []) {
             const r = this._cbUI && this._cbUI.rows.get(id);
-            if (r && r.kind === "number" && r.prop !== "resolution") out.push(id);
+            if (r && r.kind === "number" && !STATIC_PROPS.has(r.prop)) out.push(LENS_PROPS.has(r.prop) ? "fov" : id);
         }
         return out;
     },

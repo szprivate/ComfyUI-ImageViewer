@@ -263,6 +263,85 @@ class FrameMaskBrowserTests(unittest.TestCase):
         self.assertFalse(pg.evaluate(q3)["shown"])
         self.assertEqual(self.errors, [])
 
+    def test_a_camera_has_its_own_mask_and_lens_in_the_channel_box(self):
+        """Sebastian 2026-11-19: the mask as a camera parameter, and the camera's aperture, focal length, fields
+        of view and clipping in its parameters."""
+        pg = self.page()
+        pg.evaluate("""async () => { const P = window.__panel;
+            P.frameMaskSet({ on: false });
+            await P.spaceOpen('3d');
+            await P.previzAddPrimitive('box');
+            P._modelView().setPaneLayout('single');
+            P.previzAddCamera();
+            P.previzLookThroughSelected(); }""")
+        pg.wait_for_timeout(300)
+        rows = pg.evaluate("() => [...window.__panel._cbUI.rows.keys()]")
+        for r in ("focal", "fov", "hfov", "filmPreset", "fb.0", "fb.1", "filmFit", "clip.0", "clip.1", "frameMask"):
+            self.assertIn(r, rows)
+
+        # The camera's own mask: drawn in its gate though the viewer's is off.
+        pg.select_option("[data-ch='frameMask'] select", "1.85")
+        pg.wait_for_timeout(250)
+        q = """() => { const P = window.__panel, v = P._modelView(), el = v._fmEl;
+            const box = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+            const cam = P.previzSelectedItem();
+            return { shown: !!el && getComputedStyle(el).display !== 'none', source: el && el.dataset.source,
+                     hole: el && el.firstChild ? box(el.firstChild) : null, gate: box(v.ui.gateFrame),
+                     label: el && el.firstChild ? el.firstChild.textContent : '', mask: cam.frameMask,
+                     rows: [...P._cbUI.rows.keys()] }; }"""
+        st = pg.evaluate(q)
+        self.assertTrue(st["shown"], st)
+        self.assertEqual(st["source"], "camera")
+        self.assertEqual(st["label"], "1.85:1")
+        self.assertNear(st["hole"]["h"], min(st["gate"]["h"], st["gate"]["w"] / 1.85), 2)
+        self.assertIn("maskOpacity", st["rows"])
+        self.shot(pg, "5-camera-mask.png")
+        # Its opacity is a row; "off" hides it even with the viewer's mask on; "As the viewer's" gives that back.
+        pg.evaluate("() => window.__panel.previzSetChannel('maskOpacity', null, 0.3)")
+        self.assertAlmostEqual(pg.evaluate("() => window.__panel.previzSelectedItem().frameMask.opacity"), 0.3)
+        pg.evaluate("() => window.__panel.frameMaskSet({ on: true, key: '2.39' })")
+        pg.select_option("[data-ch='frameMask'] select", "off")
+        pg.wait_for_timeout(250)
+        self.assertFalse(pg.evaluate(q)["shown"])
+        pg.select_option("[data-ch='frameMask'] select", "viewer")
+        pg.wait_for_timeout(250)
+        st = pg.evaluate(q)
+        self.assertTrue(st["shown"]); self.assertEqual(st["source"], "viewer"); self.assertIsNone(st["mask"])
+
+        # The lens: a focal length typed is the keyed fov; a new film back keeps the focal length; clipping
+        # reaches the three.js camera.
+        inp = pg.locator("[data-ch='focal'] input")
+        inp.fill("50"); inp.press("Enter")
+        pg.wait_for_timeout(150)
+        lens = pg.evaluate("""() => { const P = window.__panel, c = P.previzSelectedItem();
+            return { fov: c.fov, res: c.resolution, focal: P._cbValue(c, 'focal', null), hfov: P._cbValue(c, 'hfov', null) }; }""")
+        import math
+        aspect = lens["res"][0] / lens["res"][1]
+        self.assertAlmostEqual(lens["fov"], math.degrees(2 * math.atan((36 / aspect / 2) / 50)), 4)
+        self.assertAlmostEqual(lens["focal"], 50, 4)
+        pg.select_option("[data-ch='filmPreset'] select", "24.89x18.66")
+        pg.wait_for_timeout(150)
+        lens2 = pg.evaluate("""() => { const P = window.__panel, c = P.previzSelectedItem();
+            return { fov: c.fov, fb: c.filmback, focal: P._cbValue(c, 'focal', null) }; }""")
+        self.assertEqual(lens2["fb"], [24.89, 18.66])
+        self.assertAlmostEqual(lens2["focal"], 50, 4)
+        self.assertGreater(lens["fov"], lens2["fov"])            # a smaller film, the same lens: narrower
+        pg.select_option("[data-ch='filmFit'] select", "vertical")
+        pg.wait_for_timeout(150)
+        self.assertAlmostEqual(pg.evaluate("() => window.__panel._cbValue(window.__panel.previzSelectedItem(), 'focal', null)"), 50, 4)
+        pg.evaluate("() => { const P = window.__panel; P.previzSetChannel('clip', 0, 0.5); P.previzSetChannel('clip', 1, 250); }")
+        pg.wait_for_timeout(200)
+        cam = pg.evaluate("""() => { const P = window.__panel, c = P.previzSelectedItem(), e = P._modelView()._entries.get(c.id);
+            return { near: e.camera.near, far: e.camera.far, clip: c.clip }; }""")
+        self.assertEqual(cam["clip"], [0.5, 250])
+        self.assertAlmostEqual(cam["near"], 0.5); self.assertAlmostEqual(cam["far"], 250)
+        # Undo takes the clipping back.
+        pg.evaluate("() => window.__panel.previzUndo()")
+        pg.wait_for_timeout(150)
+        self.assertNotEqual(pg.evaluate("() => window.__panel.previzSelectedItem().clip"), [0.5, 250])
+        self.shot(pg, "6-camera-lens.png")
+        self.assertEqual(self.errors, [])
+
     def test_a_cuts_tab_in_the_edit_space_is_masked_too(self):
         import sys
         sys.path.insert(0, os.path.dirname(__file__))
