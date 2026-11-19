@@ -15,6 +15,8 @@
 //               fill        the picture as large as fits inside the film back
 //               overscan    the film back inside the picture
 //   clip      [near, far] in scene units (absent = the viewer's own 0.1 / 10000)
+//   shift     [x, y] the lens shift: the picture moved across the film back, as a share of the
+//             picture's width (x) and height (y), y up, the camera not turned (absent = [0, 0])
 // The focal length is then (picture height on the film / 2) / tan(fov / 2).
 
 export const FILMBACK_DEFAULT = [36, 24];
@@ -57,6 +59,24 @@ export function clipOf(item) {
     const near = clamp(num(c[0], CLIP_DEFAULT[0]), 1e-5, 1e7);
     const far = clamp(num(c[1], CLIP_DEFAULT[1]), near * 1.0001, 1e9);
     return [near, far];
+}
+
+/** The lens shift [x, y], held to -2 .. 2. */
+export function shiftOf(item) {
+    const s = item && Array.isArray(item.shift) && item.shift.length === 2 ? item.shift : [0, 0];
+    return [clamp(num(s[0], 0), -2, 2), clamp(num(s[1], 0), -2, 2)];
+}
+
+/**
+ * The lens shift written into a perspective projection matrix (column-major, three.js's `elements`):
+ * the picture moved by `shift` (shares of its width / height) inside a view whose drawn picture is
+ * `fx` x `fy` of the whole view (1 x 1 when the view IS the picture; the gate's share when the view
+ * is wider than the shot). The two entries to ADD: [e8, e9]. A positive x moves what is seen to the
+ * left (the camera looks further right), a positive y moves it down (the camera looks further up).
+ */
+export function shiftTerms(shift, fx = 1, fy = 1) {
+    const [sx, sy] = Array.isArray(shift) ? shift : [0, 0];
+    return [2 * num(sx, 0) * fx, 2 * num(sy, 0) * fy];
 }
 
 /** The picture's [w, h] on the film back in mm, for a picture of aspect `aspect` (width / height). */
@@ -106,6 +126,10 @@ export function readLensFields(raw) {
     if (raw && Array.isArray(raw.filmback) && raw.filmback.length === 2) out.filmback = filmbackOf(raw);
     if (raw && FILM_FITS.includes(raw.filmFit) && raw.filmFit !== "horizontal") out.filmFit = raw.filmFit;
     if (raw && Array.isArray(raw.clip) && raw.clip.length === 2) out.clip = clipOf(raw);
+    if (raw && Array.isArray(raw.shift) && raw.shift.length === 2) {
+        const s = shiftOf(raw);
+        if (s[0] || s[1]) out.shift = s;
+    }
     return out;
 }
 

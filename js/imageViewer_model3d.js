@@ -18,7 +18,7 @@ import { api } from "../../scripts/api.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { app } from "../../scripts/app.js";
 import { evaluateIn, cameraResolution, offsetOf, planeSettings, locatorSize } from "./imageViewer_scene3d.js";
-import { clipOf } from "./imageViewer_cameraLens.js";
+import { clipOf, shiftOf, shiftTerms } from "./imageViewer_cameraLens.js";
 // The clip sequencer registers itself with the scene model on import (evaluateIn plays its clips).
 import "./imageViewer_clipSeqData.js";
 // Animation layers register their blend with the scene model on import.
@@ -2024,8 +2024,10 @@ export class Model3DView {
         const item = entry.item;
         const f = fov || 35;
         const active = this._throughCam() === item.id;
+        let share = [1, 1];
         if (active) {
             const g = this._gateRect(item);
+            share = [g.w / g.vw, g.h / g.vh];
             const half = Math.tan((f * Math.PI / 180) / 2) * (g.vh / g.h);
             cam.fov = 2 * Math.atan(half) * 180 / Math.PI;
             cam.aspect = g.vw / g.vh;
@@ -2038,8 +2040,28 @@ export class Model3DView {
         const [near, far] = clipOf(item);
         cam.near = near;
         cam.far = far;
-        cam.updateProjectionMatrix();
+        this._lensProject(cam, item, share[0], share[1]);
         if (entry.helper) entry.helper.update();
+    }
+
+    /**
+     * Make `cam`'s projection with a scene camera's clipping and lens shift (the Channel Box's
+     * Near / Far Clip, Lens Shift X / Y). `fx`, `fy`: the share of the view the camera's picture takes
+     * (1 when the view is the picture; the gate's share while looked through with overscan).
+     */
+    _lensProject(cam, item, fx = 1, fy = 1) {
+        if (item && item.kind === "camera") {
+            const [near, far] = clipOf(item);
+            cam.near = near;
+            cam.far = far;
+        }
+        cam.updateProjectionMatrix();
+        const s = item && item.kind === "camera" ? shiftOf(item) : null;
+        if (!s || (!s[0] && !s[1])) return;
+        const [a, b] = shiftTerms(s, fx, fy);
+        cam.projectionMatrix.elements[8] += a;
+        cam.projectionMatrix.elements[9] += b;
+        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
     }
 
     /** Show the gate while looking through a camera, and only then. */
@@ -2077,14 +2099,23 @@ export class Model3DView {
      */
     _gateTell(g, item = null) {
         if (!this.hooks.onGate) return;
-        let r = null;
         // The camera looked through goes along: it may have a framing mask of its own (`item.frameMask`).
-        if (g) r = { x: g.x, y: g.y, w: g.w, h: g.h, camera: item ? item.id : null, mask: item && item.frameMask ? item.frameMask : null };
-        else if (this.stage && this._panePlain()) r = { x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight };
-        const sig = r ? `${r.x}|${r.y}|${r.w}|${r.h}|${r.camera || ""}|${r.mask ? JSON.stringify(r.mask) : ""}` : "";
+        const of = (it) => ({ camera: it ? it.id : null, mask: it && it.frameMask ? it.frameMask : null });
+        let list = [];
+        if (g) list = [{ x: g.x, y: g.y, w: g.w, h: g.h, ...of(item) }];
+        else if (this.stage && this._panePlain()) list = [{ x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight, camera: null, mask: null }];
+        else if (this._paneGates) {
+            // Split panes: the gate of each pane looking through a scene camera.
+            list = this._paneGates().map((p) => {
+                const e = this._entries && this._entries.get(p.id);
+                return { x: p.x, y: p.y, w: p.w, h: p.h, ...of(e && e.item) };
+            });
+        }
+        const sig = list.map((r) => `${r.x}|${r.y}|${r.w}|${r.h}|${r.camera || ""}|${r.mask ? JSON.stringify(r.mask) : ""}`).join(";");
         if (sig === this._gateTellSig) return;
         this._gateTellSig = sig;
-        this.hooks.onGate(r);
+        // A single rectangle (or null) as before; a list only for several panes.
+        this.hooks.onGate(list.length > 1 ? list : list[0] || null);
     }
 
     // ── The pivot ────────────────────────────────────────────────────────────
@@ -2777,7 +2808,7 @@ export class Model3DView {
         // A scene camera renders its gate: its own fov, not the overscanned
         // one the viewport shows around it.
         if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        cam.updateProjectionMatrix();
+        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
         // Rendered as the viewport draws it: bloom and tone mapping included.
         this._worldResize(W, H);
         this._worldRender(cam);
@@ -2814,7 +2845,7 @@ export class Model3DView {
         const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
         cam.aspect = W / H;
         if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        cam.updateProjectionMatrix();
+        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
 
         // A world shown as points is measured by its meshes.
         const atlasBack = this._atlasDepthBegin();

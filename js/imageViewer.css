@@ -2774,6 +2774,13 @@ audio.src-media { width: 90%; }
 }
 /* A camera dragged from the Outliner over a pane: it would look through it. */
 .model-pane.drop-camera { box-shadow: inset 0 0 0 2px rgba(116, 176, 240, 0.95); background: rgba(116, 176, 240, 0.08); }
+/* A camera looked through in a pane: its gate, the view around it shaded. */
+.model-pane-gate { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.model-pane-gateframe {
+    position: absolute; box-sizing: border-box; border: 1px solid rgba(255, 255, 255, 0.55);
+    box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.45);
+}
+.viewport.overlays-off .model-pane-gate { display: none !important; }
 .model-pane-split { position: absolute; z-index: 2; pointer-events: auto; }
 .model-pane-split.x { cursor: col-resize; }
 .model-pane-split.y { cursor: row-resize; }

@@ -829,6 +829,11 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             ap_w, ap_h = _picture_on_film(item)
             cam.CreateHorizontalApertureAttr(ap_w)
             cam.CreateVerticalApertureAttr(ap_h)
+            # The lens shift (shares of the picture's width / height, y up) as aperture offsets in mm.
+            shift = item.get("shift") if isinstance(item.get("shift"), list) and len(item.get("shift")) == 2 else None
+            if shift and (shift[0] or shift[1]):
+                cam.CreateHorizontalApertureOffsetAttr(float(shift[0]) * ap_w)
+                cam.CreateVerticalApertureOffsetAttr(float(shift[1]) * ap_h)
             clip = item.get("clip") if isinstance(item.get("clip"), list) and len(item.get("clip")) == 2 else [0.01, 10000.0]
             cam.CreateClippingRangeAttr(Gf.Vec2f(float(clip[0]), float(clip[1])))
             xformable = cam
@@ -1304,6 +1309,10 @@ def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
         item["resolution"] = [max(1, int(round(1080 * float(h_ap) / float(v_ap)))), 1080]
         # Its film back is the stage's apertures (the picture fills it), and its clipping range comes along.
         item["filmback"] = [round(float(h_ap), 4), round(float(v_ap), 4)]
+        ho = cam.GetHorizontalApertureOffsetAttr().Get() or 0.0
+        vo = cam.GetVerticalApertureOffsetAttr().Get() or 0.0
+        if ho or vo:
+            item["shift"] = [round(float(ho) / float(h_ap), 4), round(float(vo) / float(v_ap), 4)]
         clip = cam.GetClippingRangeAttr().Get()
         if clip is not None and float(clip[1]) > float(clip[0]) > 0:
             item["clip"] = [float(clip[0]), float(clip[1])]

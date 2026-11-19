@@ -269,21 +269,37 @@ export const FrameMasksMixin = {
         this._fmGate = g || null;
         const view = this._model3d;
         if (!view || !view.stage) return;
-        let el = view._fmEl;
-        if (!el || el.parentNode !== view.stage) {
-            const doc = view.stage.ownerDocument || document;
-            el = doc.createElement("div");
+        // One rectangle, or a list (split panes: one per pane looking through a camera).
+        const list = !g ? [] : Array.isArray(g) ? g.filter(Boolean) : [g];
+        const doc = view.stage.ownerDocument || document;
+        const els = (view._fmEls || []).filter((e) => e.parentNode === view.stage);
+        if (view._fmEl && view._fmEl.parentNode === view.stage && !els.includes(view._fmEl)) els.unshift(view._fmEl);
+        if (!els.length) {
+            const el = doc.createElement("div");
             el.className = "frame-mask frame-mask-3d";
             view.stage.appendChild(el);
-            view._fmEl = el;
+            els.push(el);
         }
-        // A camera looked through may have a mask of its own (its Channel Box's Framing Mask): it stands in for
-        // the viewer's while that camera is looked through, on or off.
-        const st = g && g.mask ? cameraMaskState(g.mask) : this._frameMask();
-        el.dataset.source = g && g.mask ? "camera" : "viewer";
-        if (!g || !g.w || !g.h || !maskOf(st)) { el.style.display = "none"; return; }
-        Object.assign(el.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` });
-        this._frameMaskFill(el, g.w, g.h, st);
+        list.forEach((r, i) => {
+            let el = els[i];
+            if (!el) {
+                el = doc.createElement("div");
+                el.className = "frame-mask frame-mask-3d";
+                view.stage.appendChild(el);
+                els[i] = el;
+            }
+            // A camera looked through may have a mask of its own (its Channel Box's Framing Mask): it stands in
+            // for the viewer's while that camera is looked through, on or off.
+            const st = r.mask ? cameraMaskState(r.mask) : this._frameMask();
+            el.dataset.source = r.mask ? "camera" : "viewer";
+            el.dataset.camera = r.camera || "";
+            if (!r.w || !r.h || !maskOf(st)) { el.style.display = "none"; return; }
+            Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
+            this._frameMaskFill(el, r.w, r.h, st);
+        });
+        for (let i = list.length; i < els.length; i++) els[i].style.display = "none";
+        view._fmEls = els;
+        view._fmEl = els[0];
     },
 
     /** The menu: on / off, the ratios, a ratio of one's own, opacity, line and label. */
