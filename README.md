@@ -17,7 +17,7 @@ A viewer panel for [ComfyUI](https://github.com/comfyanonymous/ComfyUI). It disp
 
 ## Panels
 
-[History](docs/pages/history.md) (every render, in groups), [file browser](docs/pages/workspace.md#file-browser), [Parameters](docs/pages/workspace.md#parameters), [Agent code](docs/pages/agent-code.md) and [Dataset](docs/pages/dataset.md) dock anywhere: beside the picture, beside or above each other, or as tabs, and every space keeps its own arrangement. The viewer itself floats over the canvas, docks next to it or runs in its own browser window.
+[History](docs/pages/history.md) (every render, in groups), [file browser](docs/pages/workspace.md#file-browser), [Parameters](docs/pages/workspace.md#parameters), [Agent code](docs/pages/agent-code.md) and [Dataset](docs/pages/dataset.md) dock anywhere: beside the picture, beside or above each other, or as tabs, and every space keeps its own arrangement. A second view shows another open tab (a 3D scene through a camera of its own, a picture, a film) beside the main one. The viewer itself floats over the canvas, docks next to it or runs in its own browser window.
 
 Also: [Dependencies](docs/pages/dependencies.md) (file provenance graph) and the [agentY](docs/pages/agentY.md) integration.
 

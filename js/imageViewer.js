@@ -29,6 +29,7 @@ import { ModelMixin }    from "./imageViewer_mixinModel.js";
 import { PrevizMixin }   from "./imageViewer_mixinPreviz.js";
 import { PrevizCurvesMixin } from "./imageViewer_previzCurves.js";
 import { PrevizDopeSheetMixin } from "./imageViewer_previzDopeSheet.js";
+import { View2Mixin } from "./imageViewer_view2.js";
 import { PrevizPlayblastMixin } from "./imageViewer_previzPlayblast.js";
 import { PrevizClipsMixin } from "./imageViewer_previzClips.js";
 import { RotoCurvesMixin } from "./imageViewer_rotoCurves.js";
@@ -782,6 +783,15 @@ class ViewerPanel extends HTMLElement {
             ds.className = 'curves-panel dope-sheet-panel';
             this.curvesPanel.parentNode.insertBefore(ds, this.curvesPanel.nextSibling);
             this.dopeSheetPanel = ds;
+        }
+        // A second view: another open tab beside the picture (imageViewer_view2.js).
+        this.view2Panel = sr.getElementById('view2-panel');
+        if (!this.view2Panel && this.curvesPanel && this.curvesPanel.parentNode) {
+            const v2 = this.curvesPanel.ownerDocument.createElement('div');
+            v2.id = 'view2-panel';
+            v2.className = 'view2-panel';
+            this.curvesPanel.parentNode.insertBefore(v2, this.curvesPanel.nextSibling);
+            this.view2Panel = v2;
         }
         if (!this.rotoCurvesPanel && this.curvesPanel && this.curvesPanel.parentNode) {
             const rc = this.curvesPanel.ownerDocument.createElement('div');
@@ -1652,6 +1662,7 @@ Object.assign(
     PrevizMixin,
     PrevizCurvesMixin,
     PrevizDopeSheetMixin,
+    View2Mixin,
     PrevizPlayblastMixin,
     PrevizClipsMixin,
     RotoCurvesMixin,

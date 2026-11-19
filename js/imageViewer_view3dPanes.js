@@ -199,7 +199,7 @@ export const View3DPanesMixin = {
     _paneState() {
         if (!this._panes) {
             let saved = null;
-            try { saved = JSON.parse(this.win.localStorage.getItem(KEY) || "null"); } catch (_) { /* none */ }
+            try { saved = JSON.parse(this.win.localStorage.getItem(KEY + ((this.hooks && this.hooks.storeSuffix) || "")) || "null"); } catch (_) { /* none */ }
             const modes = this.materialModes ? this.materialModes().map(([m]) => m) : null;
             const s = this._panes = cleanPaneState(saved, modes);
             s.active = s.focus;
@@ -219,7 +219,7 @@ export const View3DPanesMixin = {
         const s = this._paneState();
         this._paneKeepCams();
         try {
-            this.win.localStorage.setItem(KEY, JSON.stringify({ layout: s.layout, split: s.split, views: s.views, focus: s.focus,
+            this.win.localStorage.setItem(KEY + ((this.hooks && this.hooks.storeSuffix) || ""), JSON.stringify({ layout: s.layout, split: s.split, views: s.views, focus: s.focus,
                                                                 shading: s.shading, through: s.through, cams: s.cams }));
         } catch (_) { /* private window */ }
     },
@@ -248,7 +248,7 @@ export const View3DPanesMixin = {
      */
     paneThroughId(kind = this.paneActiveKind()) {
         if (this._walk) return null;
-        if (kind === "persp") return (this.scene3d && this.scene3d.activeCamera) || null;
+        if (kind === "persp") return this._throughCam ? this._throughCam() : ((this.scene3d && this.scene3d.activeCamera) || null);
         if (!EXTRA_PERSP.includes(kind)) return null;
         const id = this._paneState().through[kind];
         const entry = id && this._entries && this._entries.get(id);

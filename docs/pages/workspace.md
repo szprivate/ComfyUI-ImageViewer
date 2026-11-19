@@ -18,9 +18,10 @@ Panels and the picture share the viewer's area, split side by side and one above
 - The button left of the panel name switches what that slot shows.
 - The buttons next to **✕** collapse the panel to its title bar or maximise it over the viewer.
 - Every space (Viewer, 3D, Comp, Edit, Paint, Motion, Farm) keeps a layout of its own: arrange the panels for 3D work once and they come back with every 3D tab. **Reset this space's panels** in the **layout** menu puts the space that is up back to how it shipped.
+- **Second view** (in the **ComfyUI** menu, or the switch button of any panel) shows another open tab next to the picture: a 3D scene, a picture or a film. A 3D scene there has a camera of its own and can look through any of the scene's cameras, so the same tab can be up in both places: the working view in the middle, the shot camera beside it. It follows the time of the main view and changes nothing in the scene.
 - The **layout** menu saves the current arrangement, every space's, under a name and can set it as default.
 
-The lower bar holds the transport and one menu per area: **ComfyUI** (History, Parameters, Agent code, Dataset, agentY), **3D**, **Motion**, **Paint**, **Comp** and **Timeline**.
+The lower bar holds the transport and one menu per area: **ComfyUI** (History, Parameters, Agent code, Dataset, agentY, Second view), **3D**, **Motion**, **Paint**, **Comp** and **Timeline**.
 
 ## File browser
 
