@@ -281,6 +281,7 @@ export const FarmMixin = {
             card.append(badge);
         }
         if (m.error) card.append(h("div", "fm-card-err", m.error));
+        if (m.provider_error) card.append(h("div", "fm-card-err", m.provider_error));
         const acts = h("div", "fm-acts");
         const act = (label, cls, fn, title) => {
             const b = h("button", `fm-btn ${cls || ""}`, label);
