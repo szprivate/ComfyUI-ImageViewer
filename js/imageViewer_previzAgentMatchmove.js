@@ -473,7 +473,8 @@ export const PrevizAgentMatchmoveMixin = {
 
     /**
      * {how: auto (every solved point) | points (track ids in `points`) | ai (SAM 3 looks for `prompt`, "ground" by
-     * default), tolerance? (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
+     * default) | depth (a depth model on a few frames; `workflow` picks it, `metres` (on) scales the world to metres with
+     * the Metric one), tolerance? (% of the scene's size), lift? (scene units, after), flip?}: the world set on the ground.
      */
     async _asa_matchmove_ground(scene, a) {
         const st = await this._amm();
@@ -483,17 +484,20 @@ export const PrevizAgentMatchmoveMixin = {
         const tol = isNum(a.tolerance) ? Number(a.tolerance) : undefined;
         let g;
         if (how === "ai") g = await this.matchmoveGroundAI(a.prompt || "ground", { ask: false });
+        else if (how === "depth") g = await this.matchmoveGroundDepth({ workflow: a.workflow || null, metres: a.metres !== false, ask: false });
         else if (how === "points") {
             const ids = this._ammTrackIds(st, a.points || []);
             if (ids.length < 3) throw new Error("points takes three or more track ids");
             g = this.matchmoveGroundFind({ ids, how: "region", tol });
         } else if (how === "auto") g = this.matchmoveGroundFind({ tol });
-        else throw new Error("how is auto, points or ai");
+        else throw new Error("how is auto, points, ai or depth");
         if (!g) throw new Error("not run (stopped, or the model files are not here)");
         if (g.error) throw new Error(g.error);
         if (a.flip) this.matchmoveGroundFlip();
         if (isNum(a.lift) && Number(a.lift)) { st.liftStep = Math.abs(Number(a.lift)); this.matchmoveGroundLift(Math.sign(Number(a.lift))); }
-        return this._ammAnswer(st, { ground: { points: g.count, of: (st.groundInfo || {}).of, tilt: round(g.tilt, 2), below: g.below, ids: g.ids.slice(0, 50) },
+        const gi = st.groundInfo || {};
+        return this._ammAnswer(st, { ground: { points: g.count, of: gi.of, tilt: round(g.tilt, 2), below: g.below, ids: how === "depth" ? [] : g.ids.slice(0, 50),
+                                               ...(how === "depth" ? { camera_height: round(gi.height, 3), metres_per_unit_before: gi.metres, in_metres: !!gi.metres, model: gi.model } : {}) },
                                      orient: st.mm.orient });
     },
 

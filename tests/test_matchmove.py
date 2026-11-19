@@ -394,6 +394,72 @@ class Routes(unittest.TestCase):
                 self.assertFalse(20 <= k0[1] < 120 and 40 <= k0[2] < 140, "started on the matte")
         self.run_c(go)
 
+    def test_depth_puts_the_floor_into_the_solves_world_and_says_the_metres(self):
+        """A depth job (Depth Anything 3 Metric) of a floor 1.5 below a camera sliding sideways: each frame's depth,
+        scaled onto the solved tracks, lands on the floor in the solve's world, and a unit is 0.4 m."""
+        CW = importlib.import_module(self.pkg + ".comp_write")        # 32-bit float, as ComfyUI saves them
+        k, f, c, floor = 2.5, 300.0, (160.0, 100.0), 1.5          # 2.5 solve units a metre
+
+        def z_at(u, v):
+            dy = (v - c[1]) / f
+            return np.where(dy > 0.02, floor / np.maximum(dy, 1e-6), 20.0).clip(0, 20.0)
+
+        rng = np.random.default_rng(3)
+        Xs = np.r_[np.c_[rng.uniform(-3, 3, 40), np.full(40, floor), rng.uniform(3, 12, 40)],
+                   np.c_[rng.uniform(-6, 6, 15), rng.uniform(-3, 1, 15), np.full(15, 20.0)]]
+
+        async def go(c_):
+            r = await c_.post("/imageviewer/mm_matte_workflows", json={"engine": "depth"})
+            d = await r.json()
+            ids = [w["id"] for w in d["workflows"]]
+            self.assertIn("comp_da3_metric", ids)
+            self.assertFalse([i for i in ids if "moge" in i or "lotus" in i])      # scaled per frame: not in space
+            r = await c_.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "depth",
+                                                             "workflow": "comp_da3_metric", "frames": [0, 2, 4]})
+            self.assertEqual(r.status, 409)                                     # its model is not here: asked for
+            G = sys.modules[self.pkg + ".paint_generate"]
+            real, G.missing = G.missing, lambda g, fp, nc: []
+            try:
+                r = await c_.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "depth",
+                                                                 "workflow": "comp_da3_metric", "frames": [0, 2, 4]})
+            finally:
+                G.missing = real
+            prep = await r.json()
+            self.assertEqual(r.status, 200, prep)
+            sub = os.path.join("matchmove", "depth", prep["run"])
+            os.makedirs(os.path.join(self.dirs["output"], sub), exist_ok=True)
+            images, cams, tracks = {}, {}, {}
+            gy, gx = np.mgrid[0:100, 0:160]
+            for fr in prep["frames"]:
+                C = np.array([0.3 * fr, 0.0, 0.0])
+                cams[str(fr)] = {"R": np.eye(3).tolist(), "t": (-C).tolist()}
+                depth = z_at((gx + 0.5) * 2, (gy + 0.5) * 2) / k              # the model's metres, at half size
+                depth = depth.astype(np.float32)
+                name = f"depth.{fr:04d}_00001_.exr"
+                with open(os.path.join(self.dirs["output"], sub, name), "wb") as fh:
+                    fh.write(CW.exr_bytes({"R": depth, "G": depth, "B": depth}, depth="float", compression="none"))
+                images[str(fr)] = {"filename": name, "subfolder": sub, "type": "output"}
+                pc = Xs - C
+                uv = f * pc[:, :2] / pc[:, 2:] + c
+                tracks[str(fr)] = [[u, v, *X] for (u, v), X in zip(uv.tolist(), Xs.tolist()) if 0 <= u < 320 and 0 <= v < 200]
+            r = await c_.post("/imageviewer/mm_depth_place", json={"run": prep["run"], "images": images, "cams": cams,
+                                                                  "tracks": tracks, "focal": f, "center": list(c)})
+            got = await r.json()
+            self.assertEqual(r.status, 200, got)
+            self.assertTrue(got["metric"])
+            self.assertAlmostEqual(got["metres_per_unit"], 1 / k, delta=0.01)
+            self.assertEqual([q["frame"] for q in got["frames"]], [0, 2, 4])
+            P = np.asarray(got["points"])
+            on = np.abs(P[:, 1] - floor) < 0.03
+            self.assertGreater(on.mean(), 0.3, on.mean())                       # the lower part of the picture
+            self.assertLess(np.abs(P[~on][:, 2] - 20).min(), 0.6)              # the rest is the far wall
+            r = await c_.post("/imageviewer/mm_depth_place", json={"run": prep["run"], "images": images, "cams": cams,
+                                                                  "tracks": {}, "focal": f})
+            self.assertEqual(r.status, 400)                                     # no tracks: no scale
+            r = await c_.post("/imageviewer/mm_matte_place", json={"run": prep["run"], "images": images})
+            self.assertEqual(r.status, 400)                                     # depth is not a matte
+        self.run_c(go)
+
     def test_one_frame_of_a_sequence_is_the_sequence(self):
         async def go(c):
             one = os.path.join(self.dirs["output"], "plate.1003.png")
