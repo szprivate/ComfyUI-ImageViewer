@@ -19,7 +19,7 @@ import * as D from "./imageViewer_matchmoveData.js";
 import { openFilePicker, notice, canvasContext } from "./imageViewer_exportUI.js";
 import { openLensChart } from "./imageViewer_lensChart.js";
 
-const PLATE_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx"];
+const PLATE_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".heic", ".heif"];
 const PICT_EXTS = [".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".mp4", ".mov"];
 const TRAIL = 12;               // frames of trail drawn behind a track
 const FRAME_CACHE = 48;         // frames of the plate kept as pictures
@@ -243,7 +243,7 @@ export const PrevizMatchmoveMixin = {
         if (!st) return;
         openFilePicker(this.container, {
             id: "matchmove-plate", title: "The plate to track", kind: "video", exts: PLATE_EXTS, go: "Open",
-            note: "A film, or one frame of a numbered sequence (the whole sequence is taken).",
+            note: "A film, or one frame of a numbered sequence (the whole sequence is taken). An iPhone film or HEIC photo brings its camera, and a Cinematic film its depth.",
             onPick: async (files) => {
                 try { await this.matchmoveSetPlate(files[0].path); return { ok: true }; }
                 catch (e) { return { ok: false, message: e.message }; }
@@ -275,6 +275,9 @@ export const PrevizMatchmoveMixin = {
             }
             const c = d.camera || {};
             if (c.focal_mm) { mm.camera.focalMm = c.focal_mm; mm.camera.focalKnown = true; }
+            // a phone stabilises and lens-corrects its film, which crops it a little: its focal length is a
+            // good start, not the answer
+            if (fresh && c.phone && c.phone.apple && c.phone.tracks && c.focal_mm) mm.settings.refine = "on";
             if (c.sensor_mm) mm.camera.sensor = c.sensor_mm.slice(0, 2);
             mm.camera.pixelAspect = Number(c.pixel_aspect) > 0 ? Number(c.pixel_aspect) : 1;
             mm.camera.preset = "";
@@ -467,10 +470,12 @@ export const PrevizMatchmoveMixin = {
                      el(ctx.doc, "div", "", `${p.width} × ${p.height} · ${p.frames} frames · ${p.fps} fps`));
         const f = st.facts || {};
         if (mm.camera.model || mm.camera.lens) facts.append(el(ctx.doc, "div", "", [mm.camera.model, mm.camera.lens].filter(Boolean).join(" · ")));
-        if (f.sources && f.sources.length) facts.append(el(ctx.doc, "div", "mm-good", `Read from: ${f.sources.join(", ")}`));
+        const from = [...new Set(Object.values(f.sources || {}))].filter(Boolean);
+        if (from.length) facts.append(el(ctx.doc, "div", "mm-good", `Read from: ${from.join(", ")}`));
         else if (st.facts) facts.append(el(ctx.doc, "div", "mm-note warn", "The plate says nothing about its camera: type what you know, or leave the focal length unknown."));
         for (const n of f.notes || []) facts.append(el(ctx.doc, "div", "mm-note", n));
         ctx.box.append(facts);
+        if (f.phone) this._mmPhoneSection(ctx, f.phone);
         const cam = mm.camera;
         const presets = [["", "Pick a camera… (or type below)"], ...D.CAMERA_PRESETS.map((q) => [q.id, q.name])];
         const pick = this._mmSelect(ctx, presets, cam.preset || "", (v) => v && this._mmEdit("camera preset", (m) => D.applyCameraPreset(m, v)));
@@ -499,6 +504,56 @@ export const PrevizMatchmoveMixin = {
         this._mmRow(ctx, "", lab);
         const fpx = D.focalPx(mm);
         if (fpx) this._mmNote(ctx, `${fpx.toFixed(1)} px · vertical field of view ${D.fovV(fpx, p.height).toFixed(2)}°`);
+    },
+
+    /** What else an iPhone film or photo holds: the lens, the turn, its timed metadata and its depth. */
+    _mmPhoneSection(ctx, ph) {
+        const { mm, st, doc } = ctx;
+        const box = el(doc, "div", "mm-facts");
+        box.append(el(doc, "div", "", ph.tracks ? "From the phone's film" : "From the phone's photo"));
+        const lens = ph.lens || {};
+        const bits = [lens.camera && `${lens.camera} camera`, lens.side && `${lens.side}`, lens.fnumber && `f/${lens.fnumber}`].filter(Boolean);
+        if (bits.length) box.append(el(doc, "div", "", bits.join(" · ")));
+        if (ph.rotation) box.append(el(doc, "div", "", `Recorded on its side, turned ${ph.rotation}° upright here`));
+        if (ph.software || ph.created) box.append(el(doc, "div", "", [ph.software && `iOS ${ph.software}`, ph.created].filter(Boolean).join(" · ")));
+        if (ph.timed && ph.timed.length) {
+            const t = el(doc, "div", "", `Timed metadata: ${ph.timed.length} key(s)`);
+            t.title = ph.timed.join("\n");
+            box.append(t);
+        }
+        if (ph.motion && ph.motion.length) box.append(el(doc, "div", "mm-good", `Motion: ${ph.motion.join(", ")}`));
+        const dep = ph.depth;
+        if (dep && ph.tracks) box.append(el(doc, "div", "mm-good", `Cinematic depth: ${dep.width} × ${dep.height}, ${dep.samples} pictures`));
+        else if (dep) box.append(el(doc, "div", "mm-good", `Depth picture: ${dep.width} × ${dep.height}${ph.depth_file ? ` (saved as ${String(ph.depth_file).split(/[\\/]/).pop()})` : ""}`));
+        ctx.box.append(box);
+        if (dep && ph.tracks && mm.plate) {
+            this._mmRow(ctx, "", this._mmBtn(ctx, st.phoneDepthShown ? "Hide the depth" : "Show the depth", () => { st.phoneDepthShown = !st.phoneDepthShown; this._mmRender(); },
+                                             { title: "The film's depth at the current frame (bright = near)" }),
+                        this._mmBtn(ctx, "Save the depth as pictures", () => this.matchmovePhoneExport(),
+                                    { title: "The depth track as a 16-bit picture sequence beside the plate's copies, one picture a frame" }));
+            if (st.phoneDepthShown) {
+                const img = el(doc, "img", "mm-phone-depth");
+                img.style.cssText = "max-width:100%;max-height:180px;display:block;margin:4px 0;image-rendering:pixelated";
+                img.src = api.apiURL(`/imageviewer/mm_phone_depth_view?${new URLSearchParams({ path: mm.plate.path, frame: String(this.currentFrame || 0) })}`);
+                img.onerror = () => { img.replaceWith(el(doc, "div", "mm-note warn", "The depth could not be read at this frame.")); };
+                ctx.box.append(img);
+            }
+        }
+    },
+
+    async matchmovePhoneExport() {
+        const st = this._mmCur();
+        if (!st || !st.mm.plate) return;
+        st.busy = { what: "Saving the phone's depth" };
+        this._mmRender();
+        try {
+            const d = await this._mmPost("/imageviewer/mm_phone_export", { path: st.mm.plate.path });
+            notice("info", "Depth saved", `${d.frames} picture(s), ${d.width} × ${d.height}: ${d.pattern}`);
+            return d;
+        } finally {
+            st.busy = null;
+            this._mmRender();
+        }
     },
 
     matchmoveOpenFile() {

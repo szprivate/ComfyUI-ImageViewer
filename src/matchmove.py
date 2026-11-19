@@ -110,23 +110,44 @@ _FOCAL_KEYS = re.compile(r"focal", re.I)
 def _exif_facts(path):
     """Camera facts from a still's EXIF (Pillow): make, model, lens, focal_mm, focal35, sensor from the focal
     plane resolution."""
-    out = {}
     try:
         from PIL import Image
         with Image.open(path) as im:
             ex = im.getexif()
             if not ex:
-                return out
-            sub = {}
-            try:
-                sub = dict(ex.get_ifd(0x8769))
-            except Exception:  # noqa: BLE001 - an old Pillow, or no sub-IFD
-                sub = {}
-            allv = dict(ex)
-            allv.update(sub)
+                return {}
             w, h = im.size
+            return _exif_values(ex, w, h)
     except Exception:  # noqa: BLE001 - not a picture Pillow reads
-        return out
+        return {}
+
+
+def exif_dict_facts(tiff, width=None, height=None):
+    """The same facts from raw EXIF bytes (a TIFF header on, as a HEIC's Exif item holds)."""
+    try:
+        from PIL import Image
+        ex = Image.Exif()
+        ex.load(bytes(tiff) if bytes(tiff).startswith(b"Exif") else b"Exif\x00\x00" + bytes(tiff))
+    except Exception:  # noqa: BLE001
+        return {}
+    if not width or not height:
+        sub = {}
+        try:
+            sub = dict(ex.get_ifd(0x8769))
+        except Exception:  # noqa: BLE001
+            pass
+        width, height = sub.get(0xA002), sub.get(0xA003)
+    return _exif_values(ex, width, height)
+
+
+def _exif_values(ex, w, h):
+    out = {}
+    try:
+        sub = dict(ex.get_ifd(0x8769))
+    except Exception:  # noqa: BLE001 - an old Pillow, or no sub-IFD
+        sub = {}
+    allv = dict(ex)
+    allv.update(sub)
     if allv.get(0x010F):
         out["make"] = str(allv[0x010F]).strip("\x00 ")
     if allv.get(0x0110):
@@ -140,7 +161,10 @@ def _exif_facts(path):
     if f35:
         out["focal35"] = f35
     xres, yres, unit = _num(allv.get(0xA20E)), _num(allv.get(0xA20F)), allv.get(0xA210)
-    per_mm = {2: 25.4, 3: 10.0, 4: 1.0}.get(int(unit) if unit else 2)
+    try:
+        per_mm = {2: 25.4, 3: 10.0, 4: 1.0}.get(int(unit) if unit else 2)
+    except (TypeError, ValueError):
+        per_mm = None
     if xres and yres and per_mm and w and h:
         sw, sh = w / xres * per_mm, h / yres * per_mm
         if 1 < sw < 80 and 1 < sh < 80:
@@ -194,8 +218,13 @@ def _exr_facts(path):
 
 
 def _video_facts(path):
-    """Camera facts a film's container keeps (QuickTime's make / model / lens keys and the like)."""
+    """Camera facts a film's container keeps (QuickTime's make / model / lens keys and the like): read from the
+    file's own boxes first (``iphone_io``: an iPhone's lens and 35 mm keys, its depth track), then what PyAV
+    shows."""
     out = {}
+    if os.path.splitext(path)[1].lower() in (".mov", ".mp4", ".m4v", ".qt"):
+        from . import iphone_io
+        out = {k: v for k, v in iphone_io.film_facts(path).items() if not k.startswith("_")}
     try:
         import av
         with av.open(path) as c:
@@ -238,7 +267,7 @@ def _sidecar_facts(path):
             except (OSError, ValueError):
                 continue
             if isinstance(d, dict):
-                keep = {k: d[k] for k in ("make", "model", "lens", "focal_mm", "focal35", "sensor_mm") if k in d}
+                keep = {k: d[k] for k in ("make", "model", "lens", "focal_mm", "focal35", "sensor_mm", "phone") if k in d}
                 if keep:
                     keep["_file"] = os.path.basename(cand)
                     return keep
@@ -253,7 +282,8 @@ def camera_facts(path, first_file=None, width=None, height=None):
     facts, src = {}, {}
     for name, fn in (("film", _video_facts if ext in (".mp4", ".mov", ".mxf", ".mkv", ".webm", ".avi", ".m4v") else None),
                      ("EXR header", _exr_facts if ext == ".exr" else None),
-                     ("EXIF", _exif_facts if ext in (".jpg", ".jpeg", ".tif", ".tiff", ".dng", ".heic", ".png", ".webp") else None),
+                     ("HEIC", _heic_facts if ext in (".heic", ".heif", ".hif") else None),
+                     ("EXIF", _exif_facts if ext in (".jpg", ".jpeg", ".tif", ".tiff", ".dng", ".png", ".webp") else None),
                      ("camera file", _sidecar_facts)):
         if not fn:
             continue
@@ -261,11 +291,19 @@ def camera_facts(path, first_file=None, width=None, height=None):
         for k, v in got.items():
             if k.startswith("_"):
                 continue
+            if k == "phone":
+                facts.setdefault("phone", v)
+                continue
             if k not in facts and v not in (None, "", []):
                 facts[k] = v
                 src[k] = name + (f" ({got['_file']})" if "_file" in got else "")
     notes = []
     w, h = width, height
+    phone = facts.pop("phone", None)
+    if phone and not (w and h) and phone.get("width") and phone.get("height"):
+        w, h = phone["width"], phone["height"]           # a photo read here: its size as shown
+    if phone and phone.get("rotation") in (90, 270) and w and h and w > h:
+        w, h = h, w                         # shown upright: the picture is turned on playback
     a = (w / h) if w and h else 1.5
 
     def equivalent_frame(crop=1.0):
@@ -302,9 +340,37 @@ def camera_facts(path, first_file=None, width=None, height=None):
         notes.append("The plate does not say its focal length: give it if you know it, else the solve finds it.")
     elif not facts.get("sensor_mm"):
         notes.append("The plate gives a focal length but no sensor size: pick the camera or type the sensor width.")
+    if phone:
+        facts["phone"] = phone
+        notes.extend(phone_notes(phone))
     facts["sources"] = src
     facts["notes"] = notes
     return facts
+
+
+def _heic_facts(path):
+    from . import iphone_io
+    return iphone_io.photo_facts(path)
+
+
+def phone_notes(phone):
+    """What to tell the user about a phone's film or photo."""
+    out = []
+    if phone.get("tracks") is not None:            # a film
+        if not phone.get("apple"):
+            return out
+        if phone.get("depth"):
+            d = phone["depth"]
+            out.append(f"Cinematic film: it carries the phone's depth ({d.get('width')} x {d.get('height')}, "
+                       f"{d.get('samples')} pictures). Find the ground can use it in place of a depth model.")
+        else:
+            out.append("An iPhone film: it holds no depth (only Cinematic mode records one, and only the "
+                       "unmodified original keeps it) and no motion samples.")
+        if phone.get("motion"):
+            out.append("Motion keys in the film: " + ", ".join(phone["motion"][:4]) + ".")
+    elif phone.get("depth"):
+        out.append("A photo with depth (" + str(phone["depth"].get("type")) + ").")
+    return out
 
 
 # ── pictures ─────────────────────────────────────────────────────────────────

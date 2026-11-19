@@ -122,6 +122,37 @@ def render_plate(folder):
     return os.path.join(folder, "plate.1001.png").replace("\\", "/")
 
 
+def render_cinematic(folder, seq_folder):
+    """The plate as an iPhone Cinematic film: the frames as H.264 and a depth track (disparity 4 / z, the floor
+    and the dots as render_depth has them, a quarter of the size) of sample type 'dish', as the phone writes it."""
+    import shutil as _sh
+    import subprocess
+    from test_iphone_io import make_cinematic
+    X, cams = plate_scene()
+    dw, dh = W // 2, H // 2
+    yy, xx = np.mgrid[0:dh, 0:dw].astype(np.float64) + 0.5
+    dy = (yy * 2 - H / 2) / F
+    disp = []
+    for R, C in cams:
+        z = np.where(dy > 1e-3, (FLOOR_Y - C[1]) / np.maximum(dy, 1e-9), 200.0).clip(0, 200.0)
+        pc = (X - C) @ R.T
+        for x, y, zz in pc:
+            if zz <= 0.5:
+                continue
+            u, v = (F * x / zz + W / 2) / 2, (F * y / zz + H / 2) / 2
+            x0, x1, y0, y1 = int(max(0, u - 2)), int(min(dw, u + 3)), int(max(0, v - 2)), int(min(dh, v + 3))
+            if x1 > x0 and y1 > y0:
+                z[y0:y1, x0:x1] = np.minimum(z[y0:y1, x0:x1], zz)
+        disp.append(np.clip(4.0 / z, 0, 1))
+    os.makedirs(folder, exist_ok=True)
+    pic = os.path.join(folder, "picture.mp4")
+    subprocess.run([_sh.which("ffmpeg"), "-v", "error", "-y", "-framerate", "24", "-start_number", "1001", "-i",
+                    os.path.join(seq_folder, "plate.%04d.png"), "-c:v", "libx264", "-crf", "6", "-pix_fmt", "yuv420p",
+                    pic], check=True)
+    return make_cinematic(folder, W, H, dw, dh, frames=N, rotate=False, depth=np.asarray(disp, np.float32),
+                          pic=pic, fps=24).replace("\\", "/")
+
+
 @unittest.skipIf(sync_playwright is None or web is None or av is None, "needs playwright, aiohttp and PyAV")
 class MatchmoveBrowserTests(unittest.TestCase):
     @classmethod
@@ -398,6 +429,60 @@ class MatchmoveBrowserTests(unittest.TestCase):
             P._cpAiWaitAll = async (pid, outputs) => Object.fromEntries(Object.keys(outputs).map((f) =>
                 [f, { filename: `${name}.${f}.${ext}`, subfolder: sub, type: 'output' }]));
         }""", [name, ext, sub])
+
+    @unittest.skipIf(shutil.which("ffmpeg") is None, "needs ffmpeg")
+    def test_an_iphone_cinematic_film_brings_its_camera_and_its_depth_finds_the_ground(self):
+        film = render_cinematic(os.path.join(self.dirs["input"], "phone"), self.dirs["output"])
+        pg = self._page()
+        try:
+            pg.evaluate("() => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            got = pg.evaluate("""async (p) => { const P = window.__panel; await P.matchmoveSetPlate(p);
+                const st = P._mmCur(); P._mmRender();
+                return { plate: st.mm.plate, cam: st.mm.camera, refine: st.mm.settings.refine, phone: st.facts.phone,
+                         text: P.mmGuidePanel.textContent }; }""", film)
+            self.assertEqual((got["plate"]["width"], got["plate"]["height"], got["plate"]["frames"]), (W, H, N))
+            self.assertEqual(got["cam"]["model"], "Apple iPhone 14")
+            self.assertAlmostEqual(got["cam"]["focalMm"], 5.7)
+            self.assertEqual(got["refine"], "on")                         # a phone's focal is a start
+            self.assertTrue(got["phone"]["depth"])
+            self.assertIn("Cinematic depth", got["text"])
+            self.assertIn("From the phone's film", got["text"])
+            # Show the depth: the frame's depth picture is drawn in the guide.
+            pg.evaluate("() => { const st = window.__panel._mmCur(); st.phoneDepthShown = true; window.__panel._mmRender(); }")
+            pg.wait_for_function("() => { const i = window.__panel.mmGuidePanel.querySelector('img.mm-phone-depth'); return i && i.naturalWidth > 0; }",
+                                 timeout=20000)
+            if SHOTS:          # the guide's Plate step alone, drawn at its full height
+                h = pg.evaluate_handle("""() => { const s = window.__panel.mmGuidePanel.querySelector('.mm-scroll');
+                    s.style.cssText += ';position:fixed;left:20px;top:20px;width:340px;height:auto;max-height:none;z-index:99999;background:#202020;';
+                    return s; }""").as_element()
+                pg.wait_for_timeout(200)
+                h.screenshot(path=os.path.join(SHOTS, "mm_phone_plate.png"))
+                pg.evaluate("() => window.__panel._mmRender()")
+            # Track and solve the film; the 35 mm key's focal is refined to the plate's real one.
+            n = pg.evaluate("async () => { const P = window.__panel; await P.matchmoveAutoTrack(); return P._mmCur().mm.tracks.length; }")
+            self.assertGreater(n, 40)
+            sv = pg.evaluate("""async () => { const P = window.__panel; await P.matchmoveSolve();
+                const s = P._mmCur().mm.solve; return { rms: s.rms, f: s.focal_px }; }""")
+            self.assertLess(sv["rms"], 1.5, sv)
+            # The ground from the film's own depth: level, the camera above it.
+            g = pg.evaluate("""async () => { const P = window.__panel; await P.matchmoveBuild();
+                P._mmCur().mm.step = 'scene'; P._mmRender();
+                const button = [...P.mmGuidePanel.querySelectorAll('button')].some((b) => b.textContent === "Find with the phone's depth");
+                const r = await P.matchmoveGroundPhone(); return { r, button, gi: P._mmCur().groundInfo,
+                text: P.mmGuidePanel.textContent }; }""")
+            gi = g["gi"]
+            self.assertFalse(gi.get("error"), gi)
+            self.assertEqual(gi["model"], "phone")
+            self.assertEqual(gi["reading"], "disparity")
+            self.assertLess(gi["tilt"], 5, gi)
+            self.assertGreater(gi["height"], 0, gi)
+            self.assertTrue(g["button"])
+            self.assertIn("phone's depth", g["text"])
+            self._shot(pg, "mm_phone_ground")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
 
     def test_the_agent_tracks_solves_and_builds_through_its_actions(self):
         """The agent's road: previzRigAgentRun (what /imageviewer/rig/agent sends the page) with matchmove_* actions,

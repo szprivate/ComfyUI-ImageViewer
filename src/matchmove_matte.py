@@ -30,6 +30,7 @@ No process is started; the workflows run in ComfyUI's own queue.
 """
 from __future__ import annotations
 
+import math
 import os
 import secrets
 import threading
@@ -441,21 +442,10 @@ def scale_depth(d, cam, tracks):
     return {"scale": k, "spread": float(np.median(np.abs(ratios / k - 1))), "tracks": len(ratios)}
 
 
-def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=DEPTH_STEP, most=DEPTH_MOST,
-                 pixel_aspect=1.0):
-    """A depth job's frames as points of the solve's world: {points [[x, y, z]], frames [{frame, scale, spread,
-    tracks, points}], skipped, metric, metres_per_unit, workflow}.
-
-    *results* {frame: path of the model's EXR}; *cams* {frame: {R, t}}; *tracks* {frame: [[u, v, X0, X1, X2]]}.
-    Each frame's depth is scaled onto its solved tracks (``scale_depth``), then every *step*-th pixel goes out
-    along its ray (the plate's pixel through the lens to where it would be without it, then the solve's focal and
-    centre) to that depth and back into the world. The farthest 5 % (sky, haze) are left out. From a metric model
-    a scene unit is ``1 / scale`` metres (the median over the frames)."""
-    from . import comp_ai as CA
-    rec = run_record(run)
-    if rec["engine"] != "depth":
-        raise MatteError("not a depth run")
-    w, h = rec["size"]
+def _points_from_maps(maps, w, h, cams, tracks, *, focal, center, lens=None, step=DEPTH_STEP, most=DEPTH_MOST,
+                      pixel_aspect=1.0):
+    """*maps* {frame: () -> float32 [h, w] depth (larger = farther, up to a scale)} -> (point arrays, frames,
+    skipped, scales): each frame scaled onto its solved tracks and sent out along the plate's rays."""
     fx = float(focal)
     c = np.asarray(center if center else [w / 2, h / 2], float)
     gy, gx = np.mgrid[step / 2:h:step, step / 2:w:step]
@@ -465,12 +455,15 @@ def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=D
     # the solve is in square pixels (matchmove_solve.solve's pixel_aspect)
     rays = np.c_[(rays - c) * [pa, 1.0] / fx, np.ones(len(rays))]
     out, frames, skipped, scales = [], [], [], []
-    for f, path in sorted(((int(a), b) for a, b in results.items()), key=lambda x: x[0]):
+    for f, get in sorted(maps.items(), key=lambda x: x[0]):
         cam = cams.get(f) or cams.get(str(f))
         if not cam:
             skipped.append({"frame": f, "why": "no solved camera"})
             continue
-        d = _resize(CA.read_depth(path), w, h)
+        d = get()
+        if d is None:
+            skipped.append({"frame": f, "why": "no depth"})
+            continue
         sc = scale_depth(d, cam, tracks.get(f) or tracks.get(str(f)) or [])
         if not sc:
             skipped.append({"frame": f, "why": f"fewer than {DEPTH_MIN_TRACKS} solved tracks with depth"})
@@ -489,6 +482,89 @@ def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=D
         out.append(X)
         scales.append(sc["scale"])
         frames.append({"frame": f, "points": len(X), **{k: round(v, 5) if isinstance(v, float) else v for k, v in sc.items()}})
+    return out, frames, skipped, scales
+
+
+PHONE_READINGS = ("disparity", "depth")       # how a phone's depth picture is read: bright = near, or = far
+
+
+def _phone_map(img, reading):
+    from . import iphone_io
+    if reading == "disparity":
+        return iphone_io.depth_from_disparity(img)
+    d = np.asarray(img, np.float32).copy()
+    d[d <= 1.0 / 255] = np.inf
+    return d
+
+
+def phone_depth_maps(path, frames, fps, w, h, turn=0):
+    """A Cinematic film's depth at plate *frames*: {frame: float32 [h, w] as stored (0..1)}, turned as the
+    plate is and brought to the plate's size."""
+    from . import iphone_io
+    frames = [int(f) for f in frames][:MAX_FRAMES]
+    got = iphone_io.depth_samples(path, [(f + 0.5) / float(fps or 30) for f in frames])
+    out = {}
+    for f in frames:
+        t = (f + 0.5) / float(fps or 30)
+        if t not in got:
+            continue
+        img = got[t][1]
+        k = {90: -1, 180: 2, 270: 1}.get(int(turn or 0), 0)
+        if k:
+            img = np.rot90(img, k)
+        if (img.shape[1] > img.shape[0]) != (w > h) and abs(w - h) > 2:
+            img = np.rot90(img, -1)                    # stored the other way round from the picture
+        out[f] = _resize(np.ascontiguousarray(img), w, h)
+    return out
+
+
+def phone_depth_points(path, frames, cams, tracks, *, fps, size, focal, center=None, lens=None, turn=0,
+                       reading=None, step=DEPTH_STEP, most=DEPTH_MOST, pixel_aspect=1.0):
+    """Points of the solve's world from the phone's own depth (a Cinematic film's depth track), as
+    ``depth_points`` answers. Whether the stored picture is disparity or depth is not written in the file in a
+    way this reader knows, so both readings are scaled onto the tracks and the one that agrees with them best
+    (the smaller spread) is used, unless *reading* says."""
+    w, h = int(size[0]), int(size[1])
+    raw = phone_depth_maps(path, frames, fps, w, h, turn)
+    if not raw:
+        raise MatteError("the film's depth track gave no pictures for those frames")
+    tries = [reading] if reading in PHONE_READINGS else list(PHONE_READINGS)
+    best = None
+    for r in tries:
+        maps = {f: (lambda a=a, r=r: _phone_map(a, r)) for f, a in raw.items()}
+        res = _points_from_maps(maps, w, h, cams, tracks, focal=focal, center=center, lens=lens, step=step,
+                                most=most, pixel_aspect=pixel_aspect)
+        spread = float(np.median([fr["spread"] for fr in res[1]])) if res[1] else math.inf
+        if best is None or spread < best[0]:
+            best = (spread, r, res)
+    spread, r, (out, frames_out, skipped, _scales) = best
+    if not out:
+        raise MatteError(skipped[0]["why"] if skipped else "the phone's depth gave no points")
+    pts = np.concatenate(out)
+    return {"points": np.round(pts, 5).tolist(), "frames": frames_out, "skipped": skipped, "metric": False,
+            "metres_per_unit": None, "workflow": "phone", "reading": r, "spread": round(spread, 5)}
+
+
+def depth_points(run, results, cams, tracks, *, focal, center, lens=None, step=DEPTH_STEP, most=DEPTH_MOST,
+                 pixel_aspect=1.0):
+    """A depth job's frames as points of the solve's world: {points [[x, y, z]], frames [{frame, scale, spread,
+    tracks, points}], skipped, metric, metres_per_unit, workflow}.
+
+    *results* {frame: path of the model's EXR}; *cams* {frame: {R, t}}; *tracks* {frame: [[u, v, X0, X1, X2]]}.
+    Each frame's depth is scaled onto its solved tracks (``scale_depth``), then every *step*-th pixel goes out
+    along its ray (the plate's pixel through the lens to where it would be without it, then the solve's focal and
+    centre) to that depth and back into the world. The farthest 5 % (sky, haze) are left out. From a metric model
+    a scene unit is ``1 / scale`` metres (the median over the frames)."""
+    from . import comp_ai as CA
+    rec = run_record(run)
+    if rec["engine"] != "depth":
+        raise MatteError("not a depth run")
+    w, h = rec["size"]
+    maps = {}
+    for f, p in results.items():
+        maps[int(f)] = (lambda p=p: _resize(CA.read_depth(p), w, h))
+    out, frames, skipped, scales = _points_from_maps(maps, w, h, cams, tracks, focal=focal, center=center,
+                                                     lens=lens, step=step, most=most, pixel_aspect=pixel_aspect)
     if not out:
         raise MatteError(skipped[0]["why"] if skipped else "the job gave no depth")
     metric = rec.get("workflow") in METRIC_WORKFLOWS

@@ -206,7 +206,7 @@ def _mtime(path):
 # What the viewer shows: pictures, films, sound, 3D files - and the files a 3D
 # file names beside itself (a .gltf's .bin, an .obj's .mtl, its textures).
 MEDIA_EXTS = frozenset({
-    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".ico", ".svg",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".ico", ".svg", ".heic", ".heif", ".hif",
     ".tif", ".tiff", ".exr", ".dpx", ".tga", ".hdr",
     ".mp4", ".m4v", ".mov", ".webm", ".mkv", ".ogv", ".avi", ".mpg", ".mpeg", ".wmv", ".flv",
     ".wav", ".mp3", ".flac", ".ogg", ".oga", ".m4a", ".aac", ".opus", ".weba",
