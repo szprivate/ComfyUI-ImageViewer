@@ -85,6 +85,8 @@ export const UIMixin = {
         if (this.previzCurveKeyDown && this.previzCurveKeyDown(e)) return;
         // The 3D Clip Sequencer's keys, while it has the focus (imageViewer_previzClips.js).
         if (this.clipSeqKeyDown && this.clipSeqKeyDown(e)) return;
+        // The Matchmove plate's keys, while it has the focus (imageViewer_previzMatchmove.js).
+        if (this.mmKeyDown && this.mmKeyDown(e)) return;
         // Paint's keys, while a Paint tab is up (imageViewer_paintPanel.js).
         if (this._paintOn && this.paintKeyDown && this.paintKeyDown(e)) return;
         // Comp's keys, while the focus is in the comp's graph, Layers, Properties or picture (imageViewer_compPanel.js).

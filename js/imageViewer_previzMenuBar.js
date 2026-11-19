@@ -1,6 +1,6 @@
 // imageViewer_previzMenuBar.js
 // The 3D space's menu bar, across the top of the canvas (Maya's panel menus,
-// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, Terrain, View,
+// Blender's header): File, Edit, Create, Rig, Animate, Constrain, World, Terrain, Matchmove, View,
 // Windows. The Outliner was the place for these once; it is the tree only now.
 //
 // The view (imageViewer_model3d.js) makes the bar and keeps the shading,
@@ -26,6 +26,8 @@ const WINDOWS = [
     ["Layers", "layers3d"],
     ["Character Picker", "picker"],
     ["Clip Sequencer", "clips", "View3DClipsPanel"],
+    ["Matchmove guide", "mmGuide"],
+    ["Plate", "mmPlate"],
     ["History", "history"],
 ];
 
@@ -39,6 +41,7 @@ const MENUS = [
     ["Constrain", "previz-constrain", (p) => p._previzConstrainMenuEntries()],
     ["World", "previz-atlas-menu", (p) => p._previzWorldBarEntries()],
     ["Terrain", "previz-mb-terrain", (p) => p._previzTerrainMenuEntries()],
+    ["Matchmove", "previz-mb-matchmove", (p) => p._previzMatchmoveMenuEntries()],
     ["View", "previz-mb-view", (p) => p._previzViewMenuEntries()],
     ["Windows", "previz-mb-windows", (p) => p._previzWindowsMenuEntries()],
 ];

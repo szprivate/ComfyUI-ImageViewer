@@ -667,18 +667,21 @@ def _solve_free(obs, keys, f, c, refine_f, progress=None, cancel=None):
         if progress:
             progress(len(poses), len(keys))
     rms = ba(a)
-    # drop what does not fit, then once more
-    drop = _outliers(obs, poses, pts, f, c, rms)
-    for ti in drop:
-        pts.pop(ti, None)
-    if drop:
+    # drop what does not fit and adjust again, a few rounds: a tail of tracks that jumped to a neighbour pulls the
+    # whole solve (and an unknown focal length) off, though most tracks fit to a fraction of a pixel
+    for _ in range(3):
+        drop = _outliers(obs, poses, pts, f, c, rms)
+        if not drop:
+            break
+        for ti in drop:
+            pts.pop(ti, None)
         rms = ba(a)
     return {"poses": poses, "pts": pts, "f": f, "rms": rms, "pair": pair}
 
 
-def _outliers(obs, poses, pts, f, c, rms):
-    lim = max(3.0, 4 * rms)
-    bad = []
+def _track_errors(obs, poses, pts, f, c):
+    """Each point's RMS error over the frames solved (a point behind a camera counts as far off)."""
+    out = {}
     for ti, X in pts.items():
         es = []
         for fr, (R, t) in poses.items():
@@ -686,13 +689,23 @@ def _outliers(obs, poses, pts, f, c, rms):
             if p is None:
                 continue
             pc = R @ X + t
-            if pc[2] <= 0:
-                es.append(1e9)
-                continue
-            es.append(float(np.hypot(*(f * pc[:2] / pc[2] + c - p))))
-        if es and (np.median(es) > lim):
-            bad.append(ti)
-    return bad
+            es.append(1e6 if pc[2] <= 0 else float(np.hypot(*(f * pc[:2] / pc[2] + c - p))))
+        if es:
+            out[ti] = float(np.sqrt(np.mean(np.square(es))))
+    return out
+
+
+def _outliers(obs, poses, pts, f, c, rms):
+    """The points that fit far worse than the rest: over 3x the median point's error (and over 1 px), at most a
+    quarter of them in one round, the worst first."""
+    errs = _track_errors(obs, poses, pts, f, c)
+    if len(errs) < 12:
+        return []
+    med = float(np.median(list(errs.values())))
+    lim = max(1.0, 3.0 * med)
+    bad = sorted((e, ti) for ti, e in errs.items() if e > lim)
+    bad.reverse()
+    return [ti for _, ti in bad[: max(1, len(errs) // 4)]]
 
 
 def _solve_tripod(obs, keys, f, c, refine_f):

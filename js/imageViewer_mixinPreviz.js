@@ -1119,6 +1119,8 @@ export const PrevizMixin = {
         if (this._previzHideChannels) this._previzHideChannels();
         // Layers and the Character Picker too, to come back with the next 3D tab.
         if (this._plHide) this._plHide();
+        // The matchmove guide and plate, the same way.
+        if (this._mmHide) this._mmHide();
         // And the scene's animation layers.
         if (this._previzHideLayers) this._previzHideLayers();
         // The curves describe the same scene, so they go with it.
@@ -1686,6 +1688,7 @@ export const PrevizMixin = {
             // The Parameters panel, which is the Channel Box on a 3D tab.
             this.setPanelDocked("params", true);
             if (this._plRestore) this._plRestore();
+            if (this._mmRestore) this._mmRestore();
         }
         // Before the early return below: the timeline's fields and the keying
         // buttons belong to the tab, and a previz panel put away by hand must

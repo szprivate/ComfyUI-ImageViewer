@@ -118,3 +118,23 @@ test("focal length in pixels and millimetres, and the vertical field of view", (
     near(D.focalMmOf(D.focalPx(mm), mm), 35);
     near(D.fovV(540, 1080), 90, 1e-9);
 });
+
+test("the lens point goes both ways, as the Comp node's", () => {
+    const lens = { k1: -0.08, k2: 0.01, center: null };
+    for (const [x, y] of [[10, 10], [1900, 1000], [960, 540], [100, 900]]) {
+        const d = D.lensPoint(x, y, "distort", lens, 1920, 1080);
+        near(D.lensPoint(d[0], d[1], "undistort", lens, 1920, 1080), [x, y], 1e-6);
+    }
+    // barrel (k1 < 0): a corner comes in towards the middle
+    const c = D.lensPoint(0, 0, "distort", lens, 1920, 1080);
+    assert.ok(c[0] > 0 && c[1] > 0);
+});
+
+test("a solved point projects onto the plate where the server's camera sees it", () => {
+    const solve = { focal_px: 1000, center: [960, 540], frames: { 3: { R: [[1, 0, 0], [0, 1, 0], [0, 0, 1]], t: [0, 0, 5] } } };
+    near(D.projectPoint(solve, 3, [1, 0.5, 5], null, 1920, 1080), [960 + 100, 540 + 50]);
+    assert.equal(D.projectPoint(solve, 3, [0, 0, -10], null, 1920, 1080), null);
+    assert.equal(D.projectPoint(solve, 4, [0, 0, 5], null, 1920, 1080), null);
+    const bp = D.backplatePlace(90, 10);
+    near(bp.scale[0], 20, 1e-9);
+});

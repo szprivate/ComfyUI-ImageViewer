@@ -541,3 +541,70 @@ export function geometryOnPoints(kind, pts) {
     if (kind === "plane") return { position: c, rotation: eulerXYZ(R), scale: [size / 1, 1, size / 1] };
     return { position: c, rotation: eulerXYZ(R), scale: [size / 2, size / 2, size / 2] };
 }
+
+// ── the lens and the camera, on the page (for drawing) ───────────────────────
+
+/**
+ * A point through Comp's LensDistortion model (comp_warp.lens_points): "distort" takes an undistorted point to
+ * where the lens put it, "undistort" back. r is the distance from the centre over half the diagonal;
+ * r_d = r (1 + k1 r^2 + k2 r^4). The centre is in plate pixels, null = the middle.
+ */
+export function lensPoint(x, y, how, lens, w, h) {
+    const k1 = (lens && lens.k1) || 0, k2 = (lens && lens.k2) || 0;
+    if (!k1 && !k2) return [x, y];
+    const c = lens.center || [w / 2, h / 2];
+    const R = Math.hypot(w, h) / 2;
+    const dx = (x - c[0]) / R, dy = (y - c[1]) / R;
+    const r = Math.hypot(dx, dy);
+    if (r < 1e-12) return [x, y];
+    let q;
+    if (how === "distort") q = 1 + k1 * r * r + k2 * r ** 4;
+    else {
+        let ru = r;                                         // r = ru (1 + k1 ru^2 + k2 ru^4), by Newton
+        for (let i = 0; i < 30; i++) {
+            const f = ru * (1 + k1 * ru * ru + k2 * ru ** 4) - r;
+            const d = 1 + 3 * k1 * ru * ru + 5 * k2 * ru ** 4;
+            if (Math.abs(d) < 1e-12) break;
+            const step = f / d;
+            ru -= step;
+            if (Math.abs(step) < 1e-12) break;
+        }
+        q = ru / r;
+    }
+    return [c[0] + dx * q * R, c[1] + dy * q * R];
+}
+
+/** Where a solved point X (server axes) lands on the plate at a solved frame, distorted as the plate is; null
+ * behind the camera. */
+export function projectPoint(solve, f, X, lens, w, h) {
+    const cam = solve && solve.frames && solve.frames[f];
+    if (!cam) return null;
+    const R = mat3.flat(cam.R), t = cam.t;
+    const p = mat3.vec(R, X);
+    const z = p[2] + t[2];
+    if (!(z > 1e-9)) return null;
+    const c = solve.center || [w / 2, h / 2];
+    const u = solve.focal_px * (p[0] + t[0]) / z + c[0], v = solve.focal_px * (p[1] + t[1]) / z + c[1];
+    return lensPoint(u, v, "distort", lens, w, h);
+}
+
+/** The solved camera's centre at frame f in the 3D space's axes (inside the Matchmove group). */
+export function cameraCentre(solve, f) {
+    const cam = solve && solve.frames && solve.frames[f];
+    return cam ? cameraToItem(cam.R, cam.t).position : null;
+}
+
+/** The backplate's place on the camera: `d` in front, as tall as the view is there (a unit-tall card). */
+export function backplatePlace(fovVdeg, d) {
+    const s = 2 * d * Math.tan(fovVdeg * Math.PI / 360);
+    return { position: [0, 0, -d], rotation: [0, 0, 0], scale: [s, s, s] };
+}
+
+/** A solve's quality in words, for the guide. */
+export function solveVerdict(rms) {
+    if (!(rms >= 0)) return "";
+    if (rms < 0.5) return "very good";
+    if (rms < 1) return "usable";
+    if (rms < 2) return "rough: delete the worst tracks and solve again";
+    return "poor: check the lens, the masks and the tracks";
+}
