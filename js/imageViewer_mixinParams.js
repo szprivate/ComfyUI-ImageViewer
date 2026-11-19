@@ -1,6 +1,7 @@
 // imageViewer_mixinParams.js
 // Parameters panel: rendering node widgets, monitoring canvas selection.
 import { app } from "../../scripts/app.js";
+import { isParamLocked } from "./imageViewer_paramLocks.js";
 
 export const ParamsMixin = {
 
@@ -58,6 +59,8 @@ export const ParamsMixin = {
         if (!this.selectedNodeIds) return;
         this.selectedNodeIds.forEach(id => {
             const n = app.graph.getNodeById(id);
+            // A locked parameter keeps its value (imageViewer_paramLocks.js).
+            if (!n || isParamLocked(n, name)) return;
             // An animated parameter takes the value as a key at this frame
             // (ParamAnimMixin), not into its widget.
             if (n && this.paramAnimApply && this.paramAnimApply(n, name, value)) return;
@@ -262,6 +265,8 @@ export const ParamsMixin = {
         // Key toggles and values at the frame for an animatable node; the key
         // bar, the timeline ticks and the curves follow the node shown.
         this.paramAnimDecorate?.();
+        // A padlock on every row; a locked one greyed out (imageViewer_paramLocks.js).
+        this.paramLocksDecorate?.();
         this.keyBarSync?.();
         this.paramRefreshCurves?.();
     },

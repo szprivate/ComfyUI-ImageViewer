@@ -19,6 +19,7 @@
 // frames tick the timeline, and the Parameter Curves panel
 // (imageViewer_paramCurves.js) draws the curves.
 import { app } from "../../scripts/app.js";
+import { isParamLocked } from "./imageViewer_paramLocks.js";
 import * as A from "./imageViewer_paramAnimData.js";
 
 export const ParamAnimMixin = {
@@ -59,6 +60,7 @@ export const ParamAnimMixin = {
 
     /** Key a parameter here, or take its key here off. */
     paramAnimToggleKey(node, name) {
+        if (isParamLocked(node, name)) return;
         const tracks = A.readTracks(node);
         const f = this._paramAnimFrame();
         const keys = tracks[name] || [];
@@ -73,6 +75,7 @@ export const ParamAnimMixin = {
      * frame, so the picture doesn't jump.
      */
     paramAnimClear(node, name) {
+        if (isParamLocked(node, name)) return;
         const tracks = A.readTracks(node);
         if (!tracks[name]) return;
         delete tracks[name];
@@ -87,6 +90,7 @@ export const ParamAnimMixin = {
         const tracks = A.readTracks(node);
         const f = this._paramAnimFrame();
         for (const name of Object.keys(tracks)) {
+            if (isParamLocked(node, name)) continue;
             tracks[name] = A.setKey(tracks[name], f, this.paramAnimValue(node, name, tracks), this._paramEase);
         }
         this.paramAnimWrite(node, tracks);
@@ -98,7 +102,7 @@ export const ParamAnimMixin = {
         const node = this.paramAnimNode();
         if (!node) return;
         const tracks = A.readTracks(node);
-        for (const name of Object.keys(tracks)) tracks[name] = A.removeKey(tracks[name], frame);
+        for (const name of Object.keys(tracks)) if (!isParamLocked(node, name)) tracks[name] = A.removeKey(tracks[name], frame);
         this.paramAnimWrite(node, tracks);
         this.paramAnimChanged();
     },
@@ -110,7 +114,10 @@ export const ParamAnimMixin = {
         if (!node) return;
         const tracks = A.readTracks(node);
         const f = this._paramAnimFrame();
-        for (const keys of Object.values(tracks)) for (const k of keys) if (k.f === f) k.ease = ease;
+        for (const [name, keys] of Object.entries(tracks)) {
+            if (isParamLocked(node, name)) continue;
+            for (const k of keys) if (k.f === f) k.ease = ease;
+        }
         this.paramAnimWrite(node, tracks);
         this.paramAnimChanged();
     },

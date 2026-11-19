@@ -479,6 +479,11 @@ export const PrevizChannelsMixin = {
                 const keys = keyable ? S.track(item, r.prop) : [];
                 r.row.classList.toggle("keyed", keys.length > 0);
                 r.row.classList.toggle("keyed-now", keys.some((k) => k.f === frame));
+                // Locked (Lock Selected): greyed out, nothing typed or dragged changes it.
+                const locked = this._cbItems().some((it) => S.isChannelLocked(it, r.prop, r.comp));
+                r.row.classList.toggle("locked", locked);
+                r.input.readOnly = locked;
+                r.input.title = locked ? "Locked: right-click › Unlock Selected" : "";
             } else if (r.kind === "visible") {
                 r.input.value = item.visible === false ? "off" : "on";
             } else if (r.kind === "aim") {
@@ -843,13 +848,47 @@ export const PrevizChannelsMixin = {
         }
         const props = this._cbSelectedProps();
         const any = this.previzSelectedIds().length > 0;
+        const chans = this._cbSelectedChannels();
+        const items = this._cbItems();
+        const anyLocked = chans.some((c) => items.some((it) => S.lockedChannels(it).includes(c)));
+        const allLocked = chans.length > 0 && chans.every((c) => items.every((it) => S.lockedChannels(it).includes(c)));
         this._previzOpenMenu([
             { label: "Key Selected", disabled: !props.length, run: () => this.previzKeyChannels(props) },
             { label: "Key All", disabled: !any, run: () => this.previzKeyAll() },
             "-",
             { label: "Delete Key At Frame", disabled: !props.length, run: () => this.previzDeleteChannelKeys(props, { all: false }) },
             { label: "Delete All Keys", disabled: !props.length, run: () => this.previzDeleteChannelKeys(props, { all: true }) },
+            "-",
+            { label: "Lock Selected", disabled: !chans.length || allLocked, run: () => this.previzLockChannels(chans, true) },
+            { label: "Unlock Selected", disabled: !anyLocked, run: () => this.previzLockChannels(chans, false) },
         ], e.clientX, e.clientY);
+    },
+
+    /** The selected channels a lock can hold: the number rows, by their ids ("position.0", "fov" ...). */
+    _cbSelectedChannels() {
+        const out = [];
+        for (const id of this._cbSel || []) {
+            const r = this._cbUI && this._cbUI.rows.get(id);
+            if (r && r.kind === "number" && r.prop !== "resolution") out.push(id);
+        }
+        return out;
+    },
+
+    /**
+     * Lock or unlock channels on everything selected (Sebastian 2026-11-19: a
+     * lock on any parameter of the Parameters panel). A locked channel keeps
+     * its value: scene3d's setPose / keyPose put it back in every edit, and the
+     * gizmo hides the handles of a locked axis. One undo step.
+     */
+    previzLockChannels(ids, on) {
+        const items = this._cbItems();
+        if (!items.length || !ids || !ids.length) return false;
+        this.previzSnapshot(on ? "lock channels" : "unlock channels");
+        for (const item of items) S.setChannelsLocked(item, ids, on);
+        this.previzChanged();
+        const view = this._modelView && this._modelView();
+        if (view && view._syncSelection) view._syncSelection();
+        return true;
     },
 
     /** Key the given props on everything selected, at the playhead. */

@@ -492,6 +492,18 @@ option { text-align: left; }
 }
 .param-row { display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .param-label { font-size: 11px; color: #888; }
+/* The padlock on each row (imageViewer_paramLocks.js): faint until hovered, orange when locked. */
+.param-label { display: flex; align-items: center; gap: 2px; }
+.param-lock {
+    margin-left: auto; width: 18px; height: 16px; min-height: 0; padding: 0; flex-shrink: 0;
+    background: transparent; border: none; color: #555; cursor: pointer; opacity: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.param-lock svg { width: 12px; height: 12px; }
+.param-row:hover .param-lock, .param-lock:focus-visible { opacity: 1; }
+.param-lock:hover { color: #fff; }
+.param-lock.on { opacity: 1; color: #f60; }
+.param-row.param-locked .param-input, .param-row.param-locked input[type="checkbox"] { opacity: 0.45; cursor: not-allowed; }
 .param-input { 
     background: #111; border: 1px solid #444; color: #eee; 
     padding: 4px; border-radius: 2px; box-sizing: border-box; font-size: 12px;
@@ -1367,6 +1379,9 @@ textarea.param-input {
 .cb-path-pick:hover { border-color: #f60; }
 /* Keyed channels, as Maya shows them; brighter on a frame that holds a key. */
 .cb-row.keyed .cb-val { background: #b8646b; color: #111; border-color: #8d464c; }
+/* A locked channel (Lock Selected): a slate grey, whatever its keys. */
+.cb-row.locked .cb-val, .cb-row.locked.keyed .cb-val, .cb-row.locked.keyed-now .cb-val, .cb-row.locked.constrained .cb-val { background: #4c5866; color: #aab4be; border-color: #3a444f; cursor: not-allowed; }
+.cb-row.locked .cb-label { color: #8b96a2; }
 .cb-row.keyed-now .cb-val { background: #dd727a; }
 .cb-row.keyed .cb-val:focus { background: #111; color: #ddd; }
 .cb-section {
