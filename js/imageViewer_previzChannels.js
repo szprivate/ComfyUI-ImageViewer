@@ -18,6 +18,10 @@
 // so playback — which comes through here every frame — neither rebuilds the
 // panel nor steals the field you are typing in.
 import * as S from "./imageViewer_scene3d.js";
+import { openFilePicker } from "./imageViewer_exportUI.js";
+
+// What an image plane's Path picker offers: pictures, films and the frames of sequences.
+const PLANE_EXTS = [".png", ".jpg", ".jpeg", ".webp", ".exr", ".tif", ".tiff", ".dpx", ".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"];
 import { constraintOf, parseWeightProp, weightRange } from "./imageViewer_constraintData.js";
 import { AIM_LABELS, AIM_PROPS, ROLL_PROP, aimOn, aimSettings, defaultAimTarget, isAimProp } from "./imageViewer_cameraAim.js";
 
@@ -324,6 +328,59 @@ export const PrevizChannelsMixin = {
             ui.rows.set("locatorSize", { row, input: inp, kind: "locator" });
         } else if (item.kind === "imageplane") {
             const t = shape(`${item.name}Shape`);
+            // Path: the picture, film or sequence on the plane - typed, pasted or picked (… ) - and the frame
+            // its film or sequence starts on (Sebastian 2026-11-19: swap the plate after it came in).
+            const pr = doc.createElement("div");
+            pr.className = "cb-row cb-path-row";
+            pr.dataset.ch = "planePath";
+            pr.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Path" }));
+            const pin = doc.createElement("input");
+            pin.className = "cb-val cb-path";
+            pin.type = "text";
+            pin.spellcheck = false;
+            pin.placeholder = "a picture, a film or shot.####.exr";
+            pin.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") pin.blur(); });
+            pin.onchange = () => {
+                const cur = S.planePath(this.previzSelectedItem() || item);
+                if (pin.value.trim() && pin.value.trim() !== cur) {
+                    this.previzSetPlanePath(null, pin.value).then((r) => { if (!r.ok) pin.value = cur; });
+                } else pin.value = cur;
+            };
+            const browse = Object.assign(doc.createElement("button"), { className: "cb-path-pick", textContent: "…",
+                title: "Pick a picture, a film or one frame of a sequence (the whole sequence is taken)" });
+            browse.type = "button";
+            browse.onclick = () => openFilePicker(this.container, {
+                id: "imageplane", title: "Picture for the image plane", kind: "video", go: "Use",
+                exts: PLANE_EXTS,
+                note: "A picture, a film, or one frame of a numbered sequence (the whole sequence is taken).",
+                onPick: (files) => this.previzSetPlanePath(null, files[0].path),
+            });
+            const box = Object.assign(doc.createElement("div"), { className: "cb-path-box" });
+            box.append(pin, browse);
+            pr.append(box);
+            t.append(pr);
+            ui.rows.set("planePath", { row: pr, input: pin, kind: "planePath" });
+
+            const orow = doc.createElement("div");
+            orow.className = "cb-row";
+            orow.dataset.ch = "planeOffset";
+            const oTag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Frame offset",
+                title: "Scene frames before the film or sequence starts (its first frame is shown at this frame)" });
+            const oin = doc.createElement("input");
+            oin.className = "cb-val";
+            oin.type = "number"; oin.step = "1";
+            oin.addEventListener("keydown", (e) => e.stopPropagation());
+            oin.onchange = () => this.previzSetPlane(null, { offset: Math.round(Number(oin.value) || 0) });
+            this._cbScrub(oTag, {
+                step: 0.2,
+                read: () => S.planeSettings(this.previzSelectedItem() || item).offset,
+                write: (v) => this.previzSetPlane(null, { offset: Math.round(v) }, { live: true }),
+                end: () => { this.previzEndDrag(); this.previzChanged(); },
+            });
+            orow.append(oTag, oin);
+            t.append(orow);
+            ui.rows.set("offset", { row: orow, input: oin, kind: "plane", field: "offset" });
+
             const row = doc.createElement("div");
             row.className = "cb-row";
             const opTag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Opacity" });
@@ -439,8 +496,17 @@ export const PrevizChannelsMixin = {
             } else if (r.kind === "plane") {
                 const opts = S.planeSettings(item);
                 if (focused !== r.input) {
-                    r.input.value = r.field === "opacity" ? String(opts.opacity)
+                    r.input.value = r.field === "opacity" || r.field === "offset" ? String(opts[r.field])
                         : (opts[r.field] ? "on" : "off");
+                }
+            } else if (r.kind === "planePath") {
+                if (focused !== r.input && r.input.value !== S.planePath(item)) {
+                    r.input.value = S.planePath(item);
+                    r.input.title = r.input.value;
+                    // The file's name is what tells plates apart: show the end of the path.
+                    const inp = r.input;
+                    inp.scrollLeft = inp.scrollWidth;
+                    (inp.ownerDocument.defaultView || window).requestAnimationFrame(() => { inp.scrollLeft = inp.scrollWidth; });
                 }
             }
         }

@@ -37,6 +37,11 @@ export const ModelMixin = {
                 // Previz: the scene owns where everything is, so each move the
                 // view makes is handed back to it instead of kept in three.
                 srcUrl: (src) => this.buildImgUrl(src, { noColor: true }),
+                // A plate on an image plane: its facts and a picture per frame (imageViewer_view3dVideoPlane.js).
+                plateInfo: (src) => this.plateInfo(src),
+                plateFrameUrl: (src, n) => this.plateFrameUrl(src, n),
+                // The layout button's caret: View > Layout (imageViewer_previzMenuBar.js).
+                openLayoutMenu: (anchor) => this.previzOpenLayoutMenu && this.previzOpenLayoutMenu(anchor),
                 onPick: (id, add) => this.previzSelect(id, { add }),
                 // Clicks and boxes, with Maya's modifiers (imageViewer_view3dTools.js).
                 onMarquee: (ids, mode) => this.previzSelectMany(ids, mode),

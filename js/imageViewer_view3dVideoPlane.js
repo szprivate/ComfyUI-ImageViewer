@@ -38,6 +38,31 @@ export function videoTime(frame, fps, duration, offset = 0) {
     return Math.min(t, Math.max(0, d - 0.5 / rate));
 }
 
+/**
+ * A plate: an image plane whose picture is a numbered sequence or a film read
+ * frame by frame on the server (GET /imageviewer/mm_frame - EXR, DPX, PNG ...
+ * sequences and films alike, undistorted when the src carries a lens).
+ * Sebastian 2026-11-19: the Matchmove plate stood still in the 3D view on his
+ * Mac while the timeline played; a <video> that is never played and not in
+ * the page is not something every browser updates after a seek, so a plate is
+ * pictures, one per frame, which every browser draws the same.
+ */
+export function isPlateSrc(src) {
+    return !!(src && src.kind === "plate" && src.path);
+}
+
+/** The plate's frame (0 = its first) at a scene frame: `offset` moves it, held at both ends. */
+export function plateFrame(frame, frames, offset = 0) {
+    const f = Math.floor(Number(frame) - (Number(offset) || 0));
+    if (!Number.isFinite(f) || f < 0) return 0;
+    const n = Math.round(Number(frames));
+    return n > 0 ? Math.min(f, n - 1) : f;
+}
+
+const PLATE_CACHE = 96;   // pictures of a plate kept per plane
+const PLATE_AHEAD = 8;    // frames asked for ahead of the one shown
+const PLATE_FLIGHT = 4;   // pictures on their way at once (ahead of time)
+
 export const View3DVideoPlaneMixin = {
     /** Load `url` as a film texture; resolves once its first frame is there. */
     _loadVideoTexture(url) {
@@ -107,6 +132,17 @@ export const View3DVideoPlaneMixin = {
                 this.win.setTimeout(resolve, 5000);
             }));
         }
+        // Plates: the picture of that frame in.
+        for (const item of this.scene3d.items || []) {
+            const entry = this._entries.get(item.id);
+            if (!entry || !entry.plateTex) continue;
+            this._platePlaneSeek(entry, item, frame);
+            if (entry.plateShown === entry.plateWant) continue;
+            waits.push(new Promise((resolve) => {
+                (entry.plateWaiters || (entry.plateWaiters = [])).push(resolve);
+                this.win.setTimeout(resolve, 15000);
+            }));
+        }
         if (waits.length) await Promise.all(waits);
         for (const item of this.scene3d.items || []) {
             const entry = this._entries.get(item.id);
@@ -114,6 +150,107 @@ export const View3DVideoPlaneMixin = {
                 entry.plane.material.map.needsUpdate = true;
             }
         }
+    },
+
+    /**
+     * The first picture of a plate as a texture. The plate's facts and pictures ride on the texture
+     * (`userData.plate`) until the plane takes it (`_plateAdopt`), so a load that lost the race to a newer one
+     * touches nothing of the entry.
+     */
+    async _loadPlateTexture(entry, item) {
+        const { THREE } = this.libs;
+        if (!this.hooks.plateFrameUrl) throw new Error("plates are not served here");
+        const src = item.src;
+        let info = null;
+        try { info = this.hooks.plateInfo ? await this.hooks.plateInfo(src) : null; } catch (e) {
+            throw new Error((e && e.message) || "the plate could not be read");
+        }
+        const ps = { plateInfo: info || {}, plateSrc: src, plateCache: new Map(), plateWaiters: [] };
+        const offset = item.plane ? item.plane.offset : 0;
+        const n = plateFrame(this.sceneFrame || 0, ps.plateInfo.frames, offset);
+        const img = await this._plateImage(ps, n).promise;
+        if (!img) throw new Error("the plate's first picture could not be loaded");
+        const texture = new THREE.Texture(img);
+        texture.needsUpdate = true;
+        ps.plateShown = n;
+        texture.userData.plate = ps;
+        return texture;
+    },
+
+    /** The plane takes the plate the texture carries. */
+    _plateAdopt(entry, texture) {
+        const ps = texture.userData.plate;
+        Object.assign(entry, ps, { plateTex: texture, plateWant: ps.plateShown });
+        delete texture.userData.plate;
+    },
+
+    /** Picture n of a plane's plate: {img, promise, ok}; asked for once, kept (least recently used out). */
+    _plateImage(entry, n) {
+        const cache = entry.plateCache;
+        let c = cache.get(n);
+        if (c) { cache.delete(n); cache.set(n, c); return c; }
+        const img = new (this.win.Image || Image)();
+        img.crossOrigin = "anonymous";
+        img.decoding = "async";
+        c = { img, ok: false, done: false };
+        c.promise = new Promise((resolve) => {
+            img.onload = () => { c.ok = true; c.done = true; resolve(img); };
+            img.onerror = () => { c.done = true; cache.delete(n); resolve(null); };
+        });
+        img.src = this.hooks.plateFrameUrl(entry.plateSrc, n);
+        cache.set(n, c);
+        while (cache.size > PLATE_CACHE) cache.delete(cache.keys().next().value);
+        return c;
+    },
+
+    /** Show the plate's picture for the scene frame (from applyFrame): the one wanted when it is in, the last meanwhile. */
+    _platePlaneSeek(entry, item, frame) {
+        if (!entry || !entry.plateTex || !entry.plateCache) return null;
+        const offset = item && item.plane ? item.plane.offset : 0;
+        const frames = entry.plateInfo && entry.plateInfo.frames;
+        const n = plateFrame(frame, frames, offset);
+        entry.plateWant = n;
+        const c = this._plateImage(entry, n);
+        if (c.ok) this._plateShow(entry, n, c.img);
+        else c.promise.then((img) => { if (img && entry.plateWant === n) this._plateShow(entry, n, img); else this._plateSettle(entry); });
+        // A few ahead, so playing does not wait on each one.
+        let flying = 0;
+        for (const x of entry.plateCache.values()) if (!x.done) flying++;
+        for (let k = 1; k <= PLATE_AHEAD && flying < PLATE_FLIGHT; k++) {
+            const m = n + k;
+            if (frames > 0 && m >= frames) break;
+            if (!entry.plateCache.has(m)) { this._plateImage(entry, m); flying++; }
+        }
+        return n;
+    },
+
+    _plateShow(entry, n, img) {
+        if (!entry.plateTex) return;
+        if (entry.plateShown !== n || entry.plateTex.image !== img) {
+            entry.plateTex.image = img;
+            entry.plateTex.needsUpdate = true;
+            entry.plateShown = n;
+            this.requestRender();
+        }
+        this._plateSettle(entry);
+    },
+
+    _plateSettle(entry) {
+        if (entry.plateShown !== entry.plateWant) return;
+        const waiting = entry.plateWaiters || [];
+        entry.plateWaiters = [];
+        for (const done of waiting) done();
+    },
+
+    /** Let a plate plane's pictures go (from _disposeEntry). */
+    _platePlaneDrop(entry) {
+        if (!entry) return;
+        if (entry.plateCache) for (const c of entry.plateCache.values()) { try { c.img.src = ""; } catch (_) {} }
+        entry.plateCache = null;
+        entry.plateTex = null;
+        const waiting = entry.plateWaiters || [];
+        entry.plateWaiters = [];
+        for (const done of waiting) done();
     },
 
     /** Let a film plane's <video> go (from _disposeEntry). */
