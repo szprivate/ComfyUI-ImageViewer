@@ -9,7 +9,8 @@ Everything here is written from the textbook methods, from scratch:
 - tracking: pyramidal Lucas-Kanade (each point's patch is matched by Gauss-Newton on a brightness-normalised
   difference, coarse level first), checked by tracking back again (a point that does not come home is lost) and
   by the correlation of its patch with the frame before;
-- masks: polygons with keys (linear in between), each either keeping features out ("exclude") or giving the
+- masks: polygons with keys (linear in between), or a matte per frame (a grey picture sequence an AI workflow
+  made: SAM 3 by words, a background remover), each either keeping features out ("exclude") or giving the
   features inside to a moving object ("object");
 - the lens grid: the crossings of a chart (a checkerboard's saddles, or a line grid's crossings) found on the
   Hessian, put in rows and columns by walking from neighbour to neighbour, then the radial numbers that make the
@@ -376,13 +377,129 @@ def clean_mask(m):
             continue
         if len(pts) >= 3 and all(math.isfinite(v) for p in pts for v in p):
             keys.append({"f": f, "pts": pts})
-    if not keys:
+    matte = clean_matte(m.get("matte"))
+    if not keys and not matte:
         return None
     keys.sort(key=lambda k: k["f"])
     mode = m.get("mode") if m.get("mode") in MASK_MODES else "exclude"
-    return {"id": str(m.get("id") or ""), "name": str(m.get("name") or "Mask")[:80], "mode": mode,
-            "object": str(m.get("object") or "") if mode == "object" else "", "on": m.get("on") is not False,
-            "keys": keys}
+    out = {"id": str(m.get("id") or ""), "name": str(m.get("name") or "Mask")[:80], "mode": mode,
+           "object": str(m.get("object") or "") if mode == "object" else "", "on": m.get("on") is not False,
+           "keys": keys}
+    if matte:
+        out["matte"] = matte
+    return out
+
+
+# A matte mask: {pattern (#### = the plate's frame index), frames, threshold, grow, invert, width?, height?}; the
+# page's cleanMatte. A frame between its frames takes the nearest earlier one (else its first).
+
+def clean_matte(t):
+    if not isinstance(t, dict) or not isinstance(t.get("pattern"), str) or "#" not in t["pattern"]:
+        return None
+    frames = set()
+    for f in (t.get("frames") or [])[:100000]:
+        try:
+            f = int(f)
+        except (TypeError, ValueError):
+            continue
+        if f >= 0:
+            frames.add(f)
+    if not frames:
+        return None
+
+    def num(k, d, lo, hi):
+        try:
+            v = float(t.get(k, d))
+        except (TypeError, ValueError):
+            v = d
+        return min(hi, max(lo, v)) if math.isfinite(v) else d
+    out = {"pattern": t["pattern"], "frames": sorted(frames), "threshold": num("threshold", 0.5, 0.01, 0.99),
+           "grow": int(round(num("grow", 6, 0, 64))), "invert": bool(t.get("invert"))}
+    try:
+        if int(t.get("width") or 0) > 0 and int(t.get("height") or 0) > 0:
+            out["width"], out["height"] = int(t["width"]), int(t["height"])
+    except (TypeError, ValueError):
+        pass
+    return out
+
+
+def matte_path(pattern, f):
+    """The file of a matte's frame: the pattern's last run of # filled with the number."""
+    m = list(re.finditer(r"#+", pattern))
+    if not m:
+        return pattern
+    r = m[-1]
+    return pattern[:r.start()] + str(int(f)).zfill(r.end() - r.start()) + pattern[r.end():]
+
+
+def matte_frame_at(matte, f):
+    fs = matte["frames"]
+    got = fs[0]
+    for x in fs:
+        if x <= f:
+            got = x
+        else:
+            break
+    return got
+
+
+_MATTES = {}
+_MATTE_KEEP = 64
+
+
+def _grow(b, r):
+    """A boolean picture widened by r pixels (a square)."""
+    if r <= 0:
+        return b
+    for axis in (0, 1):
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (r + 1, r)
+        c = np.cumsum(np.pad(b.astype(np.int32), pad), axis=axis)
+        n = b.shape[axis]
+        hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
+        lo = np.take(c, np.arange(0, n), axis=axis)
+        b = (hi - lo) > 0
+    return b
+
+
+def matte_mask(matte, f):
+    """The boolean picture of a matte at frame f (masked = True), or None when its file is not there."""
+    path = matte_path(matte["pattern"], matte_frame_at(matte, f))
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, st.st_mtime_ns, st.st_size, matte["threshold"], matte["grow"], matte["invert"])
+    got = _MATTES.get(key)
+    if got is None:
+        from PIL import Image
+        with Image.open(path) as im:
+            g = np.asarray(im.convert("L"), np.uint8)
+        b = g >= int(round(matte["threshold"] * 255))
+        if matte["invert"]:
+            b = ~b
+        got = _grow(b, matte["grow"])
+        _MATTES[key] = got
+        while len(_MATTES) > _MATTE_KEEP:
+            _MATTES.pop(next(iter(_MATTES)))
+    return got
+
+
+def matte_hit(matte, f, pts):
+    """Which of pts (plate pixels, [N, 2]) lie on the matte at frame f."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    b = matte_mask(matte, f)
+    if b is None or not len(pts):
+        return np.zeros(len(pts), bool)
+    h, w = b.shape
+    sx = w / matte["width"] if matte.get("width") else 1.0
+    sy = h / matte["height"] if matte.get("height") else 1.0
+    x = np.floor(pts[:, 0] * sx).astype(np.int64)
+    y = np.floor(pts[:, 1] * sy).astype(np.int64)
+    ok = (x >= 0) & (x < w) & (y >= 0) & (y < h) & np.isfinite(pts).all(1)
+    out = np.zeros(len(pts), bool)
+    out[ok] = b[y[ok], x[ok]]
+    return out
 
 
 def mask_at(mask, f):
@@ -421,7 +538,7 @@ def masks_state(masks, f, pts):
     for m in masks or []:
         if not m.get("on", True):
             continue
-        hit = inside(mask_at(m, f), pts)
+        hit = matte_hit(m["matte"], f, pts) if m.get("matte") else inside(mask_at(m, f), pts)
         if m["mode"] == "exclude":
             out[hit] = "exclude"
         else:

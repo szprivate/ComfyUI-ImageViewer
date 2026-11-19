@@ -32,6 +32,7 @@ const TOOLS = [
     ["add", "Add track", "Click a feature: a track is made there and followed through the shot"],
     ["mask", "Mask", "Click the corners of a mask, Enter or a double-click to close it; drag a corner to key it here"],
     ["lines", "Lines", "Click along something straight in the world (3 or more points), Enter to end the line"],
+    ["ground", "Ground", "Click round the floor (3 or more corners), Enter or a double-click to end: the solved tracks inside set the ground"],
 ];
 
 const STYLE = `
@@ -158,6 +159,7 @@ export const PrevizMatchmoveMixin = {
     },
 
     async _mmStop(st) {
+        if (st && st.busy && st.busy.stop) { st.busy.stopped = true; st.busy.stop(); }
         if (st && st.busy && st.busy.job) {
             try { await this._mmPost("/imageviewer/mm_job", { job: st.busy.job, cancel: true }); } catch (_) { /* gone */ }
         }
@@ -358,6 +360,7 @@ export const PrevizMatchmoveMixin = {
             this._mmProgress();
         }
         const ctx = { doc, st, mm, box: scroll };
+        if (this._mmAskBox) this._mmAskBox(ctx);
         const draw = { plate: this._mmStepPlate, lens: this._mmStepLens, masks: this._mmStepMasks, track: this._mmStepTrack,
                        solve: this._mmStepSolve, objects: this._mmStepObjects, scene: this._mmStepScene }[spec.id];
         if (mm.step !== "plate" && !mm.plate) scroll.append(el(doc, "div", "mm-note warn", "Pick the plate first (step 1)."));
@@ -695,6 +698,7 @@ export const PrevizMatchmoveMixin = {
     _mmStepMasks(ctx) {
         const { mm, st } = ctx;
         this._mmRow(ctx, "", this._mmBtn(ctx, "Draw a mask", () => { st.maskSel = null; this.matchmoveTool("mask"); }, { primary: true }));
+        if (this._mmMatteSection) this._mmMatteSection(ctx);
         if (!mm.masks.length) { this._mmNote(ctx, "No masks: every feature found is used for the camera."); return; }
         const list = el(ctx.doc, "div", "mm-list");
         for (const m of mm.masks) {
@@ -705,7 +709,7 @@ export const PrevizMatchmoveMixin = {
             on.checked = m.on;
             on.onclick = (e) => e.stopPropagation();
             on.onchange = () => this._mmEdit("mask on", (q) => { q.masks.find((x) => x.id === m.id).on = on.checked; });
-            const name = el(ctx.doc, "span", "grow", `${m.name} · ${m.keys.length} key(s)`);
+            const name = el(ctx.doc, "span", "grow", m.matte ? `${m.name} · AI matte` : `${m.name} · ${m.keys.length} key(s)`);
             const mode = this._mmSelect(ctx, [["exclude", "Keep out"], ...mm.objects.map((o) => [`object:${o.id}`, `Object: ${o.name}`])],
                                         m.mode === "object" ? `object:${m.object}` : "exclude",
                                         (v) => this._mmEdit("mask mode", (q) => {
@@ -717,8 +721,9 @@ export const PrevizMatchmoveMixin = {
             del.title = "Delete the mask";
             del.onclick = (e) => { e.stopPropagation(); this._mmEdit("delete mask", (q) => { q.masks = q.masks.filter((x) => x.id !== m.id); }); };
             li.append(on, name, mode, del);
-            li.onclick = () => { st.maskSel = m.id; this.matchmoveTool("mask"); this._mmRender(); this._mmDraw(); };
+            li.onclick = () => { st.maskSel = m.id; if (!m.matte) this.matchmoveTool("mask"); this._mmRender(); this._mmDraw(); };
             list.append(li);
+            if (m.matte && st.maskSel === m.id && this._mmMatteRow) this._mmMatteRow({ ...ctx, box: list }, m);
         }
         ctx.box.append(list);
         this._mmNote(ctx, "Pick a mask and drag its corners in the Plate panel: the shape is keyed on that frame and moves straight between keys.");
@@ -992,7 +997,8 @@ export const PrevizMatchmoveMixin = {
         this._mmRow(ctx, "", this._mmBtn(ctx, built ? "Build again" : "Build in the scene", () => this.matchmoveBuild(), { primary: true }),
                     this._mmBtn(ctx, "Look through it", () => this.previzLookThroughSet(mm.scene.camera), { disabled: !built }));
         if (!built) return;
-        this._mmNote(ctx, "Orient: pick tracks in the Plate panel (they need a solved point), then:");
+        if (this._mmGroundSection) this._mmGroundSection(ctx);
+        this._mmNote(ctx, "Or orient by hand: pick tracks in the Plate panel (they need a solved point), then:");
         const n = this._mmPickedPoints(st).length;
         this._mmRow(ctx, "", this._mmBtn(ctx, "Ground from picked", () => this.matchmoveOrient("ground"), { disabled: n < 3, title: "Three or more points on the floor" }),
                     this._mmBtn(ctx, "Origin at picked", () => this.matchmoveOrient("origin"), { disabled: n < 1 }));
@@ -1137,13 +1143,7 @@ export const PrevizMatchmoveMixin = {
         } else if (how === "x" || how === "z") o = D.orientAxis(o, pts[0], pts[1], how);
         else if (how === "scale") o = D.orientScale(o, pts[0], pts[1], dist);
         if (o.error) { notice("warn", "Not oriented", o.error); return; }
-        this._mmEdit(`orient ${how}`, (m) => { m.orient = { R: o.R.slice(), t: o.t.slice(), s: o.s }; });
-        const g = this._mmGroupItem(st);
-        if (g) {
-            this.previzSnapshot(`matchmove ${how}`);
-            Object.assign(g, D.orientToItem(st.mm.orient));
-            this.previzChanged();
-        }
+        this._mmApplyOrient(st, o, how);
     },
 
     matchmoveGeometry(kind) {
@@ -1348,6 +1348,12 @@ export const PrevizMatchmoveMixin = {
         g.strokeRect(v.x, v.y, mm.plate.width * v.zoom, mm.plate.height * v.zoom);
         // masks
         for (const m of mm.masks) {
+            if (m.matte) {
+                const mc = this._mmMatteCanvas && this._mmMatteCanvas(m, f, doc);
+                if (mc && !st.show.undistort) g.drawImage(mc, v.x, v.y, mm.plate.width * v.zoom, mm.plate.height * v.zoom);
+                if (st.maskSel === m.id) { g.strokeStyle = "#fff"; g.strokeRect(v.x + 1, v.y + 1, mm.plate.width * v.zoom - 2, mm.plate.height * v.zoom - 2); }
+                continue;
+            }
             const pts = D.maskAt(m, f);
             if (pts.length < 3) continue;
             g.beginPath();
@@ -1374,8 +1380,19 @@ export const PrevizMatchmoveMixin = {
                 for (const [x, y] of line) { const [a, b] = this._mmToScreen(st, x, y); g.fillStyle = "#ffd24a"; g.fillRect(a - 2, b - 2, 4, 4); }
             }
         }
-        if (st.drawing && st.tool === "mask" && st.drawing.length) {
-            g.strokeStyle = "#fff";
+        // the ground's shape (while the Ground tool is up)
+        if (st.tool === "ground" && st.groundRegion && st.groundRegion.pts.length >= 3) {
+            g.beginPath();
+            st.groundRegion.pts.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
+            g.closePath();
+            g.fillStyle = "rgba(90,220,120,0.14)";
+            g.fill();
+            g.strokeStyle = "#5adc78";
+            g.lineWidth = 1;
+            g.stroke();
+        }
+        if (st.drawing && (st.tool === "mask" || st.tool === "ground") && st.drawing.length) {
+            g.strokeStyle = st.tool === "ground" ? "#5adc78" : "#fff";
             g.beginPath();
             st.drawing.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
             g.stroke();
@@ -1464,9 +1481,10 @@ export const PrevizMatchmoveMixin = {
                     this.matchmoveAddTrackAt(px, py).catch((err) => notice("error", "Track", err.message));
                     return;
                 }
-                if (st.tool === "lines") {
+                if (st.tool === "lines" || st.tool === "ground") {
                     st.drawing = st.drawing || [];
                     st.drawing.push([px, py]);
+                    if (e.detail >= 2 && st.tool === "ground" && st.drawing.length >= 4) st.drawing.pop();
                     if (e.detail >= 2) this._mmFinishDrawing(st);
                     this._mmDraw();
                     return;
@@ -1547,6 +1565,9 @@ export const PrevizMatchmoveMixin = {
         if (st.tool === "lines") {
             if (pts.length >= 3) this._mmEdit("line", (m) => { m.lens.lines.push(pts.map((p) => [Number(p[0].toFixed(2)), Number(p[1].toFixed(2))])); if (m.lens.source === "none") m.lens.source = "lines"; });
             else notice("warn", "Line too short", "A line needs 3 or more points.");
+        } else if (st.tool === "ground") {
+            if (pts.length >= 3) this.matchmoveGroundRegion(pts);
+            else notice("warn", "Shape too small", "Click three or more corners round the floor.");
         } else if (st.tool === "mask") {
             if (pts.length < 3) return;
             const f = Math.round(this.currentFrame || 0);
@@ -1595,6 +1616,7 @@ export const PrevizMatchmoveMixin = {
         else if (!ctrl && (k === "t" || k === "T")) this.matchmoveTool("add");
         else if (!ctrl && (k === "m" || k === "M")) this.matchmoveTool("mask");
         else if (!ctrl && (k === "l" || k === "L")) this.matchmoveTool("lines");
+        else if (!ctrl && (k === "g" || k === "G")) this.matchmoveTool("ground");
         else if (!ctrl && (k === "o" || k === "O") && st.sel.size) {
             const ids = [...st.sel];
             this._mmEdit("track on / off", (m) => { for (const t of m.tracks) if (ids.includes(t.id)) t.on = !t.on; });

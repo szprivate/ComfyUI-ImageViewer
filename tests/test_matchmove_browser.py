@@ -37,6 +37,7 @@ TYPES = {".js": "text/javascript", ".css": "text/css", ".html": "text/html", ".j
 SHOTS = os.environ.get("MATCHMOVE_SHOTS")   # a folder: screenshots of the panels are written there
 
 W, H, F, N = 640, 360, 520.0, 24
+FLOOR_Y = 4.6
 
 
 def _free_port():
@@ -46,12 +47,17 @@ def _free_port():
 
 
 def render_plate(folder):
-    """N frames of 700 dots in space seen by a camera that slides right and turns a little: plate.####.png."""
+    """N frames of 700 dots in space and 260 on a floor below them, seen by a camera that slides right and turns a little: plate.####.png."""
     from PIL import Image
     rng = np.random.default_rng(7)
     X = np.c_[rng.uniform(-9, 9, 700), rng.uniform(-4, 4, 700), rng.uniform(7, 22, 700)]
     size = rng.uniform(1.6, 3.2, 700)
     shade = rng.uniform(0.45, 1.0, 700)
+    # a floor: 260 dots on the plane y = FLOOR_Y (the picture's y is down, so it is below the camera)
+    fl = np.random.default_rng(11)
+    X = np.r_[X, np.c_[fl.uniform(-10, 10, 260), np.full(260, FLOOR_Y), fl.uniform(14, 32, 260)]]
+    size = np.r_[size, fl.uniform(1.6, 3.2, 260)]
+    shade = np.r_[shade, fl.uniform(0.45, 1.0, 260)]
     yy, xx = np.mgrid[0:H, 0:W].astype(np.float32) + 0.5
     for f in range(N):
         a = f / N
@@ -312,6 +318,47 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def _heights(self, pg, raw=False):
+        """The solved points' heights in the world: the floor's at 0 and the rest above it?"""
+        return pg.evaluate("""async (raw) => {
+            const D = await import('/extensions/viewer/imageViewer_matchmoveData.js');
+            const st = window.__panel._mmCur(), o = st.mm.orient;
+            const ids = new Set(st.groundInfo.ids || []);
+            const ys = st.mm.solve.points.map((q) => ({ y: D.orientApply(o, D.pointToScene(q.X))[1], on: ids.has(q.id) }));
+            const on = ys.filter((q) => q.on).map((q) => q.y).sort((a, b) => a - b);
+            const mid = on[on.length >> 1];
+            if (raw) return mid;
+            const span = Math.max(...ys.map((q) => Math.abs(q.y)));
+            const off = ys.filter((q) => !q.on).map((q) => q.y).sort((a, b) => a - b);
+            return { on_floor: Math.abs(mid) < span * 0.02, above: off[off.length >> 1] > 0 };
+        }""", raw)
+
+    def _fake_mattes(self, name, white):
+        """ComfyUI's answers made here: output/fakematte/<name>.<frame>.png, white where white(f, y, x)."""
+        from PIL import Image
+        d = os.path.join(self.dirs["output"], "fakematte")
+        os.makedirs(d, exist_ok=True)
+        yy, xx = np.mgrid[0:H, 0:W]
+        for f in range(N):
+            Image.fromarray((white(f, yy, xx) * 255).astype(np.uint8)).save(os.path.join(d, f"{name}.{f}.png"))
+
+    def _fake_comfy(self, pg, name):
+        """The page's road to ComfyUI stood in for: no model check, SAM 3's canvas graph a small prompt, the queue a
+        promise and every frame's picture one of _fake_mattes'."""
+        pg.evaluate("""(name) => {
+            const P = window.__panel;
+            P._mmModelsReady = async () => true;
+            P._paintPrompt = async (item) => item.format !== 'ui' ? null : {
+                '1': { class_type: 'LoadImage', inputs: { image: 'x.png' }, _meta: { title: 'paint:image' } },
+                '2': { class_type: 'CLIPTextEncode', inputs: { text: '' }, _meta: { title: 'paint:prompt' } },
+                '3': { class_type: 'SAM3_Detect', inputs: { image: ['1', 0], cond: ['2', 0] } },
+                '4': { class_type: 'MaskToImage', inputs: { mask: ['3', 0] } },
+                '5': { class_type: 'SaveImage', inputs: { images: ['4', 0], filename_prefix: 'x' }, _meta: { title: 'paint:output' } } };
+            P._paintQueue = async (graph) => { window.__queued = graph; return 'p1'; };
+            P._cpAiWaitAll = async (pid, outputs) => Object.fromEntries(Object.keys(outputs).map((f) =>
+                [f, { filename: `${name}.${f}.png`, subfolder: 'fakematte', type: 'output' }]));
+        }""", name)
+
     def test_the_agent_tracks_solves_and_builds_through_its_actions(self):
         """The agent's road: previzRigAgentRun (what /imageviewer/rig/agent sends the page) with matchmove_* actions,
         from a page with no 3D tab up - one is brought up, the panels open, and each answer carries the summary."""
@@ -395,6 +442,39 @@ class MatchmoveBrowserTests(unittest.TestCase):
             built = r["result"]["matchmove"]["built"]
             self.assertTrue(built and built["camera"], built)
             pts = [q[0] for q in r["result"]["matchmove"]["solve"]["worst_tracks"][-3:]]
+            # The ground, found by itself: the floor dots, level, at height 0, with the cloud above it.
+            r = ask("matchmove_ground", {"how": "auto"})
+            self.assertEqual(r["state"], "done", r)
+            g = r["result"]["ground"]
+            self.assertGreater(g["points"], 20, g)
+            self.assertLess(g["tilt"], 3, g)
+            self.assertEqual(self._heights(pg), {"on_floor": True, "above": True})
+            r = ask("matchmove_ground", {"how": "auto", "flip": True})
+            self.assertFalse(self._heights(pg)["above"])                # upside down now
+            r = ask("matchmove_ground", {"how": "auto", "lift": 0.5})
+            self.assertEqual(r["state"], "done", r)
+            self.assertAlmostEqual(self._heights(pg, raw=True), 0.5, delta=0.05)    # the floor half a unit up
+            # The ground by AI: SAM 3's matte (the lower part of the picture here) votes the floor tracks in.
+            self._fake_mattes("ground", lambda f, y, x: y > 255)
+            self._fake_comfy(pg, "ground")
+            r = ask("matchmove_ground", {"how": "ai", "prompt": "floor"})
+            self.assertEqual(r["state"], "done", r)
+            self.assertGreater(r["result"]["ground"]["points"], 15, r)
+            self.assertLess(r["result"]["ground"]["tilt"], 3, r)
+            self.assertEqual(self._heights(pg), {"on_floor": True, "above": True})
+            self.assertEqual(pg.evaluate("() => window.__panel._mmCur().groundInfo.how"), "ai")
+            # A mask over the whole shot from a background remover: a box on the left, frame by frame.
+            self._fake_mattes("left", lambda f, y, x: x < 120)
+            self._fake_comfy(pg, "left")
+            r = ask("matchmove_ai_mask", {"engine": "background", "step": 2})
+            self.assertEqual(r["state"], "done", r)
+            m = r["result"]["mask"]
+            self.assertEqual(m["frames"], 13)                           # 0, 2 .. 22 and the last frame
+            mk = pg.evaluate("(id) => window.__panel._mmCur().mm.masks.find((q) => q.id === id)", m["id"])
+            self.assertEqual((mk["matte"]["engine"], mk["matte"]["width"]), ("background", W))
+            self.assertTrue(os.path.isfile(mk["matte"]["pattern"].replace("####", "0004")))
+            r = ask("matchmove_ai_mask", {"engine": "objects"})
+            self.assertEqual(r["state"], "error")                       # SAM 3 needs words
             r = ask("matchmove_orient", {"how": "origin", "points": pts[:1]})
             self.assertEqual(r["state"], "done", r)
             r = ask("matchmove_orient", {"how": "scale", "points": pts[:2]})
@@ -407,6 +487,11 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertTrue(os.path.isfile(r["result"]["path"]), r)
             r = ask("matchmove_save")
             self.assertTrue(os.path.isfile(r["result"]["path"]), r)
+            # tracking again keeps off the AI mask
+            r = ask("matchmove_track", {"features": 200, "from": 0, "to": 6})
+            self.assertEqual(r["state"], "done", r)
+            starts = pg.evaluate("() => window.__panel._mmCur().mm.tracks.filter((t) => t.keys[0][0] === 0 && t.keys[0][1] < 110).length")
+            self.assertEqual(starts, 0)
             self.assertEqual(self.errors, [])
         finally:
             pg.close()

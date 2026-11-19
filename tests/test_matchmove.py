@@ -195,6 +195,34 @@ class Tracking(unittest.TestCase):
         self.assertLess(np.median(errs), 0.1)
         self.assertTrue(any(t["group"] == "car" for t in tr))
 
+    def test_a_matte_mask_keeps_features_off_it_frame_by_frame(self):
+        from PIL import Image
+        rng = np.random.default_rng(4)
+        w, h = 320, 200
+        base = MM._blur_gauss(rng.random((h, w)).astype(np.float32), 1.5)
+        tmp = tempfile.mkdtemp()
+        try:
+            # the matte's white square moves 10 px a frame to the right; frames 1 and 3 have none of their own
+            for f in (0, 2, 4):
+                a = np.zeros((h, w), np.uint8)
+                a[40:140, 20 + 10 * f:120 + 10 * f] = 255
+                Image.fromarray(a).save(os.path.join(tmp, f"matte.{f:04d}.png"))
+            m = MM.clean_mask({"id": "m", "mode": "exclude", "keys": [],
+                               "matte": {"pattern": os.path.join(tmp, "matte.####.png"), "frames": [0, 2, 4], "grow": 4}})
+            self.assertIsNotNone(m)
+            self.assertEqual(MM.matte_frame_at(m["matte"], 3), 2)
+            hit = MM.matte_hit(m["matte"], 3, [[38, 50], [140, 100], [10, 10], [139, 100]])
+            self.assertEqual(hit.tolist(), [True, True, False, True])      # frame 2's square, grown by 4
+            st = MM.masks_state([m], 4, [[150, 90], [30, 90]])
+            self.assertEqual(st.tolist(), ["exclude", ""])
+            tr = MM.auto_track(lambda f: base, range(5), n=60, masks=[m])
+            self.assertGreater(len(tr), 10)
+            for t in tr:
+                k0 = t["keys"][0]
+                self.assertFalse(20 <= k0[1] < 120 and 40 <= k0[2] < 140, "started on the matte")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_mask_keys_are_straight_in_between(self):
         m = MM.clean_mask({"keys": [{"f": 0, "pts": [[0, 0], [10, 0], [0, 10]]},
                                     {"f": 10, "pts": [[10, 0], [20, 0], [10, 10]]}]})
@@ -311,6 +339,59 @@ class Routes(unittest.TestCase):
             r = await c.get("/imageviewer/mm_from_comp", params={"path": d["path"]})
             back = await r.json()
             self.assertEqual((back["k1"], back["k2"]), (-0.04, 0.01))
+        self.run_c(go)
+
+    def test_an_ai_matte_over_the_shot_is_one_job_and_becomes_a_mask(self):
+        from PIL import Image
+        async def go(c):
+            r = await c.post("/imageviewer/mm_matte_workflows", json={"engine": "background"})
+            d = await r.json()
+            self.assertEqual(r.status, 200, d)
+            self.assertTrue(any(w["id"] == "rmbg2" for w in d["workflows"]))
+            r = await c.post("/imageviewer/mm_matte", json={"engine": "objects", "frames": [0], "path": self.seq})
+            self.assertEqual(r.status, 400)                                 # SAM 3 needs words
+            r = await c.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "background",
+                                                            "workflow": "rmbg2", "frames": [0, 2, 4, 99]})
+            d = await r.json()
+            self.assertEqual(r.status, 200, d)
+            self.assertEqual(d["frames"], [0, 2, 4])
+            self.assertEqual((d["width"], d["height"]), (320, 200))
+            g = d["graph"]
+            loaders = [k for k, v in g.items() if v["class_type"] == "LoadImage"]
+            self.assertEqual(len(loaders), 3)                               # one picture a frame, one prompt
+            self.assertEqual(len([k for k, v in g.items() if v["class_type"] == "SaveImage"]), 3)
+            # ComfyUI's answers: a white box on black, moving
+            images = {}
+            sub = os.path.join("matchmove", "matte", d["run"])
+            os.makedirs(os.path.join(self.dirs["output"], sub), exist_ok=True)
+            for f in d["frames"]:
+                a = np.zeros((100, 160, 3), np.uint8)
+                a[20:70, 10 + 5 * f:60 + 5 * f] = 255
+                name = f"matte.{f:04d}_00001_.png"
+                Image.fromarray(a).save(os.path.join(self.dirs["output"], sub, name))
+                images[str(f)] = {"filename": name, "subfolder": sub, "type": "output"}
+            r = await c.post("/imageviewer/mm_matte_place", json={"run": d["run"], "images": images})
+            got = await r.json()
+            self.assertEqual(r.status, 200, got)
+            self.assertEqual(got["frames"], [0, 2, 4])
+            self.assertTrue(got["pattern"].startswith(self.dirs["input"]))
+            first = Image.open(MM.matte_path(got["pattern"], 2))
+            self.assertEqual(first.size, (320, 200))                        # at the plate's size
+            matte = {"pattern": got["pattern"], "frames": got["frames"], "width": 320, "height": 200, "grow": 0}
+            r = await c.post("/imageviewer/mm_matte_sample", json={"matte": matte, "points": {
+                "0": [["a", 60, 80], ["b", 300, 180]], "2": [["a", 60, 80], ["b", 300, 180]], "1": [["a", 1, 1]]}})
+            votes = (await r.json())["votes"]
+            self.assertEqual(votes, {"a": [2, 2], "b": [0, 2]})
+            # a matte outside what may be read is not taken as a mask
+            r = await c.post("/imageviewer/mm_matte_sample", json={"matte": {"pattern": "/etc/x.####.png", "frames": [0]}})
+            self.assertEqual(r.status, 403)
+            r = await c.post("/imageviewer/mm_track", json={"path": self.seq, "from": 0, "to": 3, "n": 40,
+                                                            "masks": [{"id": "k", "mode": "exclude", "matte": matte}]})
+            jd = await self.wait(c, (await r.json())["job"])
+            self.assertEqual(jd["state"], "done", jd)
+            for t in jd["tracks"]:
+                k0 = t["keys"][0]
+                self.assertFalse(20 <= k0[1] < 120 and 40 <= k0[2] < 140, "started on the matte")
         self.run_c(go)
 
     def test_one_frame_of_a_sequence_is_the_sequence(self):

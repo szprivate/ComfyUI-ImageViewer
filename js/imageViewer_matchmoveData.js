@@ -118,10 +118,41 @@ export function cleanMask(m) {
         if (pts.length >= 3 && Number.isFinite(Number(k.f))) keys.push({ f: Math.round(Number(k.f)), pts });
     }
     keys.sort((a, b) => a.f - b.f);
-    if (!keys.length) return null;
+    const matte = cleanMatte(m.matte);
+    if (!keys.length && !matte) return null;
     const mode = m.mode === "object" ? "object" : "exclude";
     return { id: String(m.id || ""), name: String(m.name || "Mask"), mode, object: mode === "object" ? String(m.object || "") : "",
-             on: m.on !== false, keys };
+             on: m.on !== false, keys, ...(matte ? { matte } : {}) };
+}
+
+// A mask may be a MATTE in place of a keyed shape: a grey picture per frame (white = masked) that an AI workflow
+// made over the shot (SAM 3 by words, a background remover). `pattern` is the sequence (#### = the plate's frame
+// index from 0), `frames` the frames it has; a frame between them takes the nearest earlier one. `threshold`
+// says what counts as masked, `grow` widens it by pixels (a feature on an edge is not the background either).
+export const MATTE_ENGINES = { objects: "SAM 3: objects by words", background: "Background remover: the subject" };
+
+export function cleanMatte(t) {
+    if (!t || typeof t !== "object" || typeof t.pattern !== "string" || !/#+/.test(t.pattern)) return null;
+    const frames = [...new Set((Array.isArray(t.frames) ? t.frames : []).map(Number).filter((f) => Number.isInteger(f) && f >= 0))]
+        .sort((a, b) => a - b);
+    if (!frames.length) return null;
+    return { pattern: t.pattern, frames, threshold: num(t.threshold, 0.5, 0.01, 0.99), grow: Math.round(num(t.grow, 6, 0, 64)),
+             invert: !!t.invert, engine: MATTE_ENGINES[t.engine] ? t.engine : "objects", prompt: String(t.prompt || "").slice(0, 200),
+             ...(t.width > 0 && t.height > 0 ? { width: Math.round(t.width), height: Math.round(t.height) } : {}) };
+}
+
+/** The frame of a matte that stands for frame f: the nearest earlier one it has, else its first; null if none. */
+export function matteFrameAt(matte, f) {
+    const fs = matte && matte.frames;
+    if (!fs || !fs.length) return null;
+    let got = fs[0];
+    for (const x of fs) { if (x <= f) got = x; else break; }
+    return got;
+}
+
+/** The file of a matte's frame: its pattern's last run of # filled with the number. */
+export function mattePath(pattern, f) {
+    return String(pattern).replace(/#+(?!.*#)/, (run) => String(f).padStart(run.length, "0"));
 }
 
 /** A matchmove as read from its file, every field there and sane. */
@@ -515,6 +546,167 @@ export function orientScale(o, a, b, dist) {
     if (!(now > 1e-12) || !(dist > 0)) return { error: "Pick two points apart and give their distance." };
     const k = dist / now;
     return { R: o.R.slice(), s: o.s * k, t: o.t.map((v) => v * k) };
+}
+
+/** The orientation moved up (dy > 0) or down along the world's Y. */
+export function orientLift(o, dy) {
+    return { R: o.R.slice(), s: o.s, t: [o.t[0], o.t[1] + dy, o.t[2]] };
+}
+
+/** The orientation turned upside down about the world's X axis (a ground found from below). */
+export function orientFlip(o) {
+    const F = [1, 0, 0, 0, -1, 0, 0, 0, -1];
+    return { R: mat3.mul(F, o.R), s: o.s, t: mat3.vec(F, o.t) };
+}
+
+/** A solved camera's up and right directions (3D-space axes, inside the group). */
+export function cameraAxes(solve, f) {
+    const cam = solve && solve.frames && solve.frames[f];
+    if (!cam) return null;
+    const m = cameraToItem(cam.R, cam.t).matrix;
+    return { right: [m[0], m[3], m[6]], up: [m[1], m[4], m[7]] };
+}
+
+/** Up to `most` of the solve's cameras, spread over the shot: [{c (centre), up, right}]. */
+export function groundCameras(solve, most = 60) {
+    const fs = Object.keys((solve && solve.frames) || {}).map(Number).sort((a, b) => a - b);
+    const step = Math.max(1, Math.ceil(fs.length / most));
+    const out = [];
+    for (let i = 0; i < fs.length; i += step) out.push({ c: cameraCentre(solve, fs[i]), ...cameraAxes(solve, fs[i]) });
+    return out;
+}
+
+function mulberry(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const unit3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+
+/**
+ * The ground among solved points, found without being told which they are: random planes through three points
+ * (RANSAC) scored by how many points lie on them, kept only if every camera is above them (the cameras' side is up)
+ * and they lie within `maxTilt` degrees of level for the cameras (their mean up direction), and marked down for
+ * every point clearly UNDER them (the ground is the lowest wide surface, not a table top or a roof). The winner is
+ * refitted to its points. "Level for the cameras" reads the cameras' RIGHT axes, not their up: a camera may look
+ * down at the floor, but is seldom rolled, so the ground's normal is square to every camera's right axis; the
+ * tilt is how far it is off that (and the cameras' up only says which side is up).
+ *
+ * pts: [{id, p: [x, y, z]}] (3D-space axes, inside the Matchmove group); cams: [{c, up}] (groundCameras).
+ * opts: tol (how far a point may lie off the plane, as a share of the scene's size - the points' median distance
+ * from the cameras), maxTilt (degrees), iters, seed.
+ * Returns {centre, normal, ids, count, below, tilt (degrees from the cameras' up), rms (scene units), tol} or
+ * {error}.
+ */
+export function findGround(pts, cams, { tol = 0.015, maxTilt = 40, iters = 600, seed = 7 } = {}) {
+    pts = (pts || []).filter((q) => q && Array.isArray(q.p) && q.p.every(Number.isFinite));
+    if (pts.length < 3) return { error: "There are fewer than three solved points." };
+    cams = (cams || []).filter((c) => c && c.c);
+    const camC = cams.length ? [0, 1, 2].map((i) => cams.reduce((s, c) => s + c.c[i], 0) / cams.length) : null;
+    let up = cams.length ? unit3([0, 1, 2].map((i) => cams.reduce((s, c) => s + (c.up ? c.up[i] : 0), 0))) : null;
+    if (up && !Number.isFinite(up[0])) up = null;
+    const rights = cams.filter((c) => c.right).map((c) => c.right);
+    // how far from level for the cameras: the rms of the normal along their right axes, as an angle
+    const tiltOf = (nr) => {
+        if (!rights.length) return up ? Math.acos(Math.max(-1, Math.min(1, dot3(nr, up)))) : 0;
+        const ms = rights.reduce((s, r) => s + dot3(nr, r) ** 2, 0) / rights.length;
+        return Math.asin(Math.min(1, Math.sqrt(ms)));
+    };
+    const dists = pts.map((q) => (camC ? Math.hypot(q.p[0] - camC[0], q.p[1] - camC[1], q.p[2] - camC[2]) : Math.hypot(...q.p))).sort((a, b) => a - b);
+    const size = dists[dists.length >> 1] || 1;
+    const tolAbs = Math.max(1e-9, tol * size);
+    const tiltMax = (Math.min(89, Math.max(1, maxTilt)) * Math.PI) / 180;
+    const rnd = mulberry(seed);
+    const n = pts.length;
+    const score = (normal, d) => {
+        let on = 0, below = 0;
+        for (const q of pts) {
+            const e = dot3(normal, q.p) - d;
+            if (Math.abs(e) <= tolAbs) on++;
+            else if (e < -3 * tolAbs) below++;
+        }
+        return { on, below };
+    };
+    // the plane facing the cameras: cameras above it, or it is refused
+    const facing = (normal, d) => {
+        if (!cams.length) return normal;
+        let pos = 0, neg = 0;
+        for (const c of cams) { const e = dot3(normal, c.c) - d; if (e > tolAbs) pos++; else if (e < -tolAbs) neg++; }
+        if (pos && neg && Math.min(pos, neg) > 0.1 * cams.length) return null;
+        return pos >= neg ? normal : normal.map((x) => -x);
+    };
+    let best = null;
+    const tries = Math.min(iters, n < 40 ? n * n * n : iters);
+    for (let it = 0; it < tries; it++) {
+        const a = pts[Math.floor(rnd() * n)].p, b = pts[Math.floor(rnd() * n)].p, c = pts[Math.floor(rnd() * n)].p;
+        const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let nr = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+        const l = Math.hypot(...nr);
+        if (l < 1e-12 * size * size) continue;
+        nr = nr.map((x) => x / l);
+        let d = dot3(nr, a);
+        if (up && dot3(nr, up) < 0) { nr = nr.map((x) => -x); d = -d; }
+        const f = facing(nr, d);
+        if (!f) continue;
+        if (f !== nr) { nr = f; d = -d; }
+        const tl = tiltOf(nr);
+        if (tl > tiltMax) continue;
+        const s = score(nr, d);
+        const val = (s.on - 2 * s.below) * Math.cos(tl);
+        if (s.on >= 3 && (!best || val > best.val)) best = { normal: nr, d, val };
+    }
+    if (!best) return { error: `No level plane with three or more points (within ${maxTilt}° of level for the cameras).` };
+    // refit to its points, twice
+    let normal = best.normal, d = best.d, ids = [], on = [];
+    for (let round = 0; round < 3; round++) {
+        on = pts.filter((q) => Math.abs(dot3(normal, q.p) - d) <= tolAbs);
+        if (on.length < 3) break;
+        ids = on.map((q) => q.id);
+        const fit = fitPlane(on.map((q) => q.p));
+        let nn = unit3(fit.normal);
+        if (dot3(nn, normal) < 0) nn = nn.map((x) => -x);
+        normal = nn;
+        d = dot3(normal, fit.centre);
+    }
+    on = pts.filter((q) => Math.abs(dot3(normal, q.p) - d) <= tolAbs);
+    ids = on.map((q) => q.id);
+    const centre = [0, 1, 2].map((i) => on.reduce((s, q) => s + q.p[i], 0) / Math.max(1, on.length));
+    const rms = Math.sqrt(on.reduce((s, q) => s + (dot3(normal, q.p) - d) ** 2, 0) / Math.max(1, on.length));
+    const below = pts.filter((q) => dot3(normal, q.p) - d < -3 * tolAbs).length;
+    const tilt = (tiltOf(normal) * 180) / Math.PI;
+    return { centre, normal, ids, count: ids.length, below, tilt, rms, tol: tolAbs, size };
+}
+
+/**
+ * The ground found by findGround as the Matchmove group's orientation: level, at height 0 under the middle of its
+ * points (orientGround with the plane's own points; the cameras are above it).
+ */
+export function orientFound(o, ground, pts) {
+    const by = new Map(pts.map((q) => [q.id, q.p]));
+    const on = ground.ids.map((id) => by.get(id)).filter(Boolean);
+    const above = ground.centre.map((v, i) => v + ground.normal[i]);
+    return orientGround(o, on, above);
+}
+
+/** The tracks with a key at frame f inside a polygon (plate pixels). */
+export function tracksInPolygon(mm, f, poly) {
+    if (!poly || poly.length < 3) return [];
+    return mm.tracks.filter((t) => { const k = keyAt(t, f); return k && pointInPolygon(poly, k[1], k[2]); }).map((t) => t.id);
+}
+
+/**
+ * Ground candidates from a matte of the ground (AI): votes = {id: [frames on the matte, frames seen]}; the tracks
+ * on it in at least `share` of the frames it was seen in.
+ */
+export function groundVotes(votes, share = 0.6) {
+    return Object.entries(votes || {}).filter(([, v]) => Array.isArray(v) && v[1] > 0 && v[0] / v[1] >= share).map(([id]) => id);
 }
 
 /**

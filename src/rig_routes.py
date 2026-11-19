@@ -522,7 +522,8 @@ AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_f
                  "matchmove_info", "matchmove_open", "matchmove_camera", "matchmove_lens", "matchmove_lens_export",
                  "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
                  "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track",
-                 "matchmove_object_solve", "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save")
+                 "matchmove_object_solve", "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save",
+                 "matchmove_ground", "matchmove_ai_mask")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS
