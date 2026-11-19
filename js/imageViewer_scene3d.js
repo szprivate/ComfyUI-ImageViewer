@@ -439,7 +439,18 @@ export function planeSettings(item) {
         opacity: Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 1,
         lit: !!raw.lit,
         doubleSided: raw.doubleSided !== false,
+        // Frames the plane's film or plate starts later (a negative one: earlier); whole frames.
+        offset: Number.isFinite(Number(raw.offset)) ? Math.round(Number(raw.offset)) : 0,
     };
+}
+
+/** What an image plane's Path row shows: its file's path, or the ComfyUI file it names. */
+export function planePath(item) {
+    const src = item && item.src;
+    if (!src) return "";
+    if (src.path) return String(src.path);
+    if (src.filename) return [src.type || "output", src.subfolder, src.filename].filter(Boolean).join("/");
+    return "";
 }
 
 export function makeCameraItem(name, patch = {}) {

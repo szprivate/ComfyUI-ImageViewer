@@ -24,7 +24,8 @@ const TRAIL = 12;               // frames of trail drawn behind a track
 const FRAME_CACHE = 48;         // frames of the plate kept as pictures
 const UNDO = 30;
 const BACKPLATE_DISTANCE = 50;  // solve units (its points' median distance is 10)
-const MAX_POINTS = 400;         // locators made of the solved points (the best by error)
+const MAX_POINTS = 400;
+const PLATE_SIZE = 1920;        // the longest side of the plate's pictures on the image plane         // locators made of the solved points (the best by error)
 
 const TOOLS = [
     ["select", "Select", "Click a track to pick it (Shift adds), drag round several, drag a picked one to move its key here"],
@@ -640,6 +641,32 @@ export const PrevizMatchmoveMixin = {
         });
     },
 
+    // ── a plate on an image plane (the view asks; imageViewer_view3dVideoPlane.js) ──
+
+    /** {frames, width, height, fps} of a plate path, asked once a while per path. */
+    async plateInfo(src) {
+        const path = src && src.path;
+        if (!path) throw new Error("no plate named");
+        const cache = this._plateInfos || (this._plateInfos = new Map());
+        const hit = cache.get(path);
+        if (hit && Date.now() - hit.at < 30000) return hit.info;
+        const d = await this._mmGet("/imageviewer/mm_plate", { path });
+        const info = { frames: d.frames, width: d.width, height: d.height, fps: d.fps, path: d.path, kind: d.kind };
+        cache.set(path, { at: Date.now(), info });
+        return info;
+    },
+
+    /** The URL of picture n (0 = the plate's first) of a plate, undistorted by the src's lens. */
+    plateFrameUrl(src, n) {
+        const q = { path: src.path, frame: Math.max(0, Math.round(n) || 0), size: src.size || PLATE_SIZE };
+        const lens = src.lens;
+        if (lens && (lens.k1 || lens.k2)) {
+            q.k1 = lens.k1 || 0; q.k2 = lens.k2 || 0;
+            if (Array.isArray(lens.center)) { q.cx = lens.center[0]; q.cy = lens.center[1]; }
+        }
+        return api.apiURL(`/imageviewer/mm_frame?${new URLSearchParams(q)}`);
+    },
+
     _mmLens(mm) {
         const L = mm.lens;
         return { k1: L.k1 || 0, k2: L.k2 || 0, center: L.center || null };
@@ -989,19 +1016,6 @@ export const PrevizMatchmoveMixin = {
         return [...st.sel].map((id) => by.get(id)).filter(Boolean).map((p) => D.pointToScene(p.X));
     },
 
-    async _mmProxy(st) {
-        const mm = st.mm;
-        const key = JSON.stringify([mm.plate.path, this._mmLens(mm)]);
-        if (mm.scene.proxy && mm.scene.proxyKey === key) return mm.scene.proxy;
-        const d = await this._mmJob(st, "Making the undistorted plate", this._mmPost("/imageviewer/mm_proxy", {
-            path: mm.plate.path, lens: this._mmLens(mm), fps: mm.plate.fps, size: 1920,
-        }));
-        if (d.state !== "done" || !d.result) throw new Error(d.error || "the undistorted plate was not made");
-        mm.scene.proxy = d.result;
-        mm.scene.proxyKey = key;
-        return d.result;
-    },
-
     _mmRemoveBuilt(scene, gid) {
         if (!gid) return;
         const gone = new Set([gid]);
@@ -1019,7 +1033,6 @@ export const PrevizMatchmoveMixin = {
         const mm = st.mm;
         const sv = mm.solve;
         if (!sv) throw new Error("Solve the camera first.");
-        const proxy = st.backplate !== false ? await this._mmProxy(st) : null;
         const scene = this.previzScene(st.key);
         if (!scene) return;
         this.previzSnapshot("matchmove into the scene");
@@ -1044,8 +1057,12 @@ export const PrevizMatchmoveMixin = {
         }
         const items = [group, cam];
         let plateItem = null;
-        if (proxy) {
-            plateItem = S.makeImagePlaneItem({ filename: proxy.filename, subfolder: proxy.subfolder, type: proxy.type, kind: "video" }, "Plate");
+        if (st.backplate !== false) {
+            // The plate itself, read frame by frame and undistorted on the server: it follows the timeline in any
+            // browser, and its Path in the Channel Box swaps it for another.
+            const lens = this._mmLens(mm);
+            plateItem = S.makeImagePlaneItem({ path: p.path, name: p.name || "Plate", kind: "plate",
+                                               ...(lens.k1 || lens.k2 ? { lens } : {}) }, "Plate");
             delete plateItem.offset;
             Object.assign(plateItem, D.backplatePlace(fovv, BACKPLATE_DISTANCE));
             plateItem.parent = cam.id;
@@ -1094,6 +1111,8 @@ export const PrevizMatchmoveMixin = {
         if (this._model3d) this._model3d.setActiveCamera(cam.id);
         this._previzSelection = cam.id;
         await this.previzChanged({ reload: true });
+        // The timeline takes the shot's new length: its slider too, or its old thumb stays as a second playhead.
+        if (this.applyTimelineBounds) this.applyTimelineBounds();
         if (this.previzSyncTimelineFields) this.previzSyncTimelineFields();
         this._mmChanged(st);
         // the scene names the file now; what was built is in it at once

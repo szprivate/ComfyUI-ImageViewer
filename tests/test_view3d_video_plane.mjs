@@ -2,7 +2,7 @@
 // Run: node --test tests/test_view3d_video_plane.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isVideoSrc, videoTime } from "../js/imageViewer_view3dVideoPlane.js";
+import { isVideoSrc, videoTime, isPlateSrc, plateFrame } from "../js/imageViewer_view3dVideoPlane.js";
 
 test("a film is told from a still by its kind or its name", () => {
     assert.equal(isVideoSrc({ path: "D:/out/plate.mp4" }), true);
@@ -30,4 +30,17 @@ test("before its start the first frame shows, past its end the last is held", ()
 test("no duration yet, no fps: still a time", () => {
     assert.equal(videoTime(24, 24, NaN), 24.5 / 24);
     assert.equal(videoTime(24, 0, 10), 24.5 / 24);
+});
+
+test("a plate is an image plane read frame by frame: its frame held at both ends, moved by the offset", () => {
+    assert.equal(isPlateSrc({ path: "D:/shots/a/plate.####.exr", kind: "plate" }), true);
+    assert.equal(isPlateSrc({ path: "D:/shots/a/plate.mp4", kind: "video" }), false);
+    assert.equal(isPlateSrc({ kind: "plate" }), false);
+    assert.equal(plateFrame(0, 24), 0);
+    assert.equal(plateFrame(15.7, 24), 15);
+    assert.equal(plateFrame(40, 24), 23);
+    assert.equal(plateFrame(-3, 24), 0);
+    assert.equal(plateFrame(10, 24, 4), 6);
+    assert.equal(plateFrame(2, 24, 4), 0);
+    assert.equal(plateFrame(500, 0), 500);
 });

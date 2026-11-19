@@ -191,6 +191,22 @@ export const PrevizMenuBarMixin = {
         return out;
     },
 
+    /** View > Layout: every pane layout, the one up ticked; also the layout button's caret (previzOpenLayoutMenu). */
+    _previzLayoutMenuEntries() {
+        const view = this._modelView();
+        const pane = view && view._paneState ? view._paneState() : null;
+        if (!pane) return [];
+        return PANE_LAYOUTS.map(([l, label]) => ({ label: tick(pane.layout === l, label), run: () => view.setPaneLayout(l) }));
+    },
+
+    /** The 3D bar's layout caret: View > Layout under it. */
+    previzOpenLayoutMenu(anchor) {
+        const entries = this._previzLayoutMenuEntries();
+        if (!entries.length || !anchor) return null;
+        const r = anchor.getBoundingClientRect();
+        return this._previzOpenMenu(entries, r.left, r.bottom + 2, anchor);
+    },
+
     _previzViewMenuEntries() {
         const view = this._modelView();
         const scene = this.previzScene();
@@ -222,8 +238,7 @@ export const PrevizMenuBarMixin = {
             ] },
             "-",
             ...(pane ? [
-                { label: "Layout", sub: PANE_LAYOUTS.map(([l, label]) => ({
-                    label: tick(pane.layout === l, label), run: () => view.setPaneLayout(l) })) },
+                { label: "Layout", sub: this._previzLayoutMenuEntries() },
                 { label: "This view", sub: PANE_VIEWS.map(([k, label]) => ({
                     label: tick(kind === k, label), run: () => view.setPaneView(pane.active, k) })) },
                 { label: pane.layout === "single" ? "Show all views" : "Maximise this view",

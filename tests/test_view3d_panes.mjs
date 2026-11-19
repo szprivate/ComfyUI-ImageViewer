@@ -67,3 +67,9 @@ test("each pane keeps its own shading, camera and look-through", () => {
     assert.deepEqual(s.cams, { persp2: { position: [1, 2, 3], target: [0, 0, 0], fov: 50 } });
     assert.deepEqual(cleanPaneState(null).shading, [null, null, null, null]);
 });
+
+test("the split layout the layout button goes back to is kept, never one view", () => {
+    assert.equal(cleanPaneState({ lastSplit: "2h" }).lastSplit, "2h");
+    assert.equal(cleanPaneState({ lastSplit: "single" }).lastSplit, undefined);
+    assert.equal(cleanPaneState({ lastSplit: "nope" }).lastSplit, undefined);
+});

@@ -28,13 +28,13 @@ import { WorldMatchMixin } from "./imageViewer_worldMatch.js";
 import { Rig3DMixin } from "./imageViewer_rig3d.js";
 import { Rig3DExtrasMixin } from "./imageViewer_rig3dExtras.js";
 import { View3DToolsMixin } from "./imageViewer_view3dTools.js";
-import { View3DPanesMixin } from "./imageViewer_view3dPanes.js";
+import { View3DPanesMixin, PANE_LAYOUTS } from "./imageViewer_view3dPanes.js";
 import { View3DGridMixin } from "./imageViewer_view3dGrid.js";
 import { View3DUsdMixin } from "./imageViewer_view3dUsd.js";
 import { Atlas3DMixin } from "./imageViewer_atlas3d.js";
 import { View3DPathTraceMixin } from "./imageViewer_view3dPathTrace.js";
 import { CameraAim3DMixin } from "./imageViewer_cameraAim3d.js";
-import { View3DVideoPlaneMixin, isVideoSrc } from "./imageViewer_view3dVideoPlane.js";
+import { View3DVideoPlaneMixin, isVideoSrc, isPlateSrc } from "./imageViewer_view3dVideoPlane.js";
 import { ScatterPaint3DMixin } from "./imageViewer_scatterPaint3d.js";
 import { TerrainBrush3DMixin } from "./imageViewer_terrainBrush3d.js";
 import { TerrainErode3DMixin } from "./imageViewer_terrainErode3d.js";
@@ -245,20 +245,17 @@ export class Model3DView {
         gridMoreBtn.onclick = (e) => { e.stopPropagation(); this.toggleGridMenu(); };
 
         const displayBtn = this._dispBuildButton(el);
-        // Houdini's viewport layouts, the two used most as buttons; the rest in View > Layout.
-        const layoutBtns = {};
-        for (const [layout, title, icon] of [
-            ["single", "One view: the pane the mouse was last over fills the stage", "icon-square"],
-            ["quad", "Four views: perspective, top, front and right - drag the dividers to size them", "icon-layout-grid"],
-        ]) {
-            const b = el("button", "model-btn model-icon-btn model-layout-btn", layout === "single" ? "1" : "4");
-            b.title = title;
-            b.dataset.layout = layout;
-            b.onclick = () => this.setPaneLayout(layout);
-            if (this.hooks.setIcon) this.hooks.setIcon(b, icon);
-            layoutBtns[layout] = b;
-        }
-        look.append(modeSel, gridBtn, gridMoreBtn, displayBtn, layoutBtns.single, layoutBtns.quad);
+        // Houdini's viewport layouts: ONE button that toggles between one view and the split layout used last
+        // (Sebastian 2026-11-19), its caret the View > Layout menu (every layout).
+        const layoutBtn = el("button", "model-btn model-icon-btn model-layout-btn", "1");
+        layoutBtn.onclick = () => this.togglePaneLayout();
+        const layoutMoreBtn = el("button", "model-btn model-layout-more", "▾");
+        layoutMoreBtn.title = "Layout: one view, two side by side, two stacked, one big and two small, four views";
+        layoutMoreBtn.onclick = (e) => {
+            e.stopPropagation();
+            if (this.hooks.openLayoutMenu) this.hooks.openLayoutMenu(layoutMoreBtn);
+        };
+        look.append(modeSel, gridBtn, gridMoreBtn, displayBtn, layoutBtn, layoutMoreBtn);
 
         // The gizmo tools, beside the object they act on, with the same keys (Q / W / E / R / X).
         const toolBtns = {};
@@ -320,7 +317,7 @@ export class Model3DView {
         root.append(menubar, stage, tools, status);
         this.root = root;
         this.stage = stage;
-        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, gridMoreBtn, layoutBtns, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
+        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, gridMoreBtn, layoutBtn, layoutMoreBtn, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
         if (this.hooks.buildMenuBar) this.hooks.buildMenuBar(menus, this);
         this._paneBuild();
@@ -333,8 +330,19 @@ export class Model3DView {
         this.ui.modeSel.value = this.materialMode;
         this.ui.gridBtn.classList.toggle("active", this.showGrid);
         if (this._dispMenuSync) this._dispMenuSync();
-        if (this.ui.layoutBtns && this._panes) {
-            for (const [l, b] of Object.entries(this.ui.layoutBtns)) b.classList.toggle("active", l === this._panes.layout);
+        if (this.ui.layoutBtn && this._panes) {
+            // The button shows the layout that is up, and says what a click goes to.
+            const b = this.ui.layoutBtn;
+            const single = this._panes.layout === "single";
+            const to = single ? (this._panes.lastSplit || "quad") : "single";
+            const name = (PANE_LAYOUTS.find(([l]) => l === to) || [, to])[1].toLowerCase();
+            if (b.dataset.layout !== this._panes.layout) {
+                b.dataset.layout = this._panes.layout;
+                b.textContent = single ? "1" : "4";
+                if (this.hooks.setIcon) this.hooks.setIcon(b, single ? "icon-square" : "icon-layout-grid");
+            }
+            b.title = `${single ? "One view" : "Split views"} - click for ${name} (the caret: every layout)`;
+            b.classList.toggle("active", !single);
         }
         for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
             btn.classList.toggle("active", mode === this.gizmoMode);
@@ -1289,6 +1297,10 @@ export class Model3DView {
                 pending.push(this._tracked(this._loadEntry(entry, item)));
             } else if (item.kind === "model") {
                 this.usdSyncOvers(entry, item);
+            } else if (item.kind === "imageplane" && entry.key !== this._srcKey(item.src)) {
+                // A new picture for the plane (its Path in the Channel Box): made again.
+                this._disposeEntry(entry, false);
+                pending.push(this._tracked(this._buildImagePlane(entry, item)));
             } else if (this._isWorldKind(item)) {
                 // A world item rebuilds when its settings change; a scatter
                 // also when the ground it grows on does.
@@ -1339,7 +1351,9 @@ export class Model3DView {
     _srcKey(src) {
         if (!src) return "";
         const base = src.path || src.url || [src.type, src.subfolder, src.filename].filter(Boolean).join("/");
-        return src.prim ? `${base}|${src.prim}` : base;
+        // A plate is read again when its lens changes (its pictures are undistorted by it).
+        const lens = src.kind === "plate" && src.lens ? `|lens:${JSON.stringify(src.lens)}` : "";
+        return (src.prim ? `${base}|${src.prim}` : base) + lens;
     }
 
     /**
@@ -1533,7 +1547,9 @@ export class Model3DView {
      */
     async _buildImagePlane(entry, item) {
         const { THREE } = this.libs;
-        const url = this.hooks.srcUrl && this.hooks.srcUrl(item.src);
+        // A plate (a sequence or a film read frame by frame) asks for its pictures itself.
+        const plate = isPlateSrc(item.src);
+        const url = plate ? "plate" : (this.hooks.srcUrl && this.hooks.srcUrl(item.src));
         entry.key = this._srcKey(item.src);
         const opts = planeSettings(item);
         const geometry = new THREE.PlaneGeometry(1, 1);
@@ -1555,12 +1571,18 @@ export class Model3DView {
         }
         try {
             // A film is a plane too, its frame the scene's (imageViewer_view3dVideoPlane.js).
-            const film = isVideoSrc(item.src);
-            const texture = film ? await this._loadVideoTexture(url) : await this._loadTexture(url);
+            const film = !plate && isVideoSrc(item.src);
+            const texture = plate ? await this._loadPlateTexture(entry, item)
+                : film ? await this._loadVideoTexture(url) : await this._loadTexture(url);
             if (!this._entries.has(item.id) || entry.plane !== mesh) {
                 if (film) { const v = texture.userData.imageViewerVideo; try { v.removeAttribute("src"); v.load(); } catch (_) {} }
+                if (plate) this._platePlaneDrop(texture.userData.plate);
                 texture.dispose();
                 return entry;
+            }
+            if (plate) {
+                this._plateAdopt(entry, texture);
+                this._platePlaneSeek(entry, item, this.sceneFrame || 0);
             }
             if (film) {
                 entry.video = texture.userData.imageViewerVideo;
@@ -1569,8 +1591,9 @@ export class Model3DView {
             texture.colorSpace = THREE.SRGBColorSpace;
             material.map = texture;
             material.needsUpdate = true;
-            const w = texture.image && (texture.image.width || texture.image.videoWidth) || 1;
-            const h = texture.image && (texture.image.height || texture.image.videoHeight) || 1;
+            const pi = plate ? entry.plateInfo : null;
+            const w = (pi && pi.width) || (texture.image && (texture.image.width || texture.image.videoWidth)) || 1;
+            const h = (pi && pi.height) || (texture.image && (texture.image.height || texture.image.videoHeight)) || 1;
             // The card takes the picture's shape: a unit tall, as wide as it is.
             mesh.scale.set(w / h, 1, 1);
             entry.error = "";
@@ -1767,6 +1790,7 @@ export class Model3DView {
 
     _disposeEntry(entry, full) {
         if (entry.video) this._videoPlaneDrop(entry);
+        if (entry.plateCache) this._platePlaneDrop(entry);
         if (entry.mixer) { entry.mixer.stopAllAction(); entry.mixer = null; }
         if (entry.worldExtras || entry.envApplied || entry.terrain || entry.motion) this._worldDispose(entry);
         if (entry.object) {
@@ -1872,6 +1896,8 @@ export class Model3DView {
             }
             // A film on an image plane is sought to the frame, never played.
             if (entry.video) this._videoPlaneSeek(entry, item, frame);
+            // A plate's picture is the frame's, from the server.
+            if (entry.plateTex) this._platePlaneSeek(entry, item, frame);
             // A cache holds a different shape per frame, so it is re-read.
             if (this._isCache(item) && entry.cacheFrame !== Math.round(frame)) {
                 this._queueCacheReload(entry, item);

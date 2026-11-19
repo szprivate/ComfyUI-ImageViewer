@@ -1357,6 +1357,14 @@ textarea.param-input {
 }
 .cb-val:focus { outline: none; border-color: #f60; background: #111; }
 .cb-sel { padding: 0 2px; }
+/* An image plane's Path: the path, then the picker, in the value column. */
+.cb-path-box { display: flex; min-width: 0; }
+.cb-path-box .cb-path { flex: 1; }
+.cb-path-pick {
+    height: 17px; padding: 0; margin-left: 2px; background: #2b2b2b; color: #ddd;
+    border: 1px solid #1e1e1e; font: inherit; font-size: 11px; cursor: pointer;
+}
+.cb-path-pick:hover { border-color: #f60; }
 /* Keyed channels, as Maya shows them; brighter on a frame that holds a key. */
 .cb-row.keyed .cb-val { background: #b8646b; color: #111; border-color: #8d464c; }
 .cb-row.keyed-now .cb-val { background: #dd727a; }
@@ -2646,6 +2654,10 @@ audio.src-media { width: 90%; }
 /* Grid and its options caret read as one control. */
 .model-mb-right .model-btn.model-grid-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .model-mb-right .model-btn.model-grid-more { margin-left: -5px; padding: 0 4px; border-left-color: #333;
+    border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 10px; }
+/* The layout toggle and its caret (View > Layout) read as one control too. */
+.model-mb-right .model-btn.model-layout-btn { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.model-mb-right .model-btn.model-layout-more { margin-left: -5px; padding: 0 4px; border-left-color: #333;
     border-top-left-radius: 0; border-bottom-left-radius: 0; font-size: 10px; }
 /* The grid options: the Display menu's box with number fields. */
 .model-grid-menu { min-width: 230px; }

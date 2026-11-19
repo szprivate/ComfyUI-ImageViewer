@@ -139,6 +139,8 @@ export function cleanPaneState(s, modes = null) {
         && new Set(s.views).size === 4) out.views = s.views.slice();
     if (!out.views.includes("persp")) out.views[0] = "persp";
     if (Number.isInteger(s.focus) && s.focus >= 0 && s.focus < 4) out.focus = s.focus;
+    // The split layout the one / many toggle goes back to (the last one used).
+    if (s.lastSplit !== "single" && SLOTS[s.lastSplit]) out.lastSplit = s.lastSplit;
     return out;
 }
 
@@ -688,10 +690,20 @@ export const View3DPanesMixin = {
 
     // ── Layout and the panes' chrome ─────────────────────────────────────────
 
+    /**
+     * The layout button (Sebastian 2026-11-19: one button that toggles between one view and the split views, with a
+     * caret for View > Layout): one view -> the split layout used last (four views at first), a split -> one view.
+     */
+    togglePaneLayout() {
+        const s = this._paneState();
+        this.setPaneLayout(s.layout === "single" ? (s.lastSplit || "quad") : "single");
+    },
+
     setPaneLayout(layout) {
         if (!SLOTS[layout]) return;
         const s = this._paneState();
         if (layout === "single") s.focus = s.active;
+        else s.lastSplit = layout;
         s.layout = layout;
         // Chosen by hand, a layout is not a maximised pane any more (togglePaneMaximised sets it again).
         delete s.restore;

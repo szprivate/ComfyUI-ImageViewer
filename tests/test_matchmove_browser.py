@@ -248,6 +248,54 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertTrue(saved.get("solve"))
             self._shot(pg, "mm_built")
 
+            # One playhead: the timeline's slider took the shot's new length (its old thumb stayed as a second one).
+            self.assertEqual(pg.evaluate("() => Number(window.__panel.timeline.max)"), N - 1)
+            # The plate is the plate itself, read frame by frame, and follows the timeline.
+            src = pg.evaluate("() => window.__panel.previzScene().items.find((i) => i.name === 'Plate').src")
+            self.assertEqual(src.get("kind"), "plate", src)
+            self.assertTrue(src["path"].endswith("plate.####.png"), src)
+            shown = """() => { const P = window.__panel; const pl = P.previzScene().items.find((i) => i.name === 'Plate');
+                const e = P._model3d._entries.get(pl.id); return e && e.plateTex ? e.plateShown : null; }"""
+            for f in (15, 3):
+                pg.evaluate(f"() => window.__panel.setFrame({f})")
+                pg.wait_for_function(f"() => ({shown})() === {f}", timeout=20000)
+
+            # Its Path in the Channel Box swaps it: another sequence, one frame of it typed.
+            from PIL import Image, ImageOps
+            other_dir = os.path.join(os.path.dirname(self.plate), "other")
+            os.makedirs(other_dir, exist_ok=True)
+            for k in range(N):
+                im = Image.open(self.plate.replace("####", f"{1001 + k:04d}")).convert("RGB")
+                ImageOps.invert(im).save(os.path.join(other_dir, f"other.{1001 + k:04d}.png"))
+            pg.evaluate("""() => { const P = window.__panel; const pl = P.previzScene().items.find((i) => i.name === 'Plate');
+                P.previzSelect(pl.id); }""")
+            pg.wait_for_timeout(200)
+            self.assertTrue(pg.evaluate("() => window.__panel.channelsPanel.querySelector('.cb-path').value").endswith("plate.####.png"))
+            pg.evaluate("""(p) => { const i = window.__panel.channelsPanel.querySelector('.cb-path');
+                i.value = p; i.dispatchEvent(new Event('change')); }""", os.path.join(other_dir, "other.1009.png").replace("\\", "/"))
+            pg.wait_for_function("""() => { const P = window.__panel; const pl = P.previzScene().items.find((i) => i.name === 'Plate');
+                const e = P._model3d._entries.get(pl.id);
+                return pl.src.path.endsWith('other.####.png') && e && e.plateTex && e.plateShown === 3; }""", timeout=20000)
+            self.assertTrue(pg.evaluate("() => window.__panel.channelsPanel.querySelector('.cb-path').value").endswith("other.####.png"))
+            # A path that is not there is said, and the plate stays.
+            r = pg.evaluate("async () => window.__panel.previzSetPlanePath(null, '/nowhere/missing.####.exr')")
+            self.assertFalse(r["ok"], r)
+            self.assertIn("other", pg.evaluate("() => window.__panel.previzScene().items.find((i) => i.name === 'Plate').src.path"))
+
+            # The layout button toggles one view and the split used last; its caret is View > Layout.
+            lay = pg.evaluate("""async () => { const V = window.__panel._model3d; const b = V.ui.layoutBtn; const out = [V._paneState().layout];
+                const wait = () => new Promise((r) => setTimeout(r, 120));
+                b.click(); await wait(); out.push(V._paneState().layout);
+                b.click(); await wait(); out.push(V._paneState().layout);
+                V.setPaneLayout('2v'); V.setPaneLayout('single'); b.click(); await wait(); out.push(V._paneState().layout);
+                V.ui.layoutMoreBtn.click(); await wait();
+                out.push([...window.__panel._previzMenuHost().querySelectorAll('.previz-menu-item')].map((x) => x.textContent));
+                V.setPaneLayout('single'); return out; }""")
+            self.assertEqual(lay[:4], ["single", "quad", "single", "2v"])
+            self.assertIn("✓ Two stacked", lay[4])
+            self.assertIn("Four views", lay[4])
+            pg.keyboard.press("Escape")
+
             # The panels go with the 3D tab and come back with it.
             # (the harness's Viewer tab holds no picture, so nothing leaves 3D mode by itself: the panel is told, as a
             # picture coming up tells it)

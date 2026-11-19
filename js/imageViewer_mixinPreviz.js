@@ -1452,8 +1452,9 @@ export const PrevizMixin = {
      * the texture, shaped to it. History items that only name a ComfyUI file
      * (filename / subfolder / type) come in as they are; a desktop file the
      * History holds on a blob: URL is copied into ./input/3d first, so the
-     * scene can find it after a reload. A sequence comes in as the frame
-     * dragged. One undo step for the lot.
+     * scene can find it after a reload. A sequence comes in as a plate that
+     * plays with the timeline (imageViewer_view3dVideoPlane.js). One undo step
+     * for the lot.
      */
     async previzAddDropped(items) {
         const scene = this.previzScene();
@@ -1483,9 +1484,11 @@ export const PrevizMixin = {
         // plane puts the grid at 0.1, and the next plane would shrink with it.
         const size = Math.max(1, (view && Number(view._gridAutoScale)) || 1);
         for (const it of planes) {
-            const src = it.url && !it.path ? await this._previzSrcFor(it) : this._srcOfFrame(it);
+            // A numbered sequence plays on the plane: a plate, read frame by frame (one frame names it).
+            const src = it.isSequence && it.path ? { path: it.path, kind: "plate" }
+                : it.url && !it.path ? await this._previzSrcFor(it) : this._srcOfFrame(it);
             if (!src || (!src.path && !src.filename && !src.url)) continue;
-            if (this._frameIsVideo(it)) src.kind = "video";
+            if (src.kind !== "plate" && this._frameIsVideo(it)) src.kind = "video";
             const name = it.filename || it.name || (it.path ? this._basename(it.path) : "") || "Image plane";
             src.name = src.name || name;
             const item = S.makeImagePlaneItem(src, S.uniqueName(scene, this._basename(name)));
@@ -2185,6 +2188,40 @@ export const PrevizMixin = {
             if (view && view.syncImagePlane) view.syncImagePlane(item);
         }
         this.previzChanged(live ? { light: true, persist: false } : {});
+    },
+
+    /**
+     * A new picture for image planes (the Channel Box's Path row; Sebastian 2026-11-19: "change to another plate,
+     * the path should be in the parameters"): a film, a still, or a numbered sequence (one frame of it, or its
+     * pattern - shot.####.exr, shot.%04d.exr). It is read as a plate (imageViewer_view3dVideoPlane.js), frame by
+     * frame on the server, so it follows the timeline; a lens on the old one (Matchmove's undistortion) is kept.
+     */
+    async previzSetPlanePath(id, path) {
+        const scene = this.previzScene();
+        let clean = String(path || "").trim().replace(/^["']|["']$/g, "");
+        if (!scene || !clean) return { ok: false, message: "No path given." };
+        const planes = this._previzIdList(id).map((one) => S.itemById(scene, one))
+            .filter((it) => it && it.kind === "imageplane");
+        if (!planes.length) return { ok: false, message: "No image plane is selected." };
+        // Asked first, so a typo is said rather than drawn as an empty plane; one frame of a sequence names it.
+        if (this.plateInfo) {
+            try {
+                const info = await this.plateInfo({ path: clean });
+                if (info && info.path) clean = info.path;
+            } catch (e) {
+                const message = (e && e.message) || "that file could not be read";
+                notice("error", "Image plane not changed", message);
+                return { ok: false, message };
+            }
+        }
+        this.previzSnapshot("image plane path");
+        for (const item of planes) {
+            const old = item.src || {};
+            const name = clean.split(/[\\/]/).pop() || "Plate";
+            item.src = { path: clean, name, kind: "plate", ...(old.kind === "plate" && old.lens ? { lens: old.lens } : {}) };
+        }
+        this.previzChanged({ reload: true });
+        return { ok: true };
     },
 
     previzAddFromBrowser() {
