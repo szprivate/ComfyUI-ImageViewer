@@ -204,6 +204,24 @@ class FilmTests(unittest.TestCase):
         self.assertTrue(f["phone"]["cinematic"])
         self.assertTrue(any("Cinematic" in n for n in f["notes"]))
 
+    def test_the_lens_keys_of_the_picture_track_are_read_too(self):
+        # iOS 26 (an iPhone 14) put the lens and the 35 mm focal length on the picture track only
+        K = I.K
+        info = {"keys": {K + "make": "Apple", K + "model": "iPhone 14"}, "udta": {}, "cinematic": False,
+                "depth": None, "motion": [], "timed": {}, "picture": {"rotation": 0},
+                "tracks": [{"id": 1, "role": "picture",
+                            "meta": {K + "camera.lens_model": "iPhone 14 back camera 5.7mm f/1.5",
+                                     K + "camera.focal_length.35mm_equivalent": 26}}]}
+        real = I.read_film
+        I.read_film = lambda path: info
+        try:
+            f = I.film_facts("x.mov")
+        finally:
+            I.read_film = real
+        self.assertEqual(f["lens"], "iPhone 14 back camera 5.7mm f/1.5")
+        self.assertAlmostEqual(f["focal_mm"], 5.7)
+        self.assertEqual(f["focal35"], 26)
+
     def test_the_depth_track_is_decoded(self):
         got = I.depth_samples(self.film, [0.0, 0.2])
         self.assertEqual(sorted(got), [0.0, 0.2])
