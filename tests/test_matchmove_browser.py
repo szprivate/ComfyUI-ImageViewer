@@ -485,6 +485,17 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertTrue(g["button"])
             self.assertIn("phone's depth", g["text"])
             self._shot(pg, "mm_phone_ground")
+            # The agent's road: the summary names the phone and its depth, the ground from it, its depth saved.
+            ag = pg.evaluate("""async () => { const P = window.__panel;
+                const info = await P.previzSceneAgent('matchmove_info', {});
+                const ground = await P.previzSceneAgent('matchmove_ground', { how: 'phone' });
+                const saved = await P.previzSceneAgent('matchmove_phone_export', {});
+                return { phone: info.matchmove.phone, ground: ground.ground, depth: saved.depth }; }""")
+            self.assertTrue(ag["phone"]["film"])
+            self.assertTrue(ag["phone"]["depth"]["width"] > 0, ag)
+            self.assertLess(ag["ground"]["tilt"], 5, ag)
+            self.assertGreater(ag["ground"]["camera_height"], 0, ag)
+            self.assertGreater(ag["depth"]["frames"], 0, ag)
             self.assertEqual(self.errors, [])
         finally:
             pg.close()
