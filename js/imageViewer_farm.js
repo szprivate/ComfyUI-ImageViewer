@@ -409,7 +409,10 @@ export const FarmMixin = {
     _farmSetup(rec, rebuild) {
         const ui = rec.ui, h = ui.h, d = rec.data;
         if (!d || d.ok === false) return;
-        if (!rebuild && ui.setup.contains(ui.setup.ownerDocument.activeElement)) return;  // typing: leave it alone
+        // typing, or edits not saved yet: the refresh leaves the form alone (it used to wipe an edit once the field
+        // lost focus, so Save sent the old values)
+        if (!rebuild && (ui.setupDirty || ui.setup.contains(ui.setup.ownerDocument.activeElement))) return;
+        ui.setupDirty = false;
         ui.setup.textContent = "";
         const st = d.settings || {}, keys = d.keys || {};
         const sec = (title, text) => {
@@ -435,7 +438,7 @@ export const FarmMixin = {
             ["idle_stop_minutes", "Stop when idle (minutes)", "number", "A rented machine with nothing to render is stopped after this. 0 = never."],
             ["eu_only", "EU machines only", "checkbox", "Offers outside the EU (and Norway, Switzerland, the UK) are left out."],
             ["gpu", "GPU to look for", "text", "Part of the name, any case (5090), or with * as a wildcard (RTX 50*, *PRO 6000*). Empty = every GPU."],
-            ["image", "Machine image", "text", "The Docker image every machine starts from: ComfyUI with your custom nodes and bepic_templates."],
+            ["image", "Machine image", "text", "The Docker image every machine starts from. Empty = the agentY farm image (ComfyUI with the farm helper)."],
             ["disk_gb", "Disk (GB)", "number", "Room for the models the workflows need."],
             ["retries", "Retries on another machine", "number", "A render that fails is tried this many more times."],
         ];
@@ -448,6 +451,7 @@ export const FarmMixin = {
             if (type === "checkbox") inp.checked = !!st[key]; else inp.value = st[key] == null ? "" : String(st[key]);
             if (type === "number") { inp.min = "0"; inp.step = key.endsWith("usd") || key === "max_usd_per_hour" ? "0.5" : "1"; }
             if (key === "image") inp.placeholder = "registry/name:tag";
+            inp.addEventListener(type === "checkbox" ? "change" : "input", () => { ui.setupDirty = true; });
             inputs[key] = inp;
             row.append(h("span", "fm-field-label", label), inp, h("span", "fm-field-help", help));
             form.append(row);

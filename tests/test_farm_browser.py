@@ -257,6 +257,21 @@ class FarmBrowserTests(unittest.TestCase):
         self.assertEqual((st["daily_cap_usd"], st["eu_only"]), ("35", True))
         self.assertEqual(self.errors, [])
 
+    def test_an_edit_survives_the_refresh_until_saved(self):
+        pg = self.page()
+        pg.evaluate("() => window.__panel.farmOpen('setup')")
+        pg.wait_for_function("() => window.__panel.viewport.querySelectorAll('.fm-setup .fm-field').length === 8")
+        pg.evaluate("""() => { const i = window.__panel.viewport.querySelector('.fm-setup input[data-key=image]');
+            i.focus(); i.value = 'ghcr.io/me/farm:2'; i.dispatchEvent(new Event('input', {bubbles: true})); i.blur(); }""")
+        pg.wait_for_timeout(4500)                          # two refreshes of the farm while nothing has focus
+        kept = pg.evaluate("() => window.__panel.viewport.querySelector('.fm-setup input[data-key=image]').value")
+        self.assertEqual(kept, "ghcr.io/me/farm:2")
+        pg.evaluate("() => [...window.__panel.viewport.querySelectorAll('.fm-setup .fm-btn')].find((b) => b.textContent === 'Save').click()")
+        pg.wait_for_function("() => window.__farmPosts.some((p) => p.action === 'settings')")
+        st = pg.evaluate("() => window.__farmPosts.find((p) => p.action === 'settings').settings")
+        self.assertEqual(st["image"], "ghcr.io/me/farm:2")
+        self.assertEqual(self.errors, [])
+
     def test_a_host_that_is_down_says_so(self):
         pg = self.page()
         pg.evaluate("""() => { window.__fetchApi = async () => new Response(JSON.stringify({ok: false, offline: true,
