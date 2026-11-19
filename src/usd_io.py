@@ -351,9 +351,31 @@ def _animated_range(item):
 
 # ── export ───────────────────────────────────────────────────────────────────
 
-def _fov_to_focal(fov_degrees):
+def _picture_on_film(item):
+    """The camera's picture on its film back, (w, h) in mm: imageViewer_cameraLens.js pictureOnFilm.
+
+    An item that names no film back keeps the old 24 mm vertical aperture, so a stage written before the
+    camera had one opens as it did."""
+    res_w, res_h = _resolution(item)
+    aspect = res_w / res_h
+    fb = item.get("filmback") if isinstance(item, dict) else None
+    try:
+        W, H = (min(200.0, max(0.1, float(v))) for v in fb)
+    except (TypeError, ValueError):
+        return APERTURE_V * aspect, APERTURE_V
+    fit = item.get("filmFit") or "horizontal"
+    if fit == "vertical":
+        return H * aspect, H
+    if fit == "fill":
+        return (H * aspect, H) if W / H > aspect else (W, W / aspect)
+    if fit == "overscan":
+        return (W, W / aspect) if W / H > aspect else (H * aspect, H)
+    return W, W / aspect
+
+
+def _fov_to_focal(fov_degrees, vertical_aperture=APERTURE_V):
     half = math.radians(max(1.0, min(179.0, float(fov_degrees or 35))) / 2.0)
-    return (APERTURE_V / 2.0) / max(1e-6, math.tan(half))
+    return (float(vertical_aperture) / 2.0) / max(1e-6, math.tan(half))
 
 
 def _focal_to_fov(focal, vertical_aperture):
@@ -802,10 +824,13 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             # The film back takes the shape of the picture: the vertical
             # aperture (and so the vertical fov) stays put, and the horizontal
             # one follows the resolution's aspect.
-            res_w, res_h = _resolution(item)
-            cam.CreateHorizontalApertureAttr(APERTURE_V * res_w / res_h)
-            cam.CreateVerticalApertureAttr(APERTURE_V)
-            cam.CreateClippingRangeAttr(Gf.Vec2f(0.01, 10000.0))
+            # With a film back of its own (the Channel Box's Aperture W / H and Film Fit) the apertures are
+            # the picture's part of it, so the focal length is the camera's.
+            ap_w, ap_h = _picture_on_film(item)
+            cam.CreateHorizontalApertureAttr(ap_w)
+            cam.CreateVerticalApertureAttr(ap_h)
+            clip = item.get("clip") if isinstance(item.get("clip"), list) and len(item.get("clip")) == 2 else [0.01, 10000.0]
+            cam.CreateClippingRangeAttr(Gf.Vec2f(float(clip[0]), float(clip[1])))
             xformable = cam
         elif kind == "primitive":
             xformable = _define_shape(stage, prim_path, item)
@@ -874,7 +899,7 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             _set_xform(UsdGeom.Xformable(prim), pos,
                        item.get("rotation") or [0, 0, 0], item.get("scale") or [1, 1, 1])
             if kind == "camera":
-                UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35)))
+                UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35), _picture_on_film(item)[1]))
         else:
             first, last = span
             focal_attr = UsdGeom.Camera(prim).CreateFocalLengthAttr() if kind == "camera" else None
@@ -887,7 +912,7 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
                            rot, scl,
                            time=Usd.TimeCode(frame))
                 if focal_attr is not None:
-                    focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame)), Usd.TimeCode(frame))
+                    focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame), _picture_on_film(item)[1]), Usd.TimeCode(frame))
         if offset is not None:
             # Frozen transformations: a matrix under translate / rotate / scale,
             # which is exactly where scene3d's `offset` sits.
@@ -1277,6 +1302,11 @@ def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
         h_ap = cam.GetHorizontalApertureAttr().Get() or APERTURE_H
         v_ap = aperture or APERTURE_V
         item["resolution"] = [max(1, int(round(1080 * float(h_ap) / float(v_ap)))), 1080]
+        # Its film back is the stage's apertures (the picture fills it), and its clipping range comes along.
+        item["filmback"] = [round(float(h_ap), 4), round(float(v_ap), 4)]
+        clip = cam.GetClippingRangeAttr().Get()
+        if clip is not None and float(clip[1]) > float(clip[0]) > 0:
+            item["clip"] = [float(clip[0]), float(clip[1])]
     elif shape:
         item["primitive"] = {"type": shape}
         color = UsdGeom.Gprim(prim).GetDisplayColorAttr().Get()

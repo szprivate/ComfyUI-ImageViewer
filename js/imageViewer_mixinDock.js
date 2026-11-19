@@ -956,9 +956,11 @@ export const DockMixin = {
     dockViewTitleSync() {
         const bar = this.dockViewEl && this.dockViewEl.querySelector(":scope > .panel-titlebar");
         const name = bar && bar.querySelector(":scope > .pt-name");
+        // A matchmove's plate may stand in the main view in place of the 3D view (imageViewer_previzMatchmove.js).
+        const plate = this._mmPlateOverlayShow ? this._mmPlateOverlayShow() : false;
         if (!name) return;
         const label = this._dockViewLabel(this.activeTab);
-        const text = label ? label : "Main view";
+        const text = plate ? `Plate · ${label || "3D"}` : label ? label : "Main view";
         if (name.textContent !== text) name.textContent = text;
         name.title = label ? `Main view: ${label}` : "Main view";
     },
@@ -975,6 +977,8 @@ export const DockMixin = {
                            title: here ? "Shown here" : "Show this tab here",
                            run: () => { if (!here && this.switchTab) this.switchTab(k); } });
         }
+        const extra = this.matchmoveViewEntries ? this.matchmoveViewEntries() : [];
+        if (extra.length) entries.push("-", ...extra);
         const mates = DT.panels(this.dockLayout.root).filter((p) => !p.hidden && !p.behind && !p.tab && this._dockPanelEl(p.id));
         if (mates.length) {
             entries.push("-", { head: "Trade places with" });

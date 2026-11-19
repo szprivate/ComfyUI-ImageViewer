@@ -95,6 +95,11 @@ export function cleanState(kept) {
     return st;
 }
 
+/** A camera's own mask (`item.frameMask`, imageViewer_cameraLens.js readCameraMask) as a state to draw. */
+export function cameraMaskState(m) {
+    return cleanState({ ...m, on: m && m.on !== false });
+}
+
 // ── the panel ────────────────────────────────────────────────────────────────
 
 export const FrameMasksMixin = {
@@ -190,11 +195,11 @@ export const FrameMasksMixin = {
      * kept part as a hole whose shadow is the shade, its line and its label.
      * A signature on the element skips a redraw that would change nothing.
      */
-    _frameMaskFill(el, w, h) {
-        const m = maskOf(this._frameMask());
+    _frameMaskFill(el, w, h, state = null) {
+        const st = state || this._frameMask();
+        const m = maskOf(st);
         const r = m && maskRect(w, h, m.ratio);
         if (!r) { el.style.display = "none"; el.dataset.ratio = ""; return; }
-        const st = this._frameMask();
         const sig = `${w}|${h}|${m.ratio}|${st.opacity}|${st.line}|${st.label}|${m.label}`;
         el.style.display = "block";
         if (el._fmSig === sig) return;
@@ -272,9 +277,13 @@ export const FrameMasksMixin = {
             view.stage.appendChild(el);
             view._fmEl = el;
         }
-        if (!g || !g.w || !g.h || !maskOf(this._frameMask())) { el.style.display = "none"; return; }
+        // A camera looked through may have a mask of its own (its Channel Box's Framing Mask): it stands in for
+        // the viewer's while that camera is looked through, on or off.
+        const st = g && g.mask ? cameraMaskState(g.mask) : this._frameMask();
+        el.dataset.source = g && g.mask ? "camera" : "viewer";
+        if (!g || !g.w || !g.h || !maskOf(st)) { el.style.display = "none"; return; }
         Object.assign(el.style, { left: `${g.x}px`, top: `${g.y}px`, width: `${g.w}px`, height: `${g.h}px` });
-        this._frameMaskFill(el, g.w, g.h);
+        this._frameMaskFill(el, g.w, g.h, st);
     },
 
     /** The menu: on / off, the ratios, a ratio of one's own, opacity, line and label. */

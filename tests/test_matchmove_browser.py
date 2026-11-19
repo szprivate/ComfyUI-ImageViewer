@@ -314,8 +314,13 @@ class MatchmoveBrowserTests(unittest.TestCase):
                 const locs = sc.items.filter((i) => i.mmTrack).length;
                 return { cam: !!cam, keys: cam ? ((cam.tracks || {}).position || []).length : 0,
                          active: sc.activeCamera === (cam && cam.id), plate: !!plate, under: plate && plate.parent === (cam && cam.id),
-                         locs, file: (sc.matchmove || {}).file || null, fps: sc.fps }; }""")
+                         locs, file: (sc.matchmove || {}).file || null, fps: sc.fps,
+                         filmback: cam && cam.filmback, focal: cam ? P._cbValue(cam, 'focal', null) : null,
+                         sensor: P._mmCur().mm.camera.sensor, fpx: P._mmCur().mm.solve.focal_px }; }""")
             self.assertTrue(built["cam"] and built["active"] and built["plate"] and built["under"], built)
+            # The camera's film back is the plate's sensor, so its focal length (Channel Box) is the solve's in mm.
+            self.assertEqual(built["filmback"], built["sensor"])
+            self.assertAlmostEqual(built["focal"], built["fpx"] * built["sensor"][0] / W, delta=0.01)
             self.assertEqual(built["keys"], N)
             self.assertGreater(built["locs"], 20)
             self.assertTrue(built["file"] and built["file"].endswith(".mm.json"), built)
@@ -637,6 +642,65 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
+
+    def test_the_plate_in_the_main_view_and_back(self):
+        """Sebastian 2026-11-19: the Plate panel as a main panel, switched with the 3D view: from the plate's own
+        button, the main view's switch menu and the Matchmove menu; it goes with the 3D tab."""
+        pg = self._page()
+        try:
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
+                                 timeout=20000)
+            q = """() => { const P = window.__panel, body = P.dockViewBody, ov = body.querySelector('.mm-plate-main');
+                const box = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
+                const ui = P._mmUI;
+                return { main: !!ov && getComputedStyle(ov).display !== 'none', ov: ov ? box(ov) : null, body: box(body),
+                         docked: P.isPanelDocked('mmPlate'), inMain: !!(ui && ov && ov.contains(ui.root)),
+                         canvas: ui ? ui.canvas.width : 0, swap: ui && ui.swap ? ui.swap.textContent : '',
+                         title: P.dockViewEl.querySelector('.view-titlebar .pt-name').textContent }; }"""
+            st = pg.evaluate(q)
+            self.assertFalse(st["main"]); self.assertTrue(st["docked"]); self.assertIn("Main view", st["swap"])
+            # The plate's ⇄ button: the plate takes the main view, its panel is put away.
+            pg.evaluate("() => window.__panel._mmUI.swap.click()")
+            pg.wait_for_timeout(400)
+            st = pg.evaluate(q)
+            self.assertTrue(st["main"] and st["inMain"], st)
+            self.assertFalse(st["docked"])
+            self.assertAlmostEqual(st["ov"]["w"], st["body"]["w"], delta=1)
+            self.assertAlmostEqual(st["ov"]["h"], st["body"]["h"], delta=1)
+            self.assertGreater(st["canvas"], 100)
+            self.assertTrue(st["title"].startswith("Plate"), st["title"])
+            self.assertIn("3D view", st["swap"])
+            self._shot(pg, "mm_plate_main")
+            # The main view's switch lists both; "3D view" brings the 3D view back and the plate to its panel.
+            pg.evaluate("() => window.__panel.container.querySelector('#view-switch-btn').click()")
+            pg.wait_for_timeout(200)
+            labels = pg.evaluate("() => [...window.__panel.container.ownerDocument.querySelectorAll('.view-switch-menu .previz-menu-item'), ...window.__panel.shadowRoot.querySelectorAll('.view-switch-menu .previz-menu-item')].map((e) => e.textContent.trim())")
+            self.assertIn("✓  Plate".strip(), [l.replace("\u00a0", " ") for l in labels] + labels, labels)
+            pg.evaluate("() => window.__panel.matchmoveViewEntries().find((e) => /3D view/.test(e.label || '')).run()")
+            pg.wait_for_timeout(300)
+            st = pg.evaluate(q)
+            self.assertFalse(st["main"]); self.assertTrue(st["docked"])
+            self.assertFalse(st["title"].startswith("Plate"))
+            # From the Matchmove menu again; a tab without a 3D scene does not show it, the 3D tab brings it back.
+            pg.evaluate("() => window.__panel._previzMatchmoveMenuEntries().find((e) => e.label && /Plate in the main view/.test(e.label)).run()")
+            pg.wait_for_timeout(300)
+            self.assertTrue(pg.evaluate(q)["main"])
+            key3d = pg.evaluate("() => window.__panel.activeTab")
+            pg.evaluate("""() => { const P = window.__panel; P.updateData({ unique_id: '20', tabs: { tab1: [
+                { path: 'D:/out/p1.png', filename: 'p1.png', type: 'output' }] } }, null);
+                const other = Object.keys(P.allTabs).find((k) => k !== P.activeTab); if (other) P.switchTab(other); }""")
+            pg.wait_for_timeout(300)
+            self.assertFalse(pg.evaluate(q)["main"])
+            pg.evaluate("(k) => window.__panel.switchTab(k)", key3d)
+            pg.wait_for_timeout(400)
+            self.assertTrue(pg.evaluate(q)["main"])
+            pg.evaluate("() => window.__panel.matchmovePlateMain(false)")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
 
     def test_measurements_lasso_select_and_the_lens_chart(self):
         """Tracks picked with a lasso in the Plate panel (Ctrl takes away), two real distances measured from the

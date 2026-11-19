@@ -18,6 +18,7 @@ import { api } from "../../scripts/api.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { app } from "../../scripts/app.js";
 import { evaluateIn, cameraResolution, offsetOf, planeSettings, locatorSize } from "./imageViewer_scene3d.js";
+import { clipOf } from "./imageViewer_cameraLens.js";
 // The clip sequencer registers itself with the scene model on import (evaluateIn plays its clips).
 import "./imageViewer_clipSeqData.js";
 // Animation layers register their blend with the scene model on import.
@@ -2033,6 +2034,10 @@ export class Model3DView {
             cam.fov = f;
             cam.aspect = rw / rh;
         }
+        // Its clipping planes (the Channel Box's Near / Far Clip; 0.1 / 10000 when not set).
+        const [near, far] = clipOf(item);
+        cam.near = near;
+        cam.far = far;
         cam.updateProjectionMatrix();
         if (entry.helper) entry.helper.update();
     }
@@ -2051,7 +2056,7 @@ export class Model3DView {
             return;
         }
         const g = this._gateRect(entry.item);
-        this._gateTell(g);
+        this._gateTell(g, entry.item);
         this._syncReference(entry, g);
         const [rw, rh] = cameraResolution(entry.item);
         const px = (v) => `${Math.round(v)}px`;
@@ -2070,12 +2075,13 @@ export class Model3DView {
      * gate `g` while looking through a camera, else the whole stage with one
      * view on it, else (split panes) nothing.
      */
-    _gateTell(g) {
+    _gateTell(g, item = null) {
         if (!this.hooks.onGate) return;
         let r = null;
-        if (g) r = { x: g.x, y: g.y, w: g.w, h: g.h };
+        // The camera looked through goes along: it may have a framing mask of its own (`item.frameMask`).
+        if (g) r = { x: g.x, y: g.y, w: g.w, h: g.h, camera: item ? item.id : null, mask: item && item.frameMask ? item.frameMask : null };
         else if (this.stage && this._panePlain()) r = { x: 0, y: 0, w: this.stage.clientWidth, h: this.stage.clientHeight };
-        const sig = r ? `${r.x}|${r.y}|${r.w}|${r.h}` : "";
+        const sig = r ? `${r.x}|${r.y}|${r.w}|${r.h}|${r.camera || ""}|${r.mask ? JSON.stringify(r.mask) : ""}` : "";
         if (sig === this._gateTellSig) return;
         this._gateTellSig = sig;
         this.hooks.onGate(r);
