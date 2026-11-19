@@ -38,6 +38,7 @@ import { AgentPanelMixin } from "./imageViewer_agentPanel.js";
 import { AgentStateMixin } from "./imageViewer_agentState.js";
 import { ContactGridMixin } from "./imageViewer_contactGrid.js";
 import { ParamAnimMixin } from "./imageViewer_paramAnim.js";
+import { ParamLocksMixin, applyWidgetLocks } from "./imageViewer_paramLocks.js";
 import { ParamCurvesMixin } from "./imageViewer_paramCurves.js";
 import { ViewTabsMixin } from "./imageViewer_viewTabs.js";
 import { CodePanelMixin } from "./imageViewer_codePanel.js";
@@ -1660,6 +1661,7 @@ Object.assign(
     ContactGridMixin,
     AgentPanelMixin,
     ParamAnimMixin,
+    ParamLocksMixin,
     ParamCurvesMixin,
     ViewTabsMixin,
     CodePanelMixin,
@@ -1996,6 +1998,11 @@ app.registerExtension({
             const node = app.graph.getNodeById(e.detail.unique_id);
             globalViewerPanel.updateData(e.detail, node);
         });
+    },
+
+    // A parameter locked in the Parameters panel is disabled on the canvas too, also after a reload (imageViewer_paramLocks.js).
+    loadedGraphNode(node) {
+        try { applyWidgetLocks(node); } catch (_) { /* a node without widgets */ }
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData) {

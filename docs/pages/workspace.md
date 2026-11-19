@@ -34,7 +34,7 @@ Accessible folders are ComfyUI's input, output and temp folders plus those added
 
 ## Parameters
 
-Shows the widgets of the node selected on the canvas; the padlock pins it to one node. While a drawing tool is active it shows the tool's options instead, on a 3D tab the Channel Box, and on a Comp tab the selected comp nodes.
+Shows the widgets of the node selected on the canvas; the padlock pins it to one node. While a drawing tool is active it shows the tool's options instead, on a 3D tab the Channel Box, and on a Comp tab the selected comp nodes. Each parameter row has a small padlock of its own (shown on hover): a locked parameter keeps its value. Its field and its widget on the canvas are greyed out, edits made with several nodes selected pass it by, and it cannot be keyed. The lock is saved with the workflow.
 
 ## Settings
 

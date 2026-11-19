@@ -1142,7 +1142,59 @@ export function solvePose(scene, item, prop, frame, wanted) {
 
 /** Key `prop` on the layer being edited so the stack shows `wanted` at `frame`. */
 export function keyPose(scene, item, prop, frame, wanted, ease) {
-    return setKeyframe(item, prop, frame, solvePose(scene, item, prop, frame, wanted), ease);
+    const kept = keepLocked(scene, item, prop, frame, wanted);
+    if (kept === LOCKED) return undefined;
+    return setKeyframe(item, prop, frame, solvePose(scene, item, prop, frame, kept), ease);
+}
+
+// ── Locked channels (the Channel Box's Lock Selected, Sebastian 2026-11-19) ──
+// `item.locked` lists channel ids as the Channel Box names them: "position.0"
+// for Translate X, "fov" for a lone number. A locked channel keeps its value:
+// setPose / keyPose - the road of every edit, the gizmo's, the Channel Box's
+// and the agent's - put its own value back in what they are handed, and a
+// lone locked number is not written at all.
+
+const LOCKED = Symbol("locked");
+
+/** The item's locked channel ids. */
+export function lockedChannels(item) {
+    return Array.isArray(item && item.locked) ? item.locked : [];
+}
+
+/** Is channel `prop` (component `comp`, or null for the whole / a lone number) locked on `item`? */
+export function isChannelLocked(item, prop, comp = null) {
+    const list = lockedChannels(item);
+    if (!list.length) return false;
+    if (comp === null || comp === undefined) return list.includes(prop);
+    return list.includes(`${prop}.${comp}`);
+}
+
+/** Lock (`on`) or unlock the channel ids `ids` on `item`. */
+export function setChannelsLocked(item, ids, on) {
+    if (!item) return;
+    const set = new Set(lockedChannels(item));
+    for (const id of ids || []) if (typeof id === "string" && id) (on ? set.add(id) : set.delete(id));
+    if (set.size) item.locked = [...set].sort();
+    else delete item.locked;
+}
+
+/** What may be written of `wanted` for `prop`: locked components back at their value, or LOCKED for nothing. */
+function keepLocked(scene, item, prop, frame, wanted) {
+    const list = lockedChannels(item);
+    if (!list.length) return wanted;
+    if (!Array.isArray(wanted)) return list.includes(prop) ? LOCKED : wanted;
+    const locked = wanted.map((_, i) => list.includes(`${prop}.${i}`));
+    if (!locked.some(Boolean)) return wanted;
+    if (locked.every(Boolean)) return LOCKED;
+    const now = currentValue(scene, item, prop, frame);
+    return wanted.map((v, i) => (locked[i] && Array.isArray(now) ? now[i] : v));
+}
+
+/** The locked channel ids a scene file holds for an item, cleaned. */
+export function readLocked(raw) {
+    const list = Array.isArray(raw) ? raw : [];
+    const out = [...new Set(list.filter((x) => typeof x === "string" && /^[A-Za-z][\w:.-]{0,80}$/.test(x)))].slice(0, 200);
+    return out.length ? out.sort() : null;
 }
 
 /**
@@ -1151,6 +1203,9 @@ export function keyPose(scene, item, prop, frame, wanted, ease) {
  * (a layer holds animation only); else the item's own static value.
  */
 export function setPose(scene, item, prop, frame, wanted, { key = false, ease } = {}) {
+    const kept = keepLocked(scene, item, prop, frame, wanted);
+    if (kept === LOCKED) return undefined;
+    wanted = kept;
     if (key || isAnimated(item, prop) || activeLayerOf(scene)) return keyPose(scene, item, prop, frame, wanted, ease);
     return setStaticValue(item, prop, solvePose(scene, item, prop, frame, wanted));
 }
@@ -1258,6 +1313,9 @@ export function parseScene(raw) {
         // Brought in from another scene file (imageViewer_sceneLayers.js).
         const ref = readItemRef(raw.ref);
         if (ref) item.ref = ref;
+        // Channels locked in the Channel Box (setChannelsLocked).
+        const locked = readLocked(raw.locked);
+        if (locked) item.locked = locked;
         if (isCam) {
             item.fov = num(raw.fov, 35);
             item.resolution = cameraResolution(raw);

@@ -2519,8 +2519,25 @@ export class Model3DView {
             this.gizmo.setMode(this.gizmoMode);
             this.gizmo.attach(entry.root);
         }
+        this._gizmoLockSync(entry);
         // The look-at target's gizmo follows the selection.
         this._aimSync();
+    }
+
+    /**
+     * A channel locked in the Channel Box (scene3d.setChannelsLocked) has no
+     * handle: the gizmo's axis of it is hidden (and with it the planes through
+     * that axis). The edit itself is held by setPose either way.
+     */
+    _gizmoLockSync(entry) {
+        if (!this.gizmo) return;
+        const item = entry && entry.item;
+        const prop = this.pivotMode ? "pivot" : { translate: "position", rotate: "rotation", scale: "scale" }[this.gizmoMode];
+        const list = (item && Array.isArray(item.locked)) ? item.locked : [];
+        const show = (i) => !(prop && list.includes(`${prop}.${i}`));
+        this.gizmo.showX = show(0);
+        this.gizmo.showY = show(1);
+        this.gizmo.showZ = show(2);
     }
 
     /** The transform of a three object, in the scene's own units (degrees). */
