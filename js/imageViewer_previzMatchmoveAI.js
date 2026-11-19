@@ -382,7 +382,10 @@ export const PrevizMatchmoveAIMixin = {
         if (!st || !st.mm.plate) throw new Error("Pick the plate first.");
         const last = st.mm.plate.frames - 1;
         const a = Math.max(0, Math.min(last, Math.round(from))), b = Math.max(a, Math.min(last, to === null ? last : Math.round(to)));
-        const k = Math.max(1, Math.round(step) || 1);
+        const list = await this._mmMatteList(engine);
+        const item = list.workflows.find((w) => w.id === (workflow || list.choice));
+        // a video workflow takes the stretch as a film: every frame
+        const k = item && item.video ? 1 : Math.max(1, Math.round(step) || 1);
         const frames = [];
         for (let f = a; f <= b; f += k) frames.push(f);
         if (frames[frames.length - 1] !== b) frames.push(b);
@@ -427,13 +430,15 @@ export const PrevizMatchmoveAIMixin = {
             if (!list.workflows.length) this._mmNote(ctx, o.engine === "objects" ? "SAM 3 is not in this ComfyUI: its SAM3 nodes (ComfyUI's own, recent) are needed." : "No background remover is installed (ComfyUI-RMBG, or ComfyUI's BiRefNet nodes).", "warn");
             else if (list.workflows.length > 1) {
                 this._mmRow(ctx, "Workflow", this._mmSelect(ctx, list.workflows.map((w) => [w.id, `${w.label}${(w.missing || []).some((m) => m.kind !== "node") ? " (downloads its model)" : ""}`]),
-                                                            o.workflow || list.choice, (v) => { o.workflow = v; }));
+                                                            o.workflow || list.choice, (v) => { o.workflow = v; this._mmRender(); }));
             }
         } else this._mmMatteList(o.engine).then(() => this._mmRender()).catch(() => {});
         const ws = this._mmSelect(ctx, WORK_SCALES, String(workScale(o.scale)), (v) => { o.scale = workScale(v); });
         ws.title = "The size the model sees the plate at: smaller is quicker and lighter; the mask comes back at the plate's size, softer at the edges";
         this._mmRow(ctx, "Model at", ws);
-        this._mmRow(ctx, "Every", this._mmNum(ctx, o.step || 1, (v) => { o.step = v >= 1 ? Math.round(v) : 1; }, { width: "48px", min: 1, step: 1 }),
+        const picked = list && list.workflows.find((w) => w.id === (o.workflow || list.choice));
+        if (picked && picked.video) this._mmNote(ctx, `${picked.label.replace(/\s*\(.*\)$/, "")} reads the shot as a film, every frame, so its mask holds together from frame to frame (at most ${picked.max_seconds} s of plate).`);
+        else this._mmRow(ctx, "Every", this._mmNum(ctx, o.step || 1, (v) => { o.step = v >= 1 ? Math.round(v) : 1; }, { width: "48px", min: 1, step: 1 }),
                     el(doc, "span", "", "frame(s)"));
         this._mmRow(ctx, "", this._mmBtn(ctx, "Mask with AI", () => this.matchmoveAiMask({ ...o, workflow: o.workflow || null }), { title: "One ComfyUI job for every frame" }));
     },

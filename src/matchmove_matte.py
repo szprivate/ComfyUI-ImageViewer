@@ -21,6 +21,11 @@ then keeps features off it (an exclude mask) or gives them to an object, as for 
 ``sample`` reads a matte at the tracks' places: the AI ground uses it (SAM 3 asked for the ground on a few frames;
 the tracks that stay on it are the ground's points).
 
+A background remover that knows video (Bria's video background removal, ``VIDEO_WORKFLOWS``) takes the plate's
+stretch as ONE film instead (``prepare_video``: an H.264 copy in ``<input>/matchmove/plates/``, LoadVideo -> the
+video node -> its mask -> SaveImage), so its mattes hold together from frame to frame; it stands in the list in
+place of the same vendor's picture node. ``place_batch`` then reads the whole numbered sequence SaveImage wrote.
+
 No process is started; the workflows run in ComfyUI's own queue.
 """
 from __future__ import annotations
@@ -47,6 +52,11 @@ DEPTH_MIN_TRACKS = 6                      # solved tracks a frame needs to scale
 MAX_FRAMES = 1000
 MAX_RUNS = 8
 MIN_WORK_SCALE = 0.1   # the smallest share of the plate the mask / depth models may be run at
+# Background removers that take the shot as a film: id -> what it is. Each replaces its picture twin in the list.
+VIDEO_WORKFLOWS = {
+    "bria_video": {"label": "Bria remove video background (API, the shot as a film)", "node": "BriaTransparentVideoBackground",
+                   "replaces": "bria_rmbg", "max_seconds": 60.0, "mask_output": 1},
+}
 _LOCK = threading.Lock()
 _RUNS = {}
 
@@ -75,6 +85,10 @@ def workflows_for(engine, folder_paths=None, node_classes=None):
         folder_paths = G._Remembered(folder_paths)
     items = []
     for wid in ids:
+        vid = _video_for(wid, node_classes) if engine == "background" else None
+        if vid:
+            items.append(_video_item(vid))
+            continue
         e, _g = G._builtin(wid)
         if not e or action not in (e.get("actions") or []) or not G.installed(e, node_classes):
             continue
@@ -86,6 +100,10 @@ def pick_workflow(engine, wanted, node_classes=None):
     action = ENGINES.get(engine)
     usable = []
     for wid in _ids(engine):
+        vid = _video_for(wid, node_classes) if engine == "background" else None
+        if vid:
+            usable.append(vid)
+            continue
         e, _g = G._builtin(wid)
         if e and action in (e.get("actions") or []) and G.installed(e, node_classes):
             usable.append(wid)
@@ -94,6 +112,112 @@ def pick_workflow(engine, wanted, node_classes=None):
     if not usable:
         raise MatteError("this ComfyUI has none of the workflows for this (their node packs are not installed)")
     return usable[0]
+
+
+def _video_for(wid, node_classes):
+    """The video workflow that stands in for the picture workflow *wid* in this ComfyUI, or None."""
+    for vid, v in VIDEO_WORKFLOWS.items():
+        if v["replaces"] == wid and (node_classes is None or v["node"] in node_classes):
+            return vid
+    return None
+
+
+def _video_item(vid):
+    v = VIDEO_WORKFLOWS[vid]
+    return {"id": vid, "label": v["label"], "format": "api", "api": True, "video": True, "missing": [], "tune": [],
+            "max_seconds": v["max_seconds"]}
+
+
+def write_film(picture, frames, path, fps, scale=1):
+    """The plate's *frames* (consecutive) as an H.264 film at *path* (straight sRGB, at *scale*): (width, height).
+    PyAV in this process."""
+    import av
+    from fractions import Fraction
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".partial.mp4"
+    rate = Fraction(float(fps or 24)).limit_denominator(1001)
+    oc = av.open(tmp, "w")
+    size = None
+    ok = False
+    try:
+        try:
+            vs = oc.add_stream("libx264", rate=rate)
+            vs.options = {"crf": "12", "preset": "veryfast"}
+        except Exception:  # noqa: BLE001 - a PyAV without x264
+            vs = oc.add_stream("mpeg4", rate=rate)
+            vs.options = {"qscale": "2"}
+        vs.pix_fmt = "yuv420p"
+        for i, f in enumerate(frames):
+            pic = shrink(CA.to_8bit(picture(f)), scale)
+            if size is None:
+                size = (pic.shape[1] // 2 * 2, pic.shape[0] // 2 * 2)
+                vs.width, vs.height = size
+            rgb = np.ascontiguousarray(pic[: size[1], : size[0], :3])
+            fr = av.VideoFrame.from_ndarray(rgb, format="rgb24")
+            fr.pts = i
+            for pkt in vs.encode(fr):
+                oc.mux(pkt)
+        for pkt in vs.encode():
+            oc.mux(pkt)
+        ok = True
+    finally:
+        oc.close()
+        if ok:
+            os.replace(tmp, path)
+        elif os.path.exists(tmp):
+            os.remove(tmp)
+    return size
+
+
+def prepare_video(picture, frames, input_dir, vid, *, fps=24.0, scale=1, plate_size=None):
+    """The video workflow *vid* over the consecutive plate *frames*: the same answer as ``prepare_batch``, with ONE
+    output node (it saves every frame's matte, numbered in order)."""
+    v = VIDEO_WORKFLOWS[vid]
+    want = sorted({int(f) for f in frames})
+    if want != list(range(want[0], want[-1] + 1)):
+        raise MatteError(f"{v['label']} takes the shot as a film: every frame of a stretch, not every Nth")
+    fps = float(fps or 24)
+    if len(want) / fps > v["max_seconds"] + 1e-6:
+        raise MatteError(f"{v['label']} takes at most {v['max_seconds']:g} s of film ({int(v['max_seconds'] * fps)} frames here): "
+                         "run it on a part of the shot (from / to)")
+    run = secrets.token_hex(6)
+    name = f"matchmove/plates/{run}.mp4"
+    work = write_film(picture, want, os.path.join(input_dir, *name.split("/")), fps, scale)
+    size = plate_size or work
+    seed = secrets.randbelow(G.SEED_MAX + 1)
+    graph = {
+        "1": {"class_type": "LoadVideo", "inputs": {"file": name}},
+        "2": {"class_type": v["node"], "inputs": {"video": ["1", 0], "seed": seed}},
+        "3": {"class_type": "MaskToImage", "inputs": {"mask": ["2", v["mask_output"]]}},
+        "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": f"matchmove/matte/{run}/matte"}},
+    }
+    with _LOCK:
+        _RUNS[run] = {"engine": "background", "prompt": "", "size": size, "at": time.time(), "workflow": vid,
+                      "scale": scale, "work": work, "video": True, "frames": want, "film": os.path.join(input_dir, *name.split("/")),
+                      "folder": os.path.join(input_dir, "matchmove", "mattes", run)}
+        while len(_RUNS) > MAX_RUNS:
+            _RUNS.pop(next(iter(_RUNS)))
+    return {"run": run, "graph": graph, "outputs": {str(want[0]): "4"}, "frames": want, "skipped": [],
+            "engine": "background", "workflow": vid, "nodes": len(graph), "seed": seed, "video": True,
+            "width": size[0], "height": size[1], "scale": scale, "work_width": work[0], "work_height": work[1]}
+
+
+def _video_sequence(rec, results):
+    """A video run's mattes {plate frame: path}: every ``matte_#####_.png`` beside the one picture the page was
+    told of, in order, laid on the run's frames (spread evenly when the node gave a different count)."""
+    import re
+    first = next(iter(results.values()))
+    folder = os.path.dirname(first)
+    pat = re.compile(r"^matte_(\d+)_\.png$")
+    files = sorted((int(m.group(1)), n) for n in os.listdir(folder) for m in [pat.match(n)] if m)
+    if not files:
+        return {}
+    paths = [os.path.join(folder, n) for _i, n in files]
+    want = rec["frames"]
+    if len(paths) == len(want):
+        return dict(zip(want, paths))
+    k = len(paths) - 1
+    return {f: paths[round(i * k / max(1, len(want) - 1))] for i, f in enumerate(want)}
 
 
 def work_scale(scale):
@@ -120,13 +244,24 @@ def shrink(pic, scale):
 
 
 def prepare_batch(picture, frames, input_dir, *, engine, prompt="", wid=None, graph=None, tune=None,
-                  models=None, folder_paths=None, node_classes=None, scale=1):
+                  models=None, folder_paths=None, node_classes=None, scale=1, fps=24.0):
     """The mattes of these plate frames as ONE prompt: {run, graph, outputs {frame: node}, frames, skipped, workflow}.
 
     *picture(n)* is the plate's frame n as linear premultiplied RGBA float (``matchmove_routes.Plate.picture``).
     *scale* < 1 runs the models on a smaller copy of each frame; the answers are brought back to the plate's size
     (``place_batch``, ``depth_points``), so only the work and the detail change."""
     scale = work_scale(scale)
+    if engine == "background":
+        vid = wid if wid in VIDEO_WORKFLOWS else (pick_workflow(engine, None, node_classes) if not wid else None)
+        if vid in VIDEO_WORKFLOWS:
+            if not (node_classes is None or VIDEO_WORKFLOWS[vid]["node"] in node_classes):
+                raise MatteError(f"{VIDEO_WORKFLOWS[vid]['label']} needs ComfyUI's {VIDEO_WORKFLOWS[vid]['node']} node (a recent ComfyUI)")
+            want = sorted({int(f) for f in frames or [] if int(f) >= 0})
+            if not want:
+                raise MatteError("no frames to run")
+            first = CA.to_8bit(picture(want[0]))
+            return prepare_video(picture, want, input_dir, vid, fps=fps, scale=scale,
+                                 plate_size=(first.shape[1], first.shape[0]))
     action = ENGINES.get(engine)
     if not action:
         raise MatteError(f"not a matte engine: {engine!r} (objects, background or depth)")
@@ -202,6 +337,8 @@ def place_batch(run, results):
     if rec["engine"] == "depth":
         raise MatteError("a depth run is read with depth_points, not placed as mattes")
     w, h = rec["size"]
+    if rec.get("video"):
+        results = _video_sequence(rec, results)
     os.makedirs(rec["folder"], exist_ok=True)
     pattern = os.path.join(rec["folder"], "matte.####.png")
     frames, covered = [], {}

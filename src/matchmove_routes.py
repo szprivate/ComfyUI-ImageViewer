@@ -710,7 +710,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                             wid=body.get("workflow") or None, graph=body.get("graph"),
                             tune=body.get("tune") if isinstance(body.get("tune"), dict) else None,
                             models=body.get("models") if isinstance(body.get("models"), dict) else None,
-                            folder_paths=folder_paths, node_classes=node_classes(), scale=body.get("scale"))
+                            folder_paths=folder_paths, node_classes=node_classes(), scale=body.get("scale"),
+                            fps=float(p.info.get("fps") or 24))
         except G.Missing as e:
             return web.json_response({"error": str(e), "missing": e.missing}, status=409)
         except (MT.MatteError, G.GenerateError, ValueError, OSError) as e:

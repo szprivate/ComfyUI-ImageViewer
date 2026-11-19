@@ -428,6 +428,51 @@ class Routes(unittest.TestCase):
             self.assertLess(m[180, 300], 50)
         self.run_c(go)
 
+    def test_a_video_background_remover_takes_the_stretch_as_one_film(self):
+        import av
+        from PIL import Image
+        async def go(c):
+            r = await c.post("/imageviewer/mm_matte_workflows", json={"engine": "background"})
+            ids = [w["id"] for w in (await r.json())["workflows"]]
+            self.assertIn("bria_video", ids)                                # in place of the picture node
+            self.assertNotIn("bria_rmbg", ids)
+            r = await c.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "background",
+                                                            "workflow": "bria_video", "frames": [0, 2, 4]})
+            self.assertEqual(r.status, 400)                                 # a film is every frame
+            r = await c.post("/imageviewer/mm_matte", json={"path": self.seq, "engine": "background",
+                                                            "workflow": "bria_video", "frames": [0, 1, 2, 3, 4], "scale": 0.5})
+            d = await r.json()
+            self.assertEqual(r.status, 200, d)
+            self.assertTrue(d["video"])
+            self.assertEqual(d["frames"], [0, 1, 2, 3, 4])
+            self.assertEqual((d["width"], d["height"], d["work_width"], d["work_height"]), (320, 200, 160, 100))
+            g = d["graph"]
+            self.assertEqual(sorted(v["class_type"] for v in g.values()),
+                             ["BriaTransparentVideoBackground", "LoadVideo", "MaskToImage", "SaveImage"])
+            film = os.path.join(self.dirs["input"], g["1"]["inputs"]["file"])
+            with av.open(film) as ic:
+                n = sum(1 for _ in ic.decode(video=0))
+                self.assertEqual((ic.streams.video[0].width, ic.streams.video[0].height), (160, 100))
+            self.assertEqual(n, 5)
+            self.assertEqual(list(d["outputs"].values()), ["4"])
+            # the node's answer: five numbered mattes, a box moving right
+            sub = os.path.join("matchmove", "matte", d["run"])
+            os.makedirs(os.path.join(self.dirs["output"], sub), exist_ok=True)
+            for i in range(5):
+                a = np.zeros((100, 160, 3), np.uint8)
+                a[20:70, 10 + 10 * i:60 + 10 * i] = 255
+                Image.fromarray(a).save(os.path.join(self.dirs["output"], sub, f"matte_{i + 1:05d}_.png"))
+            r = await c.post("/imageviewer/mm_matte_place", json={"run": d["run"], "images": {
+                "0": {"filename": "matte_00001_.png", "subfolder": sub, "type": "output"}}})
+            got = await r.json()
+            self.assertEqual(r.status, 200, got)
+            self.assertEqual(got["frames"], [0, 1, 2, 3, 4])
+            m4 = np.asarray(Image.open(MM.matte_path(got["pattern"], 4)).convert("L"))
+            self.assertEqual(m4.shape, (200, 320))
+            self.assertGreater(m4[90, 150], 200)                            # frame 4's box, not frame 0's
+            self.assertLess(m4[90, 30], 50)
+        self.run_c(go)
+
     def test_depth_puts_the_floor_into_the_solves_world_and_says_the_metres(self):
         """A depth job (Depth Anything 3 Metric) of a floor 1.5 below a camera sliding sideways: each frame's depth,
         scaled onto the solved tracks, lands on the floor in the solve's world, and a unit is 0.4 m."""
