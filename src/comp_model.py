@@ -302,7 +302,13 @@ NODE_TYPES = {
         "bottomright": {"kind": "vec2", "def": None, "key": True},
         "softness": {"kind": "num", "def": 0, "min": 0, "key": True},
     }},
-    "shuffle": {"inputs": ["src"], "params": dict({"out": {"kind": "layer", "def": "rgba"}}, **{k: {"kind": "chan", "def": k} for k in "rgba"})},
+    "shuffle": {"inputs": ["B", "A"], "params": {
+        "in1": {"kind": "layer", "def": "rgba"},
+        "in2": {"kind": "layer", "def": "none"},
+        "out1": {"kind": "layer", "def": "rgba"},
+        "out2": {"kind": "layer", "def": "none"},
+        "route": {"kind": "route", "def": {"r": "B:r", "g": "B:g", "b": "B:b", "a": "B:a"}},
+    }},
     "addchannels": {"inputs": ["src"], "params": {
         "channels": {"kind": "chanlist", "def": "mask.a"},
         "value": {"kind": "num", "def": 0},
@@ -630,6 +636,12 @@ def _normalize_level(raw, errors, where, depth):
         else:
             node.pop("nodes", None)
         ins = n.get("inputs") if isinstance(n.get("inputs"), list) else []
+        if n["type"] == "shuffle" and not isinstance(n.get("route"), dict):
+            # An older Shuffle: its routing, and its mask moved past input A.
+            node.update(shuffle_upgrade(n))
+            for k in ("out", "r", "g", "b", "a"):
+                node.pop(k, None)
+            ins = [ins[0] if ins else None, None, ins[1] if len(ins) > 1 else None]
         node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None for i in range(len(inputs_of(node)))]
         if "expr" in node and not isinstance(node["expr"], dict):
             del node["expr"]
@@ -2266,6 +2278,53 @@ def remove_channels(img, ex, tokens, keep):
     return s.img, s.ex
 
 
+SHUFFLE_NONE = "none"
+
+
+def shuffle_route(n):
+    """Shuffle's routing {output channel: "B:<ch>" | "A:<ch>" | "0" | "1"} (the page's ``shuffleRoute``); an
+    older node's ``out`` and r g b a picks read as the same routing."""
+    r = (n or {}).get("route")
+    if isinstance(r, dict):
+        return {k: v for k, v in r.items() if is_channel(k) and is_source(v)}
+    lay = n.get("out") if n and is_layer(n.get("out")) else "rgba"
+    out = {}
+    for k, dst in zip(RGBA, layer_channels(lay)):
+        p = (n or {}).get(k) or k
+        if p == "-":
+            continue
+        out[dst] = p if p in ("0", "1") else "B:" + p
+    return out
+
+
+def is_source(v):
+    return v in ("0", "1") or (isinstance(v, str) and v[:2] in ("B:", "A:") and is_channel(v[2:]))
+
+
+def shuffle_upgrade(n):
+    """An older Shuffle's settings as the new ones (the page's ``shuffleUpgrade``)."""
+    route = shuffle_route(n)
+    extra = next((v[2:] for v in route.values() if len(v) > 2 and v[2:] not in _CH), None)
+    return {"in1": layer_of(extra) if extra else "rgba", "in2": SHUFFLE_NONE,
+            "out1": n.get("out") if is_layer(n.get("out")) else "rgba", "out2": SHUFFLE_NONE, "route": route}
+
+
+def shuffle_routed(img, ex, A, aex, route):
+    """Every output channel of ``route`` from its source (the page's ``shuffleRouted``); the rest is B's."""
+    s = _State(img, ex)
+    read = []
+    for dst, v in route.items():
+        if v in ("0", "1"):
+            read.append((dst, float(v)))
+            continue
+        ch = v[2:]
+        got = (channel_of(A, aex, ch) if A is not None else None) if v[0] == "A" else channel_of(img, ex, ch)
+        read.append((dst, 0.0 if got is None else got))
+    for dst, v in read:
+        s.put(dst, v)
+    return s.img, s.ex
+
+
 def shuffle_channels(img, ex, out, picks):
     s = _State(img, ex)
     read = []
@@ -2648,7 +2707,13 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return spatial(ins[0], f, d1, lambda p: crop_image(p, tl[0] * scale, tl[1] * scale, br[0] * scale, br[1] * scale, soft))
         if t == "shuffle":
             src = run(ins[0], f, d1)
-            return shuffle_channels(src, ex_of(ins[0], f), n.get("out") or "rgba", [n.get(k) or k for k in "rgba"])
+            route = shuffle_route(n)
+            A = aex = None
+            if len(ins) > 1 and ins[1] and any(v[0] == "A" for v in route.values()):
+                a = run(ins[1], f, d1)
+                A = conform(a, src.shape[1], src.shape[0])
+                aex = _conform_extras(ex_of(ins[1], f), src.shape[1], src.shape[0])
+            return shuffle_routed(src, ex_of(ins[0], f), A, aex, route)
         if t == "addchannels":
             src = run(ins[0], f, d1)
             text = n.get("channels") if n.get("channels") is not None else NODE_TYPES["addchannels"]["params"]["channels"]["def"]

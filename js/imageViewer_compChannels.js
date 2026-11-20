@@ -108,6 +108,83 @@ export function shuffleChannels(img, ex, out, picks) {
     return [s.img, s.ex];
 }
 
+/**
+ * Shuffle's routing, as the node draws it: up to two layers read (``in1`` from input B, ``in2`` from input A,
+ * "none" for not used), up to two layers written (``out1``, ``out2``), and ``route``: {output channel: source},
+ * a source being "B:<channel>", "A:<channel>", "0" or "1". An output channel with no source is not written (B's
+ * own passes). An older node (``out`` and one pick per r g b a, all from what comes in) reads as the same routing.
+ */
+export const SHUFFLE_NONE = "none";
+export function shuffleRoute(n) {
+    if (n && n.route && typeof n.route === "object" && !Array.isArray(n.route)) {
+        const out = {};
+        for (const [k, v] of Object.entries(n.route)) if (isChannel(k) && isSource(v)) out[k] = v;
+        return out;
+    }
+    const lay = n && isLayer(n.out) ? n.out : "rgba", dst = layerChannels(lay), out = {};
+    RGBA.forEach((k, i) => {
+        const p = (n && n[k]) || k;
+        if (p === "-") return;
+        out[dst[i]] = p === "0" || p === "1" ? p : "B:" + p;
+    });
+    return out;
+}
+/** A source of Shuffle's routing: "0", "1", or "B:" / "A:" and a channel. */
+export function isSource(v) {
+    return v === "0" || v === "1" || (typeof v === "string" && (v.startsWith("B:") || v.startsWith("A:")) && isChannel(v.slice(2)));
+}
+/** An older Shuffle's settings as the new ones: {in1, in2, out1, out2, route}. */
+export function shuffleUpgrade(n) {
+    const route = shuffleRoute(n);
+    const srcs = Object.values(route).filter((v) => v.length > 2).map((v) => v.slice(2));
+    const extra = srcs.find((c) => IDX[c] === undefined);
+    return { in1: extra ? layerOf(extra) : "rgba", in2: SHUFFLE_NONE, out1: n && isLayer(n.out) ? n.out : "rgba", out2: SHUFFLE_NONE, route };
+}
+/**
+ * The channels a layer shows in Shuffle's grid: rgba's own, else the channels of it that are there
+ * (``have``: extra channels' names), else (a new layer) its r g b a. "none": none.
+ */
+export function shuffleLayerChannels(layer, have) {
+    if (!layer || layer === SHUFFLE_NONE || !isLayer(layer)) return [];
+    if (layer === "rgba") return RGBA.slice();
+    const mine = (have || []).filter((c) => layerOf(c) === layer);
+    return mine.length ? mine : layerChannels(layer);
+}
+/**
+ * The routing when one of the four layers changes from channels ``from`` to ``to`` (both lists, in order):
+ * every wire keeps its place in the grid (the first channel stays the first ...); a place the new layer
+ * does not have loses its wire. ``side``: "B" / "A" for an input layer, "out" for an output layer.
+ */
+export function shuffleRemap(route, side, from, to) {
+    const out = {};
+    for (const [k, v] of Object.entries(route || {})) {
+        if (side === "out") {
+            const i = from.indexOf(k);
+            if (i < 0) { if (!out[k]) out[k] = v; continue; }
+            if (i < to.length) out[to[i]] = v;
+        } else if (v.startsWith(side + ":")) {
+            const i = from.indexOf(v.slice(2));
+            if (i < 0) out[k] = v;
+            else if (i < to.length) out[k] = side + ":" + to[i];
+        } else out[k] = v;
+    }
+    return out;
+}
+/**
+ * Shuffle: every output channel of ``route`` from its source - B's or A's channels as they came in (``A`` /
+ * ``aex`` already laid onto B's size; a channel that is not there reads 0), black or white. The rest is B's.
+ */
+export function shuffleRouted(img, ex, A, aex, route) {
+    const s = start(img, ex);
+    const read = Object.entries(route).map(([dst, v]) => {
+        if (v === "0" || v === "1") return [dst, Number(v)];
+        const fromA = v[0] === "A", ch = v.slice(2);
+        return [dst, (fromA ? (A ? channelOf(A, aex, ch) : null) : channelOf(img, ex, ch)) || 0];
+    });
+    for (const [dst, v] of read) put(s, dst, v);
+    return [s.img, s.ex];
+}
+
 /** What a node writes: "rgba" (its whole picture, as before), one channel, or a layer (all four of it). */
 export function isTarget(t) { return isChannel(t) || isLayer(t); }
 /**

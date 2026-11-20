@@ -100,6 +100,8 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | VFX | VFX Alpha Matte, VFX SDR to HDR, VFX Reframe, VFX Upscale |
 | Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
+**Shuffle** routes channels between two inputs, B and A. In Parameters, pick the layer read from each input (B, A) and up to two layers written (out 1, out 2); A and out 2 start as *none*. The grid below has a column per channel read, plus black (0) and white (1), and a row per channel written. Click a dot to route that column into that row, click a lit dot to take the wire off. A channel with no wire is not written, so B's own value passes through. Changing a layer keeps each wire in its place in the grid. **Straight** wires each output channel to the input channel in the same place, **Clear** takes every wire off. A new layer typed into out 1 or out 2 is created. Shuffles saved before this change open with the same result.
+
 Most colour, filter, keying and channel nodes have a **mask** input (the last one) and a **mix**. Mix 0 passes the input through unchanged; with a mask connected, the node acts only where the chosen mask channel (alpha by default, or any extra channel such as `mask.a`) is above 0, and **invert mask** flips that. The mask's channel and invert rows appear once something is plugged into the mask input. A mask of another size is aligned at the bottom-left corner, like any other image.
 
 ## Footage

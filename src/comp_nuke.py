@@ -141,8 +141,9 @@ def _bakeable(n):
             return f"{t}: its mask is not written into the Nuke script (the node is baked)"
         if t not in M.OWN_MIX and ((n.get("tracks") or {}).get("mix") or (n.get("mix") is not None and n.get("mix") != 1)):
             return f"{t}: its mix is not written into the Nuke script (the node is baked)"
-    if t == "shuffle" and ((n.get("out") or "rgba") != "rgba" or any((n.get(k) or k) not in _SHUF for k in "rgba")):
-        return "shuffle: extra channels are not written into the Nuke script (its rgba is baked)"
+    if t == "shuffle" and any(k not in _CH or not (v in ("0", "1") or (v[0] == "B" and v[2:] in _CH))
+                              for k, v in M.shuffle_route(n).items()):
+        return "shuffle: input A and extra channels are not written into the Nuke script (its rgba is baked)"
     if t == "constant" and (n.get("write") or "rgba") != "rgba":
         return "constant: writing into a channel is not written into the Nuke script (its rgba is baked)"
     if t == "channelmerge":
@@ -362,7 +363,9 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         note("Blur: Nuke's Blur size is close to the comp's (two sigma) but not the same filter")
         return out.add("Blur", label, [("inputs", "1"), ("channels", "rgba"), ("size", A.knob(n, "size"))] + dis, [src()], pos)
     if t == "shuffle":
-        return out.add("Shuffle", label, [("inputs", "1")] + [(_CH[k], _SHUF.get(n.get(k) or k, _CH[k])) for k in "rgba"] + dis,
+        route = M.shuffle_route(n)
+        pick = {k: (route[k] if route[k] in ("0", "1") else route[k][2:]) if k in route else k for k in "rgba"}
+        return out.add("Shuffle", label, [("inputs", "1")] + [(_CH[k], _SHUF.get(pick[k], _CH[k])) for k in "rgba"] + dis,
                        [src()], pos)
     if t == "copy":
         pick = {k: n.get(k) or M.NODE_TYPES["copy"]["params"][k]["def"] for k in "rgba"}

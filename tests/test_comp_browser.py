@@ -741,6 +741,54 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-panels-per-node.png"))
         self.assertEqual(self.errors, [])
 
+    def test_the_shuffle_grid_routes_two_inputs_in_the_parameters_panel(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        sh = pg.evaluate(f"""() => {{ const e = {ED}; const c = e.comp();
+            c.nodes.find((n) => n.id === 'Constant1').color = [1, 0, 0, 1];
+            c.nodes.push({{ id: 'Constant2', type: 'constant', x: 200, y: 0, inputs: [], color: [0, 0, 1, 1] }});
+            e.refresh(); e.select(['Constant1']);
+            const s = e.addNode('shuffle'); s.inputs[1] = 'Constant2'; e.view(s.id); e.select([s.id]); e.refresh(); return s.id; }}""")
+        pg.wait_for_timeout(400)
+        grid = pg.locator(".cp-pane.first .cp-shuf-grid")
+        self.assertEqual(grid.count(), 1)
+        # Four wires straight through at first, A not used: red as before.
+        self.assertEqual(grid.locator(".cp-shuf-dot.on").count(), 4)
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertGreater(px[0], 200); self.assertLess(px[2], 30)
+        # in 2 reads A's rgba; A's blue routed into blue, black into red: the picture turns blue.
+        pg.locator(".cp-pane.first select.cp-shuf-layer").nth(1).select_option("rgba")
+        pg.wait_for_timeout(300)
+        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="b"][data-src="A:b"]').click()
+        pg.wait_for_timeout(200)
+        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="r"][data-src="0"]').click()
+        pg.wait_for_timeout(400)
+        route = pg.evaluate(f"() => {ED}.node('{sh}').route")
+        self.assertEqual(route, {"r": "0", "g": "B:g", "b": "A:b", "a": "B:a"})
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertLess(px[0], 30); self.assertGreater(px[2], 200)
+        # A click on a lit dot takes the wire off: not written, B's own passes.
+        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="r"][data-src="0"]').click()
+        pg.wait_for_timeout(400)
+        self.assertNotIn("r", pg.evaluate(f"() => {ED}.node('{sh}').route"))
+        self.assertGreater(self.pixel(pg, 0.5, 0.5)[0], 200)
+        # A second output layer adds rows.
+        pg.locator(".cp-pane.first select.cp-shuf-layer").nth(3).select_option("\u0001")
+        field = pg.locator(".cp-pane.first input.cp-newch")
+        field.fill("extra")
+        field.press("Enter")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.locator(".cp-pane.first .cp-shuf-outrow").count(), 8)
+        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="extra.a"][data-src="A:a"]').click()
+        pg.wait_for_timeout(300)
+        self.assertIn("extra.a", pg.evaluate(f"() => {ED}.channelsAt ? {ED}.channelsAt('{sh}') : Object.keys({ED}.node('{sh}').route)"))
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.locator(".cp-pane.first").screenshot(path=os.path.join(SHOTS, "comp-shuffle-grid.png"))
+            pg.screenshot(path=os.path.join(SHOTS, "comp-shuffle-grid-full.png"))
+        self.assertEqual(self.errors, [])
+
     def test_extra_channels_shuffle_roto_write_and_the_layer_shown(self):
         pg = self.page()
         self.new_comp(pg)
@@ -751,14 +799,14 @@ class CompBrowserTests(unittest.TestCase):
             const sh = e.addNode('shuffle'); e.select([sh.id]); return [add.id, sh.id]; }}""")
         add, sh = ids
         opts = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first select')].map((s) => [...s.options].map((o) => o.value))")
-        self.assertTrue(any("mask.a" in o for o in opts), opts)
+        self.assertTrue(any("mask" in o for o in opts), opts)     # the grid's layer menus offer the extra layer
         # Shuffle mask.a into green: the picture turns yellow-ish (red + half green).
-        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.g = 'mask.a'; e.view('{sh}'); e.refresh(); }}")
+        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.route = Object.assign({{}}, n.route, {{ g: 'B:mask.a' }}); e.view('{sh}'); e.refresh(); }}")
         pg.wait_for_timeout(500)
         px = self.pixel(pg, 0.5, 0.5)
         self.assertGreater(px[0], 200); self.assertGreater(px[1], 120); self.assertLess(px[2], 30)
         # The layer menu offers the extra layer; it shows as grey.
-        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.g = 'g'; e.refresh(); }}")
+        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.route = Object.assign({{}}, n.route, {{ g: 'B:g' }}); e.refresh(); }}")
         pg.wait_for_timeout(400)
         sel = pg.locator(".cp-layer")
         self.assertIn("mask", sel.evaluate("(s) => [...s.options].map((o) => o.value)"))
