@@ -72,6 +72,9 @@ const _historyOpen = (p) => !!(p && p.isPanelDocked && p.isPanelDocked("history"
 // A 3D tab with a previz scene on it: where the gizmo keys mean something.
 const _previz = (p) => !!(p && p.isPrevizTab && p.isPrevizTab());
 
+// A mesh being edited (imageViewer_view3dMeshEdit.js): its keys mean its components.
+const _meshEditing = (p) => _previz(p) && !!(p._model3d && p._model3d.meshEditing && p._model3d.meshEditing());
+
 // Any 3D tab, previz or a lone model. Exposure and channel isolation are
 // darkroom controls for a picture; a rendered model has neither, so they step
 // aside there — and the exposure slider hides with them (see the CSS).
@@ -151,6 +154,28 @@ const ACTION_DEFS = [
     // one; the rest are there to be bound. Ctrl+A, Ctrl+G and Delete belong to
     // ComfyUI, so — like Ctrl+Z above — they ship unregistered and answer only
     // while the viewer is hovered on a previz tab with something to act on.
+    // Modeling (imageViewer_previzModeling.js). They come before Select All and
+    // Delete: while a mesh is edited, those mean its vertices, edges or faces.
+    { key: "View3DMeshEdit",  label: "3D View: Edit Mesh On / Off (converts a shape)", combo: { key: "Tab" },
+      enabled: (p) => _previz(p) && !!(p.previzCanEditMesh && p.previzCanEditMesh()), run: (p) => p.previzMeshEditToggle() },
+    { key: "MeshVertexMode",  label: "Mesh: Vertices",  combo: { key: "1" },
+      enabled: _meshEditing, run: (p) => p.previzMeshMode("vertex") },
+    { key: "MeshEdgeMode",    label: "Mesh: Edges",     combo: { key: "2" },
+      enabled: _meshEditing, run: (p) => p.previzMeshMode("edge") },
+    { key: "MeshFaceMode",    label: "Mesh: Faces",     combo: { key: "3" },
+      enabled: _meshEditing, run: (p) => p.previzMeshMode("face") },
+    { key: "MeshExtrude",     label: "Mesh: Extrude",   combo: { key: "e", ctrl: true },
+      enabled: _meshEditing, run: (p) => p.previzMeshOp("extrude") },
+    { key: "MeshInset",       label: "Mesh: Inset",     combo: { key: "i" },
+      enabled: _meshEditing, run: (p) => p.previzMeshOp("inset") },
+    { key: "MeshSelectAll",   label: "Mesh: Select All", combo: { key: "a", ctrl: true },
+      enabled: _meshEditing, run: (p) => p.previzMeshSelect("all") },
+    { key: "MeshInvert",      label: "Mesh: Invert Selection", combo: { key: "i", ctrl: true },
+      enabled: _meshEditing, run: (p) => p.previzMeshSelect("invert") },
+    { key: "MeshGrow",        label: "Mesh: Grow Selection",
+      enabled: _meshEditing, run: (p) => p.previzMeshSelect("grow") },
+    { key: "MeshDelete",      label: "Mesh: Delete Selected Components", combo: { key: "Delete" },
+      enabled: _meshEditing, run: (p) => p.previzMeshOp("delete") },
     { key: "PrevizRename",    label: "Previz: Rename Selected",       combo: { key: "F2" },
       enabled: _sel, run: (p) => p.previzBeginRename() },
     { key: "PrevizSelectAll", label: "Previz: Select All",            combo: { key: "a", ctrl: true },

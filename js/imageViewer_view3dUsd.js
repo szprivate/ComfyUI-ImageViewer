@@ -17,7 +17,7 @@
 import { editsKey, hiddenByOvers, isUnloaded, isUsdSrc, usdEdits } from "./imageViewer_usdData.js";
 
 /** Kinds whose geometry only the page has. */
-export const BUILT_KINDS = ["terrain", "scatter", "depthmesh"];
+export const BUILT_KINDS = ["terrain", "scatter", "depthmesh", "mesh"];
 /** Files the server cannot read meshes out of: the page sends what it drew. */
 const PAGE_MESH_RE = /\.fbx$/i;
 const MAX_VERTICES = 6e6;           // past this a save would send hundreds of MB

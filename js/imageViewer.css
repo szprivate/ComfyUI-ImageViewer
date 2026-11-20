@@ -2743,6 +2743,22 @@ audio.src-media { width: 90%; }
 .model-spaint-bar .spb-mode .spb-btn:not(:first-child):not(:last-child) { border-radius: 0; border-left: none; }
 .model-spaint-bar select.spb-layer { width: auto; height: 22px; }
 .model-spaint-bar select.spb-layer.dim { opacity: 0.5; }
+/* Editing a mesh (imageViewer_view3dMeshEdit.js): its bar over the view. */
+.model-mesh-bar { position: absolute; left: 50%; top: 8px; transform: translateX(-50%); z-index: 7;
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 6px;
+    max-width: calc(100% - 96px); padding: 4px 8px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.75); border: 1px solid #333; color: #ddd; font: 11px/16px sans-serif; }
+.model-mesh-bar .model-mesh-title { color: #f60; font-weight: 600; }
+.model-mesh-bar .model-mesh-btn { height: 22px; padding: 0 8px; background: #2a2a2a; color: #ccc;
+    border: 1px solid #444; border-radius: 3px; cursor: pointer; font: inherit; }
+.model-mesh-bar .model-mesh-btn.on { background: #f60; border-color: #f60; color: #111; }
+.model-mesh-bar .model-mesh-btn:hover:not(.on) { border-color: #777; }
+.model-mesh-bar .model-mesh-num { width: 52px; height: 20px; background: #1b1b1b; color: #6cf; border: 1px solid #444;
+    border-radius: 3px; font: inherit; padding: 0 4px; }
+.model-mesh-bar .model-mesh-num:focus { outline: none; border-color: #f60; }
+.model-mesh-bar .model-mesh-check { display: flex; align-items: center; gap: 3px; color: #aaa; cursor: pointer; }
+.model-mesh-bar .model-mesh-sep { width: 1px; height: 16px; background: #444; }
+.cb-mesh-edit { margin: 4px 0 2px 8px; }
 .model-toolcol {
     position: absolute; top: 38px; left: 8px; z-index: 3;
     display: flex; flex-direction: column; gap: 3px; padding: 4px;

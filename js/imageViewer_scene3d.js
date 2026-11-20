@@ -80,6 +80,7 @@ import { readDrivers } from "./imageViewer_rigDrivers.js";
 import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.js";
 import { readUsdFields } from "./imageViewer_usdData.js";
 import { readCameraMask, readLensFields } from "./imageViewer_cameraLens.js";
+import { cleanMesh, meshFromPrimitive } from "./imageViewer_meshData.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -379,6 +380,40 @@ export function isGroundOffset(item) {
     if (!m) return false;
     const g = groundOffset();
     return m.every((v, i) => Math.abs(v - g[i]) < 1e-9);
+}
+
+/**
+ * An editable polygon mesh (imageViewer_meshData.js): its vertices and faces
+ * live in the item itself, packed, so it saves, undoes and goes to USD with
+ * the scene. `smooth` draws it with vertex normals instead of flat faces.
+ */
+export function makeMeshItem(mesh, name = "Mesh") {
+    return {
+        id: newId("pm"),
+        kind: "mesh",
+        name,
+        mesh: cleanMesh(mesh) || cleanMesh(meshFromPrimitive("box")),
+        color: DEFAULT_COLOR,
+        smooth: false,
+        position: [0, 0, 0],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1],
+        pivot: [0, 0, 0],
+        visible: true,
+        tracks: {},
+        parent: null,
+    };
+}
+
+/** A built-in shape made an editable mesh in place: same id, transform, offset, colour and keys. */
+export function primitiveToMesh(item) {
+    if (!item || item.kind !== "primitive") return false;
+    const type = (item.primitive && item.primitive.type) || "box";
+    item.kind = "mesh";
+    item.mesh = cleanMesh(meshFromPrimitive(type));
+    item.smooth = type === "sphere" || type === "torus";
+    delete item.primitive;
+    return true;
 }
 
 export function makePrimitiveItem(type, name) {
@@ -1287,6 +1322,8 @@ export function parseScene(raw) {
         if (!raw || typeof raw !== "object") continue;
         const isCam = raw.kind === "camera";
         const isPrim = raw.kind === "primitive";
+        // An editable polygon mesh (imageViewer_meshData.js); unreadable data falls back to a model.
+        const isMesh = raw.kind === "mesh" && !!cleanMesh(raw.mesh);
         const isGroup = raw.kind === "group";
         const isPlane = raw.kind === "imageplane";
         // A character rig's control (imageViewer_rigData.js): a transform
@@ -1297,11 +1334,11 @@ export function parseScene(raw) {
         const isWorld = WORLD_KINDS.includes(raw.kind);
         const item = {
             id: typeof raw.id === "string" && raw.id ? raw.id
-                : newId(isCam ? "c" : isPrim ? "p" : isGroup ? "g" : isPlane ? "ip" : isCtrl ? "k" : "m"),
-            kind: isCam ? "camera" : isPrim ? "primitive" : isGroup ? "group"
+                : newId(isCam ? "c" : isPrim ? "p" : isMesh ? "pm" : isGroup ? "g" : isPlane ? "ip" : isCtrl ? "k" : "m"),
+            kind: isCam ? "camera" : isPrim ? "primitive" : isMesh ? "mesh" : isGroup ? "group"
                 : isPlane ? "imageplane" : isWorld ? raw.kind : isCtrl ? "control" : "model",
             name: typeof raw.name === "string" && raw.name ? raw.name
-                : (isCam ? "Camera" : isPrim ? "Shape" : isGroup ? "Group"
+                : (isCam ? "Camera" : isPrim ? "Shape" : isMesh ? "Mesh" : isGroup ? "Group"
                    : isPlane ? "Image plane" : isWorld ? raw.kind : isCtrl ? "control" : "model"),
             parent: typeof raw.parent === "string" && raw.parent ? raw.parent : null,
             position: vec(raw.position, [0, 0, 0]),
@@ -1348,6 +1385,11 @@ export function parseScene(raw) {
             const type = raw.primitive && PRIMITIVE_TYPES.has(raw.primitive.type)
                 ? raw.primitive.type : "box";
             item.primitive = { type };
+            item.color = typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color)
+                ? raw.color : DEFAULT_COLOR;
+        } else if (isMesh) {
+            item.mesh = cleanMesh(raw.mesh);
+            item.smooth = raw.smooth === true;
             item.color = typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color)
                 ? raw.color : DEFAULT_COLOR;
         } else if (isPlane) {
@@ -1453,7 +1495,7 @@ export function parseScene(raw) {
         // A model (or an image plane) with no file left to point at is
         // dropped: it would show as an invisible row the user can't fix. A
         // shape carries its own geometry, so it has nothing to lose.
-        if (!isCam && !isPrim && !isGroup && !isWorld && !isCtrl && !item.src) continue;
+        if (!isCam && !isPrim && !isMesh && !isGroup && !isWorld && !isCtrl && !item.src) continue;
         // Constraints (imageViewer_constraintData.js) ride on the item they move.
         const cons = readConstraints(raw.constraints, item.kind);
         if (cons.length) item.constraints = cons;
