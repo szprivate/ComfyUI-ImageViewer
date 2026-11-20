@@ -231,6 +231,51 @@ class DockSplitTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(SHAPE), viewer)
         self.assertEqual(self.errors, [])
 
+    WIDTH = """(id)=>Math.round(__panel.shadowRoot.querySelector('#'+id+'-panel').getBoundingClientRect().width)"""
+
+    def test_a_pane_whose_panels_are_all_folded_keeps_its_width(self):
+        # Sebastian 2026-11-20: folding every panel of the right pane squeezed it to a few pixels.
+        pg = self.page()
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),V,col(params,browser)))")
+        before = [pg.evaluate(self.WIDTH, i) for i in ("params", "browser", "history")]
+        for pid in ("params", "browser", "history"):
+            pg.evaluate("(id)=>__panel.dockToggleCollapsed(id,true)", pid)
+        pg.wait_for_timeout(200)
+        after = [pg.evaluate(self.WIDTH, i) for i in ("params", "browser", "history")]
+        self.assertEqual(after, before)
+        # and the pane can still be resized: a splitter stands between it and the picture
+        self.assertTrue(pg.evaluate("()=>!!__panel.shadowRoot.querySelector('.stack-splitter.horizontal[data-before=\"params\"], .stack-splitter.horizontal')"))
+        self.shot(pg, "8-folded-pane-keeps-its-width")
+        self.assertEqual(self.errors, [])
+
+    def test_the_plus_in_a_title_bar_adds_a_panel_underneath(self):
+        pg = self.page()
+        pg.evaluate("()=>__panel.setPanelDocked('browser',false)")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),V,col(params)))")
+        btn = self.rect(pg, "#params-add-btn")
+        pg.mouse.click(btn["l"] + btn["w"] / 2, btn["t"] + btn["h"] / 2)
+        pg.wait_for_timeout(150)
+        labels = pg.evaluate("""()=>[...__panel.shadowRoot.querySelectorAll('.pt-add-menu *')]
+            .filter(e=>e.children.length===0).map(e=>e.textContent)""")
+        self.assertIn("Files", labels)
+        self.assertNotIn("Parameters", labels, "not itself")
+        self.shot(pg, "9-plus-menu")
+        at = pg.evaluate("""()=>{const it=[...__panel.shadowRoot.querySelectorAll('.pt-add-menu *')]
+            .find(e=>e.children.length===0&&e.textContent==='Files');const r=it.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]}""")
+        pg.mouse.click(*at)
+        pg.wait_for_timeout(250)
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),V,col(params,browser)))")
+        p, b = self.rect(pg, "#params-panel"), self.rect(pg, "#browser-panel")
+        self.assertLess(p["b"], b["t"] + 1, "under it")
+        self.assertAlmostEqual(p["w"], b["w"], delta=2)
+        # The main view has one too; a panel open elsewhere moves under it.
+        self.assertTrue(pg.evaluate("()=>!!__panel.shadowRoot.querySelector('#view-add-btn')"))
+        pg.evaluate("()=>__panel.dockPanelUnder('history','__view__')")
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(V,history),col(params,browser)))")
+        self.shot(pg, "10-added-under")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()
