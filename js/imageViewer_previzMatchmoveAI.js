@@ -453,7 +453,10 @@ export const PrevizMatchmoveAIMixin = {
     _mmMatteSection(ctx) {
         const { st, doc } = ctx;
         const o = st.aiMask || (st.aiMask = { engine: "objects", prompt: "person", step: 1 });
-        this._mmNote(ctx, "Or let a model mask what moves over the whole shot, frame by frame, in one job:");
+        // the options under the Mask with AI button, ended by the button that runs it
+        const box = el(doc, "div", "mm-ai-mask");
+        ctx.box.append(box);
+        ctx = { ...ctx, box };
         const eng = this._mmSelect(ctx, Object.entries(D.MATTE_ENGINES), o.engine, (v) => { o.engine = v; o.workflow = null; this._mmRender(); });
         this._mmRow(ctx, "Model", eng);
         if (o.engine === "objects") {
@@ -480,7 +483,9 @@ export const PrevizMatchmoveAIMixin = {
         if (picked && picked.video) this._mmNote(ctx, `${picked.label.replace(/\s*\(.*\)$/, "")} reads the shot as a film, every frame, so its mask holds together from frame to frame (at most ${picked.max_seconds} s of plate).`);
         else this._mmRow(ctx, "Every", this._mmNum(ctx, o.step || 1, (v) => { o.step = v >= 1 ? Math.round(v) : 1; }, { width: "48px", min: 1, step: 1 }),
                     el(doc, "span", "", "frame(s)"));
-        this._mmRow(ctx, "", this._mmBtn(ctx, "Mask with AI", () => this.matchmoveAiMask({ ...o, workflow: o.workflow || null }), { title: "One ComfyUI job for every frame" }));
+        this._mmRow(ctx, "", this._mmBtn(ctx, "Generate Mask", () => this.matchmoveAiMask({ ...o, workflow: o.workflow || null }),
+                                         { primary: true, title: "One ComfyUI job for every frame" }));
+        return box;
     },
 
     /** A matte mask's settings in the mask list (threshold, grow, invert). */

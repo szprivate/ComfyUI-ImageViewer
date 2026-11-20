@@ -161,7 +161,6 @@ const DEFAULT_RAILS = () => ({
     bottom: { height: 240, panels: [{ id: "curves", size: 1, hidden: true, tab: "tcurves", behind: false },
                                     { id: "dopeSheet", size: 1, hidden: true, tab: "tcurves", behind: true },
                                     { id: "clips", size: 1, hidden: true, tab: "tcurves", behind: true },
-                                    { id: "mmPlate", size: 1, hidden: true, tab: "tcurves", behind: true },
                                     { id: "motionTimeline", size: 1, hidden: true },
                                     { id: "compGraph", size: 1, hidden: true, tab: "comp", behind: false },
                                     { id: "compLayers", size: 1, hidden: true, tab: "comp", behind: true },
@@ -269,6 +268,11 @@ export const DockMixin = {
         // Matches what the viewer opened with before docking existed: the
         // parameters panel showing on the right, the others put away.
         const L = DT.fromRails(DEFAULT_RAILS());
+        L.root = DT.tidy(L.root, _known);
+        // The matchmove's Plate is a tab of the main view, put away (Sebastian 2026-11-20).
+        L.root = DT.insertAsTab(L.root, "view", { id: "mmPlate" });
+        const plate = DT.locate(L.root, "mmPlate");
+        if (plate) plate.node.hidden = true;
         L.root = DT.tidy(L.root, _known);
         return L;
     },
@@ -457,6 +461,11 @@ export const DockMixin = {
         });
         once("imageviewer.viewer.mixerBottom", () => this._dockMixerHome());
         once("imageviewer.viewer.compLayersBottom", () => this._dockCompLayersHome());
+        // The matchmove's Plate shipped under the picture (beside the Curve Editor) and is a tab of the main view
+        // now (Sebastian 2026-11-20). Once per space's layout: moved by the user afterwards, it stays where it is put.
+        once(`imageviewer.viewer.mmPlateInView.${this.dockSpace ? this.dockSpace() : "viewer"}`, () => {
+            if (this._dockSideOf("mmPlate") === "bottom") this.dockIntoViewTab("mmPlate", { front: false });
+        });
         // A panel the saved layout never mentioned (a viewer upgraded mid-flight)
         // goes back to where it shipped, put away rather than sprung on the user.
         const seen = new Set(DT.panels(L.root).map((p) => p.id));
@@ -481,6 +490,42 @@ export const DockMixin = {
             seen.add(id);
         }
         L.root = DT.tidy(L.root, _known);
+    },
+
+    /**
+     * Put a panel into the main view's place as a tab, keeping whether it is open. `front`: in front of the view
+     * (when open), else behind it. Answers whether it is there now.
+     */
+    dockIntoViewTab(id, { front = true } = {}) {
+        const L = this.dockLayout;
+        if (!L || !DT.isTreeLayout(L) || !DOCK_PANELS[id]) return false;
+        const at = DT.locate(L.root, id);
+        if (!at) return false;
+        const hidden = !!at.node.hidden;
+        let v = DT.findView(L.root);
+        if (!(v && v.node.tab && at.parent === v.parent && at.node.tab === v.node.tab)) {
+            const entry = DT.detach(L.root, id);
+            if (!entry) return false;
+            L.root = DT.tidy(L.root, _known);
+            L.root = DT.insertAsTab(L.root, "view", entry);
+            v = DT.findView(L.root);
+            if (!v || !v.node.tab) return false;
+        }
+        const mates = DT.tabMates(v.parent.children, v.node.tab);
+        const panel = mates.find((p) => p.id === id);
+        panel.hidden = hidden;
+        const ahead = front && !hidden ? panel : v.node;
+        for (const p of mates) p.behind = p !== ahead;
+        L.root = DT.tidy(L.root, _known);
+        return true;
+    },
+
+    /** Is the panel a tab of the main view's place? */
+    isPanelViewTab(id) {
+        const L = this.dockLayout;
+        if (!L || !DT.isTreeLayout(L)) return false;
+        const v = DT.findView(L.root), at = DT.locate(L.root, id);
+        return !!(v && at && v.node.tab && at.parent === v.parent && at.node.tab === v.node.tab);
     },
 
     // The Mixer into the strip under the picture, right after the Edit timeline (its own place there).
@@ -984,22 +1029,19 @@ export const DockMixin = {
     dockViewTitleSync() {
         const bar = this.dockViewEl && this.dockViewEl.querySelector(":scope > .panel-titlebar");
         const name = bar && bar.querySelector(":scope > .pt-name");
-        // A matchmove's plate may stand in the main view in place of the 3D view (imageViewer_previzMatchmove.js).
-        const plate = this._mmPlateOverlayShow ? this._mmPlateOverlayShow() : false;
         if (!name) return;
         const label = this._dockViewLabel(this.activeTab);
         name.title = label ? `Main view: ${label}` : "Main view";
         // Sharing its place with panels as tabs: the tabs carry the name (the label changes with the tab shown).
         if (name._tabs) { this._syncDockTabs(); return; }
-        const text = this._dockViewText(plate);
+        const text = this._dockViewText();
         if (name.textContent !== text) name.textContent = text;
     },
 
     /** What the main view is called: the tab it shows. */
-    _dockViewText(plate) {
-        if (plate === undefined) plate = !!(this._mmPlateMainShown && this._mmPlateMainShown());
+    _dockViewText() {
         const label = this._dockViewLabel(this.activeTab);
-        return plate ? `Plate · ${label || "3D"}` : label ? label : "Main view";
+        return label ? label : "Main view";
     },
 
     /** The main view's switch: every open tab, the one shown ticked; then the panels it can trade places with. */
@@ -1014,8 +1056,6 @@ export const DockMixin = {
                            title: here ? "Shown here" : "Show this tab here",
                            run: () => { if (!here && this.switchTab) this.switchTab(k); } });
         }
-        const extra = this.matchmoveViewEntries ? this.matchmoveViewEntries() : [];
-        if (extra.length) entries.push("-", ...extra);
         const mates = DT.panels(this.dockLayout.root).filter((p) => !p.hidden && !p.behind && !p.tab && this._dockPanelEl(p.id));
         if (mates.length) {
             entries.push("-", { head: "Trade places with" });

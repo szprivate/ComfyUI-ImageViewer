@@ -774,9 +774,9 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
-    def test_the_plate_in_the_main_view_and_back(self):
-        """Sebastian 2026-11-19: the Plate panel as a main panel, switched with the 3D view: from the plate's own
-        button, the main view's switch menu and the Matchmove menu; it goes with the 3D tab."""
+    def test_the_plate_is_a_tab_of_the_main_view(self):
+        """Sebastian 2026-11-20: the plate's Main view / 3D view button did nothing - it is gone, and the Plate opens
+        as a tab of the main view, beside the 3D view; the tabs switch between them, it goes with the 3D tab."""
         pg = self._page()
         try:
             pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
@@ -784,51 +784,105 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
             pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
                                  timeout=20000)
-            q = """() => { const P = window.__panel, body = P.dockViewBody, ov = body.querySelector('.mm-plate-main');
+            q = """() => { const P = window.__panel, ui = P._mmUI;
                 const box = (e) => { const r = e.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height }; };
-                const ui = P._mmUI;
-                return { main: !!ov && getComputedStyle(ov).display !== 'none', ov: ov ? box(ov) : null, body: box(body),
-                         docked: P.isPanelDocked('mmPlate'), inMain: !!(ui && ov && ov.contains(ui.root)),
-                         canvas: ui ? ui.canvas.width : 0, swap: ui && ui.swap ? ui.swap.textContent : '',
-                         title: P.dockViewEl.querySelector('.view-titlebar .pt-name').textContent }; }"""
+                const tabs = [...P.dockViewEl.parentNode.querySelectorAll('.pt-tab')].map((t) => t.textContent.trim());
+                return { inView: P.isPanelViewTab('mmPlate'), front: P.isPanelFront('mmPlate'), viewBehind: P.isViewBehind(),
+                         main: P._mmPlateMainShown(), plate: box(P.mmPlatePanel), canvas: ui ? ui.canvas.clientWidth : 0,
+                         swap: !!(ui && ui.root.querySelector('.mm-plate-swap')), bar: ui ? ui.bar.textContent : '',
+                         menu: P._previzMatchmoveMenuEntries().map((e) => e.label || '').filter(Boolean),
+                         state: P.agentViewerState().matchmove }; }"""
             st = pg.evaluate(q)
-            self.assertFalse(st["main"]); self.assertTrue(st["docked"]); self.assertIn("Main view", st["swap"])
-            # The plate's ⇄ button: the plate takes the main view, its panel is put away.
-            pg.evaluate("() => window.__panel._mmUI.swap.click()")
-            pg.wait_for_timeout(400)
-            st = pg.evaluate(q)
-            self.assertTrue(st["main"] and st["inMain"], st)
-            self.assertFalse(st["docked"])
-            self.assertAlmostEqual(st["ov"]["w"], st["body"]["w"], delta=1)
-            self.assertAlmostEqual(st["ov"]["h"], st["body"]["h"], delta=1)
-            self.assertGreater(st["canvas"], 100)
-            self.assertTrue(st["title"].startswith("Plate"), st["title"])
-            self.assertIn("3D view", st["swap"])
-            self._shot(pg, "mm_plate_main")
-            # The main view's switch lists both; "3D view" brings the 3D view back and the plate to its panel.
-            pg.evaluate("() => window.__panel.container.querySelector('#view-switch-btn').click()")
-            pg.wait_for_timeout(200)
-            labels = pg.evaluate("() => [...window.__panel.container.ownerDocument.querySelectorAll('.view-switch-menu .previz-menu-item'), ...window.__panel.shadowRoot.querySelectorAll('.view-switch-menu .previz-menu-item')].map((e) => e.textContent.trim())")
-            self.assertIn("✓  Plate".strip(), [l.replace("\u00a0", " ") for l in labels] + labels, labels)
-            pg.evaluate("() => window.__panel.matchmoveViewEntries().find((e) => /3D view/.test(e.label || '')).run()")
+            self.assertTrue(st["inView"] and st["front"] and st["viewBehind"] and st["main"], st)
+            self.assertFalse(st["swap"])
+            self.assertNotIn("Main view", st["bar"])
+            self.assertFalse(any("main view" in m for m in st["menu"]), st["menu"])
+            self.assertGreater(st["plate"]["w"], 600)
+            self.assertGreater(st["canvas"], 600)
+            self.assertTrue(st["state"].get("plate_in_main_view"), st["state"])
+            self._shot(pg, "mm_plate_tab")
+            # The 3D view's tab brings it to the front; the plate stays open behind it.
+            pg.evaluate("() => window.__panel.matchmovePlateMain(false)")
             pg.wait_for_timeout(300)
             st = pg.evaluate(q)
-            self.assertFalse(st["main"]); self.assertTrue(st["docked"])
-            self.assertFalse(st["title"].startswith("Plate"))
-            # From the Matchmove menu again; a tab without a 3D scene does not show it, the 3D tab brings it back.
-            pg.evaluate("() => window.__panel._previzMatchmoveMenuEntries().find((e) => e.label && /Plate in the main view/.test(e.label)).run()")
+            self.assertTrue(st["inView"] and not st["front"] and not st["viewBehind"] and not st["main"], st)
+            self.assertNotIn("plate_in_main_view", st["state"])
+            pg.evaluate("() => window.__panel.matchmovePlateMain(true)")
             pg.wait_for_timeout(300)
             self.assertTrue(pg.evaluate(q)["main"])
+            # Another tab puts the plate away and shows the main view; the 3D tab brings the plate back.
             key3d = pg.evaluate("() => window.__panel.activeTab")
             pg.evaluate("""() => { const P = window.__panel; P.updateData({ unique_id: '20', tabs: { tab1: [
                 { path: 'D:/out/p1.png', filename: 'p1.png', type: 'output' }] } }, null);
                 const other = Object.keys(P.allTabs).find((k) => k !== P.activeTab); if (other) P.switchTab(other); }""")
             pg.wait_for_timeout(300)
-            self.assertFalse(pg.evaluate(q)["main"])
+            away = pg.evaluate("() => ({ docked: window.__panel.isPanelDocked('mmPlate'), behind: window.__panel.isViewBehind() })")
+            self.assertEqual(away, {"docked": False, "behind": False})
             pg.evaluate("(k) => window.__panel.switchTab(k)", key3d)
             pg.wait_for_timeout(400)
-            self.assertTrue(pg.evaluate(q)["main"])
-            pg.evaluate("() => window.__panel.matchmovePlateMain(false)")
+            st = pg.evaluate(q)        # the tab's 3D view comes up in front, the plate a tab behind it
+            self.assertTrue(st["inView"] and not st["viewBehind"], st)
+            self.assertTrue(pg.evaluate("() => window.__panel.isPanelDocked('mmPlate')"))
+            # Dragged elsewhere by the user, it stays there the next time Matchmove opens.
+            pg.evaluate("() => { const P = window.__panel; P.dockPanelTo('mmPlate', 'bottom'); P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            st = pg.evaluate(q)
+            self.assertFalse(st["inView"]); self.assertFalse(st["viewBehind"])
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
+    def test_the_error_graph_draws_and_follows_the_playhead(self):
+        """Sebastian 2026-11-20: the error per frame stayed empty, and its orange line should follow the playhead.
+        Drawn when its fold opens (it was drawn once, before it had a size), redrawn as the frame moves; the masks
+        step's Mask with AI sits beside Draw Mask and shows its options, with Generate Mask, only while it is on."""
+        pg = self._page()
+        try:
+            pg.evaluate("() => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            # the masks step
+            m = pg.evaluate("""async () => { const P = window.__panel, st = P._mmCur(); st.mm.step = 'masks'; P._mmRender(true);
+                const btns = () => [...P.mmGuidePanel.querySelectorAll('.mm-scroll button')].map((b) => b.textContent);
+                const before = btns();
+                P.mmGuidePanel.querySelector('.mm-mask-ai').click();
+                const row = P.mmGuidePanel.querySelector('.mm-mask-ai').parentNode;
+                const order = [...row.querySelectorAll('button')].map((b) => b.textContent);
+                const open = { btns: btns(), on: P.mmGuidePanel.querySelector('.mm-mask-ai').classList.contains('on'),
+                               box: !!P.mmGuidePanel.querySelector('.mm-ai-mask'),
+                               last: [...P.mmGuidePanel.querySelectorAll('.mm-ai-mask button')].map((b) => b.textContent).pop() };
+                P.mmGuidePanel.querySelector('.mm-mask-ai').click();
+                return { before, order, open, closed: !!P.mmGuidePanel.querySelector('.mm-ai-mask') }; }""")
+            self.assertEqual(m["order"], ["Draw Mask", "Mask with AI"])
+            self.assertNotIn("Generate Mask", m["before"])
+            self.assertTrue(m["open"]["on"] and m["open"]["box"], m)
+            self.assertEqual(m["open"]["last"], "Generate Mask")
+            self.assertFalse(m["closed"])
+            pg.evaluate("async () => { const P = window.__panel; await P.matchmoveAutoTrack(); }")
+            labels = pg.evaluate("""() => { const P = window.__panel; P._mmCur().mm.step = 'track'; P._mmRender(true);
+                return [...P.mmGuidePanel.querySelectorAll('.mm-scroll label')].map((l) => l.textContent); }""")
+            self.assertNotIn("Hard shots", labels)
+            pg.evaluate("async () => { await window.__panel.matchmoveSolve(); }")
+            # the fold starts closed: the graph has no size, and is drawn when it opens
+            g = pg.evaluate("""async () => { const P = window.__panel, st = P._mmCur(); st.mm.step = 'solve'; P._mmRender(true);
+                const d = P.mmGuidePanel.querySelector('details[data-fold=solve-graph]');
+                d.open = false; await new Promise((r) => setTimeout(r, 100));
+                d.open = true; await new Promise((r) => setTimeout(r, 200));
+                const c = d.querySelector('canvas.mm-graph');
+                const ink = () => { const x = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0;
+                    for (let i = 3; i < x.length; i += 4) if (x[i]) n++; return n; };
+                const orange = () => { const x = c.getContext('2d').getImageData(0, c.height - 2, c.width, 1).data;
+                    for (let i = 0; i < x.length; i += 4) if (x[i] === 255 && x[i + 1] === 102 && x[i + 2] === 0) return i / 4; return -1; };
+                P.setFrame(2); await new Promise((r) => setTimeout(r, 200));
+                const a = orange();
+                P.setFrame(20); await new Promise((r) => setTimeout(r, 200));
+                return { w: c.width, ink: ink(), a, b: orange(), frame: P.currentFrame }; }""")
+            self.assertGreater(g["w"], 100, g)
+            self.assertGreater(g["ink"], 500, g)
+            self.assertEqual(g["frame"], 20)
+            self.assertGreater(g["a"], 0, g)
+            self.assertGreater(g["b"], g["a"] + 100, g)
+            self._shot(pg, "mm_error_graph")
             self.assertEqual(self.errors, [])
         finally:
             pg.close()
