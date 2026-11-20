@@ -217,6 +217,7 @@ export function bevelEdges(mesh, keys, width = 0.1) {
     // A moved corner lies on an edge (v, toward) of the old mesh: other faces with that edge take it in.
     const onEdge = new Map();     // edgeKey(v, toward) -> [{v, at}]
     const cornerKey = (fi, v) => `${fi}:${v}`;
+    const shared = new Map();
     mesh.f.forEach((face, fi) => {
         const n = face.length;
         for (let k = 0; k < n; k++) {
@@ -230,11 +231,16 @@ export function bevelEdges(mesh, keys, width = 0.1) {
             if (outSel && !inSel) at = add(at, along(p));
             else if (inSel && !outSel) at = add(at, along(q));
             else at = add(add(at, along(p)), along(q));
+            // A point drawn back along an unbevelled edge is the same point for every face that does so
+            // (two bevelled edges in a row meet there from both sides): made once, shared.
+            const toward = outSel !== inSel ? (outSel ? p : q) : null;
+            const shareKey = toward !== null ? `${v}>${toward}` : null;
+            if (shareKey && shared.has(shareKey)) { corner.set(cornerKey(fi, v), shared.get(shareKey)); continue; }
             const idx = out.v.length;
             out.v.push(at);
             corner.set(cornerKey(fi, v), idx);
-            if (outSel !== inSel) {
-                const toward = outSel ? p : q;
+            if (shareKey) {
+                shared.set(shareKey, idx);
                 const ek = edgeKey(v, toward);
                 if (!sel.has(ek)) {
                     if (!onEdge.has(ek)) onEdge.set(ek, []);

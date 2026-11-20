@@ -154,3 +154,14 @@ test("soft selection: full weight at the selection, a smooth fall to nothing at 
     assert.equal(w.has(corner), false);
     assert.equal(O.softWeights(g, [centre], 0).size, 1);
 });
+
+test("bevelling two edges in a row shares the point where they meet, so the mesh stays closed", async () => {
+    const X = await import("../js/imageViewer_meshModel.js");
+    let b = box();
+    b = M.extrudeFaces(b, X.resolveSelection(b, "face", { side: "+y" }), 0.5).mesh;
+    const r = O.bevelEdges(b, X.resolveSelection(b, "edge", { along: "y", within: 5 }), 0.05);
+    const d = X.describeMesh(r.mesh);
+    assert.equal(d.open_edges, 0);
+    assert.equal(d.facing["+x"], d.facing["-x"]);
+    close(volume(r.mesh), 1.5 - 4 * 1.5 * 0.05 * 0.05 / 2, 1e-6);
+});

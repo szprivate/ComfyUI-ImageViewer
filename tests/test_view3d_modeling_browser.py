@@ -1,10 +1,11 @@
-"""Modeling in the 3D space, parts 1 and 2, with the real mouse and keys, in a real browser.
+"""Modeling in the 3D space, parts 1 to 3, with the real mouse and keys, in a real browser.
 
 Sebastian 2026-11-20: "add extensive modeling capabilities". An editable mesh item (Create mesh, or a
 shape / model converted), its edit mode (Tab; 1 / 2 / 3 = vertices / edges / faces), picking and boxing
 components, the gizmo moving them, Extrude (Ctrl+E), Inset (I), Delete, each one undo step and saved
 with the scene; part 2: a ring by Ctrl+double-click, bevel (Ctrl+B), loop cut (Ctrl+R), bridge, fill,
-weld, soft selection (B) carrying a move along. js/imageViewer_meshData.js, js/imageViewer_meshOps.js, js/imageViewer_view3dMeshEdit.js,
+weld, soft selection (B) carrying a move along; part 3: subdivision drawn and applied, mirror, booleans
+between two meshes, UV projections with a checker, and the agent's mesh actions. js/imageViewer_meshData.js, js/imageViewer_meshOps.js, js/imageViewer_view3dMeshEdit.js,
 js/imageViewer_previzModeling.js.
 
 Needs Playwright with an installed browser and node; skipped without them.
@@ -398,6 +399,107 @@ class ModelingTests(unittest.TestCase):
         self.assertGreater(top[-1], 0.6)                  # the corner itself
         self.assertTrue(any(0.5 + 1e-3 < y < top[-1] - 1e-3 for y in top))   # a neighbour, part of the way
         self.assertTrue(all(abs(y + 0.5) < 0.5 for y in bottom))
+
+
+    def test_subdivision_mirror_boolean_uvs(self):
+        pg, ids = self._page()
+        box = ids["box"]
+        try:
+            res = pg.evaluate(f"""async () => {{
+                const P = window.__panel, v = P._modelView();
+                const it = () => P.previzScene().items.find((i) => i.id === '{box}');
+                const tris = () => v._entries.get('{box}').editMesh.geometry.attributes.position.count / 3;
+                const out = {{}};
+                P.previzMeshSetSubdiv(2);
+                await new Promise((r) => setTimeout(r, 150));
+                out.drawnSubdiv = tris(); out.keptVerts = it().mesh.v.length / 3;
+                // Editing shows the cage again; leaving shows the subdivided one.
+                v.meshEditBegin('{box}');
+                out.drawnEditing = tris();
+                v.meshEditEnd();
+                out.drawnAfter = tris();
+                out.cbSubdiv = !!P.container.querySelector('.cb-mesh-subdiv');
+                await P.previzMeshApplySubdiv();
+                out.applied = [it().mesh.v.length / 3, it().subdiv || 0];
+                P.previzUndo(); P.previzUndo();
+                await new Promise((r) => setTimeout(r, 150));
+                // UVs: a box projection with the checker.
+                P.previzMeshSetUv({{ type: 'box', checker: true }});
+                await new Promise((r) => setTimeout(r, 150));
+                const e = v._entries.get('{box}');
+                out.uv = !!e.editMesh.geometry.attributes.uv && !!e.editMesh.material.map;
+                // A second box, moved half over: subtract it from the first.
+                const cutter = await P.previzAddMesh('box');
+                cutter.position = [0.5, 0.5, 0.5];
+                await P.previzChanged({{ reload: true }});
+                out.boolean = await P.previzMeshBoolean('subtract', ['{box}', cutter.id]);
+                out.cutterHidden = P.previzScene().items.find((i) => i.id === cutter.id).visible === false;
+                const M = await import('/extensions/viewer/imageViewer_meshData.js');
+                const X = await import('/extensions/viewer/imageViewer_meshModel.js');
+                const d = X.describeMesh(M.unpack(it().mesh));
+                out.cut = [d.closed, d.faces];
+                // Mirror in edit mode across X after deleting the -X half.
+                P.previzUndo();
+                await new Promise((r) => setTimeout(r, 150));
+                return out;
+            }}""")
+            pg.wait_for_timeout(150)
+            self._shot(pg, "mesh_uv_checker.png")
+            agent = pg.evaluate(f"""async () => {{
+                const P = window.__panel;
+                const run = (action, a) => P.previzSceneAgent(action, a);
+                const out = {{}};
+                const m = await run('mesh_add', {{ shape: 'box', name: 'Agent box', position: [3, 0, 0] }});
+                out.add = [m.name, m.vertices, m.faces];
+                const ex = await run('mesh_edit', {{ item: 'Agent box', op: 'extrude', select: {{ side: '+y' }}, amount: 0.5 }});
+                out.extrude = [ex.selected, ex.mesh.faces, ex.mesh.box.max[1]];
+                const bv = await run('mesh_edit', {{ item: 'Agent box', op: 'bevel', select: {{ along: 'y', within: 5 }}, amount: 0.05 }});
+                out.bevel = [bv.mesh.closed, bv.mesh.faces > 10];
+                const mv = await run('mesh_edit', {{ item: 'Agent box', op: 'move', mode: 'face', select: {{ side: '+y' }}, offset: [0, 0.25, 0] }});
+                out.move = mv.mesh.box.max[1];
+                const set = await run('mesh_set', {{ item: 'Agent box', subdiv: 1, uv: 'cylinder' }});
+                out.set = [set.subdiv, set.uv && set.uv.type];
+                const info = await run('mesh_info', {{ item: 'Agent box', select: {{ side: '-y' }} }});
+                out.info = [info.closed, info.selected.ids.length];
+                let err = null;
+                try {{ await run('mesh_edit', {{ item: 'Agent box', op: 'twist' }}); }} catch (e) {{ err = String(e.message || e); }}
+                out.err = err;
+                return out;
+            }}""")
+            pg.wait_for_timeout(200)
+            self._shot(pg, "mesh_agent.png")
+            # Symmetrize: a box loop-cut across X at its middle, its +X half mirrored over the plane.
+            mirror = pg.evaluate("""async () => {
+                const P = window.__panel;
+                await P.previzSceneAgent('mesh_add', { shape: 'box', name: 'Mirror box' });
+                await P.previzSceneAgent('mesh_edit', { item: 'Mirror box', op: 'loopcut', mode: 'edge',
+                                                        select: { along: 'x', within: 5 }, amount: 0.5 });
+                const r = await P.previzSceneAgent('mesh_edit', { item: 'Mirror box', op: 'symmetrize', axis: 'x' });
+                return [r.mesh.closed, r.mesh.vertices, r.mesh.faces];
+            }""")
+        finally:
+            pg.close()
+        self.assertEqual(self.errors, [])
+        self.assertEqual(res["drawnSubdiv"], 6 * 16 * 2)        # 96 quads, two triangles each
+        self.assertEqual(res["keptVerts"], 8)
+        self.assertEqual(res["drawnEditing"], 12)
+        self.assertEqual(res["drawnAfter"], 192)
+        self.assertTrue(res["cbSubdiv"])
+        self.assertEqual(res["applied"], [98, 0])
+        self.assertTrue(res["uv"])
+        self.assertTrue(res["boolean"])
+        self.assertTrue(res["cutterHidden"])
+        self.assertTrue(res["cut"][0])
+        self.assertEqual(res["cut"][1], 9)                     # a cube with a corner cube taken out
+        self.assertEqual(agent["add"], ["Agent box", 8, 6])
+        self.assertEqual(agent["extrude"][:2], [1, 10])
+        self.assertAlmostEqual(agent["extrude"][2], 1.0, places=4)
+        self.assertEqual(agent["bevel"], [True, True])
+        self.assertAlmostEqual(agent["move"], 1.25, places=4)
+        self.assertEqual(agent["set"], [1, "cylinder"])
+        self.assertEqual(agent["info"], [True, 5])             # the bottom and the bevels' four corner triangles in its plane
+        self.assertIn("op is one of", agent["err"])
+        self.assertEqual(mirror, [True, 12, 10])
 
 
 if __name__ == "__main__":

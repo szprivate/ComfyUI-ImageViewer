@@ -81,6 +81,7 @@ import { readAim, readAimStatic, writeAimStatic } from "./imageViewer_cameraAim.
 import { readUsdFields } from "./imageViewer_usdData.js";
 import { readCameraMask, readLensFields } from "./imageViewer_cameraLens.js";
 import { cleanMesh, meshFromPrimitive } from "./imageViewer_meshData.js";
+import { cleanSubdiv, cleanUv } from "./imageViewer_meshModel.js";
 
 export const SCENE_VERSION = 1;
 export const DEFAULT_RESOLUTION = [1920, 1080];
@@ -1390,6 +1391,9 @@ export function parseScene(raw) {
         } else if (isMesh) {
             item.mesh = cleanMesh(raw.mesh);
             item.smooth = raw.smooth === true;
+            // Drawn subdivided (the cage is what is kept and edited) and with a UV projection.
+            if (cleanSubdiv(raw.subdiv)) item.subdiv = cleanSubdiv(raw.subdiv);
+            if (cleanUv(raw.uv)) item.uv = cleanUv(raw.uv);
             item.color = typeof raw.color === "string" && /^#[0-9a-f]{6}$/i.test(raw.color)
                 ? raw.color : DEFAULT_COLOR;
         } else if (isPlane) {
