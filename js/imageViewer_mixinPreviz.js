@@ -1242,7 +1242,9 @@ export const PrevizMixin = {
         menu.className = "previz-menu";
         // An entry with `sub` (a list of entries) is a submenu: it opens beside its row, on hover or a click.
         const fill = (box, list) => {
-            for (const e of list) {
+            for (let e of list) {
+                // A submenu given as a function is made when its menu opens (the Mesh menu's).
+                if (e && typeof e.sub === "function") e = { ...e, sub: e.sub() || [] };
                 if (e === "-") {
                     box.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
                     continue;

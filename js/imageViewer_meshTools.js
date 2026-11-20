@@ -40,7 +40,7 @@ export const DRAG_TOOLS = ["extrude", "inset", "bevel", "loopcut"];
 
 export const MESH_TOOL_LABELS = {
     extrude: "Extrude", inset: "Inset", bevel: "Bevel", loopcut: "Loop cut", weld: "Merge by distance",
-    subdivide: "Subdivide", mirror: "Mirror", symmetrize: "Symmetrize", bridge: "Bridge", fill: "Fill holes",
+    subdivide: "Subdivide", mirror: "Mirror", symmetrize: "Symmetrize", bridge: "Bridge", fill: "Fill hole",
     connect: "Connect", merge: "Merge vertices", flip: "Flip normals", delete: "Delete",
 };
 

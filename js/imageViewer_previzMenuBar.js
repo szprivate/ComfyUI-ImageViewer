@@ -9,6 +9,7 @@
 // the same entry lists the old buttons used, so what is enabled is always
 // what is true now. Once one menu is open, moving onto another opens that one.
 import { rigMenuOf } from "./imageViewer_previzRig.js";
+import * as S from "./imageViewer_scene3d.js";
 import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { DISPLAY_KINDS } from "./imageViewer_view3dTools.js";
 import { MATERIAL_MODES } from "./imageViewer_model3d.js";
@@ -48,6 +49,14 @@ const MENUS = [
 ];
 
 const tick = (on, label) => (on ? "✓ " : "") + label;
+
+/** A menu's entries without a separator at either end or two in a row. */
+function trimSeparators(list) {
+    const out = [];
+    for (const e of list) if (e !== "-" || (out.length && out[out.length - 1] !== "-")) out.push(e);
+    while (out[out.length - 1] === "-") out.pop();
+    return out;
+}
 
 export const PrevizMenuBarMixin = {
 
@@ -264,6 +273,88 @@ export const PrevizMenuBarMixin = {
                                       run: () => { if (scene.activeCamera !== c.id) this.previzLookThrough(c.id); } })),
             ] },
         ];
+    },
+
+    // ── The view's right-click menu ──────────────────────────────────────
+
+    /**
+     * A right click in the 3D view (`at` = {id under the pointer, x, y, meshEditing}): every
+     * option there is for what is selected, gathered from the bar's menus. Pressed on an item
+     * that is not selected, it selects that one first (as the Outliner does); on empty space
+     * the selection stays, and with nothing selected the menu is Create and the view.
+     */
+    previzCanvasMenu(at) {
+        if (!at || !this.previzScene()) return null;
+        const entries = this._previzCanvasMenuEntries(at);
+        return entries.length ? this._previzOpenMenu(entries, at.x, at.y) : null;
+    },
+
+    _previzCanvasMenuEntries(at = {}) {
+        const view = this._modelView();
+        const scene = this.previzScene();
+        if (at.meshEditing || (view && view.meshEditing && view.meshEditing())) {
+            // Editing a mesh: the Mesh menu's edit part (modes, selection, the operations, options).
+            const mesh = this._previzMeshMenuEntries();
+            const from = mesh.findIndex((e) => e && e.cmd === "MeshVertexMode");
+            return [
+                { label: "Done editing", cmd: "View3DMeshEdit", run: () => this.previzMeshEditToggle() },
+                "-",
+                ...mesh.slice(from < 0 ? 0 : from),
+            ];
+        }
+        if (at.id && !this.previzIsSelected(at.id)) this.previzSelect(at.id);
+        const ids = this.previzSelectedIds();
+        if (!ids.length) {
+            return [
+                { label: "Create", sub: this._previzAddMenuEntries() },
+                { label: "Import Model…", cmd: "PrevizAddModel", run: () => this.previzImportModel() },
+                "-",
+                { label: "Select all", cmd: "PrevizSelectAll", run: () => this.previzSelectAll() },
+                { label: "Frame all", run: () => view.resetView() },
+            ];
+        }
+        const item = S.itemById(scene, ids[ids.length - 1]) || S.itemById(scene, ids[0]);
+        const many = ids.length > 1;
+        const count = `${ids.length} items`;
+        const kind = item && item.kind;
+        const out = [
+            { label: many ? count : (item && item.name) || "Selected", disabled: true },
+            "-",
+            { label: "Rename", cmd: "PrevizRename", disabled: many, title: "One item at a time.",
+              run: () => this.previzBeginRename(ids[0]) },
+            { label: many ? `Duplicate ${count}` : "Duplicate", cmd: "PrevizDuplicate", run: () => this.previzDuplicate(ids) },
+            { label: many ? `Delete ${count}` : "Delete", cmd: "PrevizDelete", run: () => this.previzDelete(ids) },
+            { label: many ? `Group ${count}` : "Group", cmd: "PrevizGroup", run: () => this.previzGroupSelection() },
+            { label: "Show / hide", cmd: "PrevizVisibility", run: () => this.previzToggleVisibility() },
+            { label: "Frame selected", cmd: "FitView", run: () => (this.previzFKey ? this.previzFKey() : view.resetView()) },
+        ];
+        const extra = [];
+        if (kind === "camera" && !many) {
+            const through = scene.activeCamera === item.id;
+            extra.push({ label: through ? "Back to the free camera" : "Look through", cmd: "PrevizLookThrough",
+                         run: () => this.previzLookThrough(item.id) });
+        }
+        if (!many && (kind === "mesh" || kind === "primitive")) {
+            extra.push({ label: "Edit mesh", cmd: "View3DMeshEdit", disabled: !this.previzCanEditMesh(),
+                         run: () => this.previzMeshEditToggle() });
+        }
+        if (!many && (kind === "primitive" || kind === "model")) {
+            extra.push({ label: "Convert to editable mesh", run: () => this.previzConvertToMesh() });
+        }
+        if (extra.length) out.push("-", ...extra);
+        out.push("-", ...this._previzEditMenuEntries());
+        const anim = [...this._previzKeyMenuEntries(), "-", ...rigMenuOf(this._previzRigMenuEntries(null), "anim")];
+        const rig = rigMenuOf(this._previzRigMenuEntries(null), "rig");
+        const subs = [
+            { label: "Animate", sub: trimSeparators(anim) },
+            { label: "Constrain", sub: this._previzConstrainMenuEntries() },
+            ...(rig.length ? [{ label: "Rig", sub: rig }] : []),
+            ...(kind === "mesh" ? [{ label: "Mesh", sub: this._previzMeshMenuEntries() }] : []),
+        ];
+        out.push("-", ...subs);
+        const usd = this._previzUsdMenuEntries ? this._previzUsdMenuEntries(ids) : [];
+        if (usd.length) out.push(...usd);
+        return out;
     },
 
     _previzWindowsMenuEntries() {
