@@ -60,6 +60,33 @@ const num = (v, d, lo = -Infinity, hi = Infinity) => {
 
 // ── the state ────────────────────────────────────────────────────────────────
 
+// ── depth for the track ──────────────────────────────────────────────────────
+
+/** Where the solve and the edge clean-up read depth from: none, the phone film's own depth track, an AI depth run. */
+export const DEPTH_SOURCES = ["off", "phone", "ai"];
+export const AI_DEPTH_FRAMES = 12;
+
+/** An AI depth run kept with the matchmove: {workflow, images: {plate frame: {filename, subfolder, type}}}. */
+export function cleanDepthRun(raw) {
+    if (!raw || typeof raw !== "object" || !raw.images || typeof raw.images !== "object") return null;
+    const images = {};
+    for (const [f, im] of Object.entries(raw.images)) {
+        if (!/^\d+$/.test(f) || !im || typeof im.filename !== "string" || !im.filename) continue;
+        images[f] = { filename: im.filename, subfolder: String(im.subfolder || ""), type: ["output", "input", "temp"].includes(im.type) ? im.type : "output" };
+    }
+    if (!Object.keys(images).length) return null;
+    return { workflow: String(raw.workflow || ""), images };
+}
+
+/** The `depth` of an mm_solve / mm_depth_edges request for the source chosen (settings.depth, or `source`), or
+ * null when there is none to send. */
+export function depthRequest(mm, source = null) {
+    const src = source || (mm && mm.settings && mm.settings.depth) || "off";
+    if (src === "phone" && mm.plate && mm.plate.path) return { source: "phone", plate: mm.plate.path, strength: mm.settings.depthStrength || 1 };
+    if (src === "ai" && mm.depthRun) return { source: "ai", images: mm.depthRun.images, strength: mm.settings.depthStrength || 1 };
+    return null;
+}
+
 export function newMatchmove(plate = null) {
     return {
         v: MM_VERSION,
@@ -71,7 +98,9 @@ export function newMatchmove(plate = null) {
         tracks: [],
         objects: [],
         constraints: [],
-        settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, direction: "both", start: null, mode: "auto", refine: "auto" },
+        settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, direction: "both", start: null, mode: "auto", refine: "auto",
+                    depth: "off", depthStrength: 1 },
+        depthRun: null,
         solve: null,
         objectSolves: {},
         orient: { R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0], s: 1 },
@@ -187,7 +216,10 @@ export function cleanMatchmove(raw) {
                     direction: TRACK_DIRECTIONS.includes(s.direction) ? s.direction : "both",
                     start: s.start === null || s.start === undefined ? null : Math.round(num(s.start, 0, 0)),
                     mode: ["auto", "free", "tripod"].includes(s.mode) ? s.mode : "auto",
-                    refine: ["auto", "on", "off"].includes(s.refine) ? s.refine : "auto" };
+                    refine: ["auto", "on", "off"].includes(s.refine) ? s.refine : "auto",
+                    depth: DEPTH_SOURCES.includes(s.depth) ? s.depth : "off",
+                    depthStrength: num(s.depthStrength, 1, 0.1, 10) };
+    mm.depthRun = cleanDepthRun(raw.depthRun);
     mm.solve = raw.solve && raw.solve.frames ? raw.solve : null;
     mm.objectSolves = raw.objectSolves && typeof raw.objectSolves === "object" ? raw.objectSolves : {};
     const o = raw.orient || {};

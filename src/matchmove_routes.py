@@ -472,7 +472,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                 res = MS.solve(spec["tracks"], spec["w"], spec["h"], lens=spec["lens"], focal_px=spec["focal_px"],
                                mode=spec["mode"], refine_focal=spec["refine"], frames=spec["range"],
                                progress=progress, cancel=lambda: job.get("cancel"),
-                               constraints=spec["constraints"], pixel_aspect=spec["pixel_aspect"])
+                               constraints=spec["constraints"], pixel_aspect=spec["pixel_aspect"],
+                               depth=spec.get("depth"))
             job["result"] = res
             job.update(state="stopped" if job.get("cancel") else ("error" if res.get("error") else "done"),
                        error=res.get("error"))
@@ -481,10 +482,68 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         finally:
             job["ended"] = time.time()
 
+    def phone_depth_size(p):
+        """A Cinematic film's depth pictures' own size, turned as the plate is."""
+        from . import iphone_io
+        w, h = plate_size(p)
+        dep = iphone_io.read_film(p.path, timed=False).get("depth")
+        if not dep:
+            raise ValueError("this film has no depth track (only Cinematic films carry one)")
+        return (dep["width"], dep["height"]) if (dep["width"] > dep["height"]) == (w > h) else (dep["height"], dep["width"])
+
+    def depth_source(raw):
+        """What a solve or the depth clean-up reads depth from: {source: phone, plate} (a Cinematic film's own depth
+        track) | {source: ai, images {frame: {filename, subfolder, type}}} (a depth workflow's maps, larger =
+        farther) -> {maps: frames -> {frame: map}, frames: [frames with depth] | None (any), reading, source}.
+        Raises ValueError with what is wrong."""
+        from . import matchmove_matte as MT
+        from . import matchmove_depth as MD
+        if not isinstance(raw, dict):
+            raise ValueError("depth must be an object")
+        src = raw.get("source")
+        try:
+            strength = float(raw.get("strength") if raw.get("strength") is not None else 1.0)
+        except (TypeError, ValueError):
+            raise ValueError("depth.strength is a number") from None
+        if not (0 < strength <= 10):
+            raise ValueError("depth.strength is above 0 and at most 10")
+        reading = raw.get("reading") if raw.get("reading") in MD.READINGS else None
+        if src == "phone":
+            p, why = plate_of(raw.get("plate"))
+            if why:
+                raise ValueError(why[0])
+            dw, dh = phone_depth_size(p)
+            fps = p.info.get("fps") or 30
+
+            def maps(frames):
+                return MT.phone_depth_maps(p.path, frames, fps, dw, dh, p.turn)
+            return {"maps": maps, "frames": None, "reading": reading or MD.DEFAULT_READING, "source": "phone",
+                    "strength": strength}
+        if src == "ai":
+            from . import comp_ai as CA
+            images = raw.get("images") if isinstance(raw.get("images"), dict) else {}
+            found = {}
+            for f, img in list(images.items())[:MT.MAX_FRAMES]:
+                q = output_ref(img)
+                if q and os.path.isfile(q) and path_access.may_serve(q):
+                    try:
+                        found[int(f)] = q
+                    except ValueError:
+                        continue
+            if not found:
+                raise ValueError("the AI depth maps were not found (run the depth again)")
+
+            def maps(frames):
+                return {f: CA.read_depth(found[f]) for f in frames if f in found}
+            return {"maps": maps, "frames": sorted(found), "reading": reading or "depth", "source": "ai",
+                    "strength": strength}
+        raise ValueError("depth.source is phone or ai")
+
     async def solve_route(request):
         """POST {width, height, tracks, lens?, focal_px?, mode: free | tripod | auto, refine?, range?: [a, b],
         constraints?: [{kind, ids, value?}], pixel_aspect?, object?: id, camera?: (the camera solve, for an
-        object), scale?} starts a solve job."""
+        object), scale?, depth?: {source: phone, plate} | {source: ai, images}, strength?, reading?}} starts a solve
+        job. With depth the points are pulled to the depths seen there (``matchmove_depth.depth_pull``)."""
         body = await body_of(request)
         try:
             w, h = int(body["width"]), int(body["height"])
@@ -509,9 +568,48 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                 "refine": None if body.get("refine") is None else bool(body.get("refine")), "range": rng,
                 "object": obj, "camera": cam, "scale": scale, "pixel_aspect": pa,
                 "constraints": MS.clean_constraints(body.get("constraints") if isinstance(body.get("constraints"), list) else [])}
+        if body.get("depth") and not obj:
+            try:
+                spec["depth"] = await off(depth_source, body["depth"])
+            except Exception as e:  # noqa: BLE001 - a film this reader cannot read, a bad body
+                return err(f"the depth: {e}")
         jid, job = new_job("solve", 0)
         threading.Thread(target=run_solve, args=(job, spec), daemon=True, name=f"mm-solve-{jid}").start()
         return web.json_response({"job": jid})
+
+    def depth_edges_job(spec):
+        from . import matchmove_depth as MD
+        src = spec["src"]
+        frames = src["frames"] if src["frames"] is not None else MD.sample_frames(spec["frames"])
+        maps = src["maps"](frames)
+        if not maps:
+            raise ValueError("no depth on the tracked frames")
+        out = MD.depth_edges(maps, spec["tracks"], spec["w"], spec["h"],
+                             **({"edge_tol": spec["edge_tol"]} if spec.get("edge_tol") else {}))
+        out["source"] = src["source"]
+        return out
+
+    async def depth_edges_route(request):
+        """POST {width, height, tracks, depth: {source: phone, plate} | {source: ai, images}, edge_tol?} -> the
+        tracks the depth says not to trust ({tracks: [{id, why: edge | jumps, edge_share, jump_share, frames}],
+        frames, sampled_tracks}): on a depth edge, or jumping in depth against the rest."""
+        body = await body_of(request)
+        try:
+            w, h = int(body["width"]), int(body["height"])
+            tol = float(body["edge_tol"]) if body.get("edge_tol") else None
+        except (KeyError, TypeError, ValueError):
+            return err("width, height and edge_tol are numbers")
+        tracks = MM.clean_tracks(body.get("tracks"))
+        if not tracks:
+            return err("no tracks")
+        try:
+            src = await off(depth_source, body.get("depth"))
+            frames = sorted({int(k[0]) for t in tracks for k in t["keys"]})
+            out = await off(depth_edges_job, {"src": src, "tracks": tracks, "w": w, "h": h, "frames": frames,
+                                              "edge_tol": tol})
+        except Exception as e:  # noqa: BLE001
+            return err(f"the depth: {e}")
+        return web.json_response(out)
 
     # ── the undistorted plate, for the 3D space ──────────────────────────────
 
@@ -886,6 +984,28 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             return err(e)
         return web.json_response(res)
 
+    async def depth_keep_route(request):
+        """POST {run, images {frame: {filename, subfolder, type}}} -> {images, frames}: a depth job's maps kept
+        as they are, for the solve and the edge clean-up to read (``depth: {source: ai, images}``). Only maps that
+        are there and may be served are answered."""
+        from . import matchmove_matte as MT
+        body = await body_of(request)
+        images = body.get("images") if isinstance(body.get("images"), dict) else {}
+        kept = {}
+        for f, img in list(images.items())[:MT.MAX_FRAMES]:
+            q = output_ref(img)
+            if not (q and os.path.isfile(q) and path_access.may_serve(q)):
+                continue
+            try:
+                kept[str(int(f))] = {"filename": str(img.get("filename")), "subfolder": str(img.get("subfolder") or ""),
+                                     "type": str(img.get("type") or "output")}
+            except (ValueError, AttributeError):
+                continue
+        if not kept:
+            return err("the workflow's depth maps were not found", 404)
+        return web.json_response({"run": str(body.get("run") or ""), "images": kept,
+                                  "frames": sorted(int(f) for f in kept)})
+
     async def matte_sample_route(request):
         """POST {matte, points {frame: [[id, x, y], ...]}} -> {votes {id: [on, seen]}}."""
         from . import matchmove_matte as MT
@@ -1029,6 +1149,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         add("POST", f"{prefix}/mm_matte_place", matte_place_route)
         add("POST", f"{prefix}/mm_matte_sample", matte_sample_route)
         add("POST", f"{prefix}/mm_depth_place", depth_place_route)
+        add("POST", f"{prefix}/mm_depth_keep", depth_keep_route)
         add("GET", f"{prefix}/mm_plate", plate_route)
         add("GET", f"{prefix}/mm_frame", frame_route)
         add("GET", f"{prefix}/mm_job", job_route)
@@ -1037,6 +1158,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         add("POST", f"{prefix}/mm_lens_grid", lens_grid_route)
         add("POST", f"{prefix}/mm_lens_lines", lens_lines_route)
         add("POST", f"{prefix}/mm_solve", solve_route)
+        add("POST", f"{prefix}/mm_depth_edges", depth_edges_route)
         add("POST", f"{prefix}/mm_proxy", proxy_route)
         add("POST", f"{prefix}/mm_to_comp", to_comp_route)
         add("GET", f"{prefix}/mm_from_comp", from_comp_route)

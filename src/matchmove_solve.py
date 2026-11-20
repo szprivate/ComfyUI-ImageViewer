@@ -992,7 +992,7 @@ def focal_check(obs, res, c, mode="free"):
 
 
 def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None, frames=None,
-          progress=None, cancel=None, constraints=None, pixel_aspect=1.0):
+          progress=None, cancel=None, constraints=None, pixel_aspect=1.0, depth=None):
     """The camera of a plate from its tracks.
 
     ``tracks`` as matchmove.clean_tracks gives them (the camera's: group "camera"); ``lens`` the Comp
@@ -1003,7 +1003,13 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     the solve is in square pixels, ``focal_px`` and the answer's focal_px are square pixels too (the plate's
     height in pixels is the same either way), its center is in the plate's own pixels. Returns {frames: {f: {R,
     t}}, focal_px, points: [{id, X, error}], rms, per_frame: {f: rms}, mode, notes, constraints, focal_check,
-    units} or {error, notes}."""
+    units} or {error, notes}.
+
+    ``depth`` {maps: a function of key frames -> {frame: a depth picture as stored}, frames (more key frames: the
+    ones an AI depth run has), strength (default 1), reading (disparity: bright = near, a phone's | depth: larger =
+    farther, an AI model's), source (phone | ai: the notes' wording)}: after the free solve, the points are pulled
+    towards the depths the pictures saw them at, in proportion (``matchmove_depth.depth_pull``); the answer's ``depth`` reports
+    how well the two agree before and after."""
     notes = []
     pa = float(pixel_aspect or 1.0)
     if not (0.2 <= pa <= 5):
@@ -1020,6 +1026,10 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
         notes.append(f"{len(thin)} frame(s) see fewer than 8 tracks (first: {thin[0]}); the camera may jump there.")
     c = np.array(lens.get("center") if lens and lens.get("center") else [w_raw / 2, h / 2], np.float64) * [pa, 1.0]
     keys = _pick_keys(obs.frames)
+    if depth and depth.get("frames"):
+        # the frames that have depth (an AI depth run's) are key frames too, so the pull has them
+        have = set(obs.frames)
+        keys = sorted(set(keys) | {int(fr) for fr in depth["frames"] if int(fr) in have})
     known = bool(focal_px)
     refine = (not known) if refine_focal is None else bool(refine_focal)
     stage = {"n": 0}
@@ -1070,6 +1080,42 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     if res is None:
         return {"error": "The solve did not find a camera: add tracks that last longer and spread over the frame.",
                 "notes": notes}
+    depth_report = None
+    dname = "the AI depth" if (depth or {}).get("source") == "ai" else "the phone's depth"
+    if depth and want == "tripod":
+        notes.append(f"The camera only turns, so the points have no distance: {dname} was left out.")
+    elif depth:
+        from . import matchmove_depth as MD
+        if progress:
+            progress("depth", 0, 1)
+        try:
+            maps = depth["maps"](sorted(res["poses"]))
+        except Exception as e:  # noqa: BLE001 - the film's depth could not be read: solved without it
+            maps = None
+            depth_report = {"error": f"{dname} was not read: {e}"}
+        if maps:
+            samples = MD.track_samples(maps, obs.tracks, w_raw, h)
+            depth_report = MD.depth_pull(obs, res, c, samples, _key_ba, strength=float(depth.get("strength") or 1.0),
+                                         reading=depth.get("reading"), refine_f=refine, cancel=cancel,
+                                         resect=resect)
+        elif depth_report is None:
+            depth_report = {"error": f"{dname} gave no pictures for the key frames"}
+        depth_report["source"] = depth.get("source") or "phone"
+        if depth_report.get("error"):
+            notes.append(f"Solved without {dname}: {depth_report['error']}.")
+        else:
+            if depth_report.get("turned"):
+                notes.append("The solve had its depth inside out (near and far swapped, which a shot with little "
+                             f"camera movement allows): solved again from {dname}.")
+            a, b = depth_report["agreement_before"], depth_report["agreement"]
+            if b is not None and b > 0.15:
+                notes.append(f"{dname[0].upper()}{dname[1:]} and the tracks disagree by {b * 100:.0f} % even after the pull: "
+                             "the depth may be read the wrong way, or the tracks sit on moving things or depth edges.")
+            else:
+                notes.append(f"{dname[0].upper()}{dname[1:]} pulled the solve into proportion: they differed by "
+                             f"{a * 100:.1f} %, now by {b * 100:.1f} % ({depth_report['used']} points).")
+    depth_held = bool(depth_report and not depth_report.get("error") and depth_report.get("agreement") is not None
+                      and depth_report["agreement"] <= 0.05)
     if cons and want == "tripod":
         notes.append("The camera only turns, so the points have no distance: the measurements were left out.")
     elif cons:
@@ -1085,6 +1131,9 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
                      f"better than the {res['f']:.0f} px held ({fcheck['rms_' + fcheck['better']]:.2f} px against "
                      f"{fcheck['rms']:.2f} px): the depth is likely squashed or stretched. Let the solve refine the "
                      "focal length, or check the camera and sensor.")
+    elif fcheck and fcheck["weak"] and depth_held:
+        fcheck["held_by_depth"] = True
+        notes.append(f"The tracks alone do not pin the focal length down; {dname} held the proportions.")
     elif fcheck and fcheck["weak"]:
         notes.append("This shot does not pin its focal length down (the error hardly changes 10 % either side), so "
                      "the depth may come out squashed or stretched: give the camera's focal length, or add two "
@@ -1163,7 +1212,7 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
             "center": (c / [pa, 1.0]).round(4).tolist(), "pixel_aspect": pa,
             "points": points, "rms": round(rms, 4), "per_frame": per, "mode": want,
             "key_frames": len(kposes), "notes": notes, "used_tracks": len(pts),
-            "constraints": report, "focal_check": fcheck, "units": "m" if upm else "",
+            "constraints": report, "focal_check": fcheck, "units": "m" if upm else "", "depth": depth_report,
             "worst": sorted(points, key=lambda p: -p["error"])[:20] if allerr else []}
 
 

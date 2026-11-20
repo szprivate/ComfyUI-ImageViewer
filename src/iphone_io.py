@@ -274,7 +274,10 @@ def read_track(buf, s, e):
 
 
 def sample_table(buf, s, e):
-    """[(offset, size, time in timescale units, is sync)] from stsz / stz2, stsc, stco / co64, stts, stss."""
+    """[(offset, size, time in timescale units, is sync)] from stsz / stz2, stsc, stco / co64, stts, ctts, stss, in
+    decode order. The time is the sample's PRESENTATION time: its decode time (stts) plus its composition offset
+    (ctts - a track with B-frames shows its pictures in another order than it stores them), less the first
+    picture's, so the first picture shown is at 0 as an edit list would put it."""
     sizes = []
     z = child(buf, s, e, "stsz")
     if z:
@@ -332,6 +335,21 @@ def sample_table(buf, s, e):
                 t += d
     while len(times) < len(sizes):
         times.append(t)
+    ct = child(buf, s, e, "ctts")
+    if ct:
+        ver = buf[ct[0]]
+        n, = struct.unpack_from(">I", buf, ct[0] + 4)
+        offs = []
+        for j in range(min(n, (ct[1] - ct[0] - 8) // 8)):
+            cnt, d = struct.unpack_from(">Ii" if ver == 1 else ">II", buf, ct[0] + 8 + 8 * j)
+            offs.extend([d] * min(cnt, len(sizes) - len(offs)))
+            if len(offs) >= len(sizes):
+                break
+        if offs:
+            offs += [offs[-1]] * (len(sizes) - len(offs))
+            times = [ti + o for ti, o in zip(times, offs)]
+            lo = min(times)
+            times = [ti - lo for ti in times]
     sync = None
     ss = child(buf, s, e, "stss")
     if ss:
@@ -696,22 +714,41 @@ def depth_samples(path, wanted_times):
     out = {}
     with open(path, "rb") as fh:
         for want in sorted(set(float(t) for t in wanted_times)):
-            j = int(np.argmin(np.abs(times - want)))
+            # the picture on show at that moment: the last one shown at or before it
+            shown = np.nonzero(times <= want + 1e-9)[0]
+            j = int(shown[np.argmax(times[shown])]) if len(shown) else int(np.argmin(times))
+            # decode from a sync sample stored before it AND shown before it: a picture shown before the sync
+            # sample it is stored after (an open GOP's leading pictures) needs the one before that too
             k = j
-            while k > 0 and not samples[k][3]:
+            while k > 0 and not (samples[k][3] and times[k] <= times[j]):
                 k -= 1
             ctx, nal_len, head = _decoder(cfg)
             import av
-            got = None
-            for q in range(k, j + 1):
-                off, size, _t, _s = samples[q]
+            # Decode from the sync sample on, each packet stamped with its presentation time, until the picture
+            # shown at sample j's time comes out: with B-frames the decoder hands pictures out in the order they
+            # are shown, which is not the order they are stored in, so the last one out need not be j's.
+            target, got, last = samples[j][2], None, None
+            q = k
+            while q < len(samples) and got is None:
+                off, size, pt, _s = samples[q]
+                if q > j and samples[q][3]:
+                    break                                   # the next sync sample: j's picture is behind us
                 data = to_annexb(_read_at(fh, off, size), nal_len)
                 if q == k:
                     data = head + data
-                for fr in ctx.decode(av.Packet(data)):
-                    got = fr
-            for fr in ctx.decode(None):
-                got = fr
+                pk = av.Packet(data)
+                pk.pts = int(pt)
+                for fr in ctx.decode(pk):
+                    last = fr
+                    if fr.pts == target:
+                        got = fr
+                q += 1
+            if got is None:
+                for fr in ctx.decode(None):
+                    last = fr
+                    if fr.pts == target:
+                        got = fr
+                got = got or last
             if got is not None:
                 out[want] = (float(times[j]), _plane(got))
     return out

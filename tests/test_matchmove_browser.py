@@ -500,6 +500,20 @@ class MatchmoveBrowserTests(unittest.TestCase):
             sv = pg.evaluate("""async () => { const P = window.__panel; await P.matchmoveSolve();
                 const s = P._mmCur().mm.solve; return { rms: s.rms, f: s.focal_px }; }""")
             self.assertLess(sv["rms"], 1.5, sv)
+            # The solve pulled into the film's own depth track, and the tracks checked against it.
+            dp = pg.evaluate("""async () => { const P = window.__panel;
+                const s = await P.previzSceneAgent('matchmove_solve', { depth: 'phone' });
+                P._mmCur().mm.step = 'solve'; P._mmRender();
+                const text = P.mmGuidePanel.textContent, src = P.mmGuidePanel.querySelector('select.mm-depth-source').value;
+                const e = await P.matchmoveDepthEdges();
+                return { depth: s.matchmove.solve.depth, rms: s.matchmove.solve.rms_px, text, src, edges: e }; }""")
+            self.assertFalse(dp["depth"].get("error"), dp["depth"])
+            self.assertEqual((dp["depth"]["source"], dp["depth"]["reading"], dp["src"]), ("phone", "disparity", "phone"))
+            self.assertGreater(dp["depth"]["order"], 0.5, dp["depth"])
+            self.assertLess(dp["rms"], 1.5, dp)
+            self.assertIn("Depth (phone", dp["text"])
+            self.assertEqual(dp["edges"]["source"], "phone")
+            self.assertGreater(dp["edges"]["sampled_tracks"], 20, dp["edges"])
             # The ground from the film's own depth: level, the camera above it.
             g = pg.evaluate("""async () => { const P = window.__panel; await P.matchmoveBuild();
                 P._mmCur().mm.step = 'scene'; P._mmRender();
@@ -650,6 +664,30 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertLess(g["tilt"], 3, g)
             self.assertAlmostEqual(g["camera_height"], 4.6 * 0.5, delta=0.15)
             self.assertGreater(g["points"], 1000, g)
+            # The solve pulled into AI depth: the depth run first (a dozen frames, kept), then the solve with it.
+            real, G.missing = G.missing, lambda g, fp, nc: []
+            try:
+                r = ask("matchmove_solve", {"depth": "ai", "depth_scale": 0.5})
+            finally:
+                G.missing = real
+            self.assertEqual(r["state"], "done", r)
+            mmr = r["result"]["matchmove"]
+            self.assertEqual(mmr["settings"]["depth"], "ai")
+            self.assertEqual(len(mmr["ai_depth"]["frames"]), 12, mmr.get("ai_depth"))
+            dep = mmr["solve"]["depth"]
+            self.assertFalse(dep.get("error"), dep)
+            self.assertEqual((dep["source"], dep["reading"]), ("ai", "depth"))
+            self.assertGreater(dep["order"], 0.8, dep)
+            self.assertLess(mmr["solve"]["rms_px"], 1.0)
+            self.assertIn("Depth (AI", pg.evaluate("() => window.__panel.mmGuidePanel.textContent"))
+            r = ask("matchmove_track_delete", {"depth_edges": True})
+            self.assertEqual(r["state"], "done", r)
+            de = r["result"]["depth_edges"]
+            self.assertEqual((de["source"], de["frames"]), ("ai", 12))
+            self.assertLess(r["result"]["deleted"], 120, r["result"])      # a few dots on the edge of a nearer one
+            r = ask("matchmove_solve", {"depth": "off"})
+            self.assertEqual(r["state"], "done", r)
+            self.assertNotIn("depth", r["result"]["matchmove"]["solve"])
             # A mask over the whole shot from a background remover: a box on the left, frame by frame.
             self._fake_mattes("left", lambda f, y, x: x < 120)
             self._fake_comfy(pg, "left")

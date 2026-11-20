@@ -62,7 +62,9 @@ export function matchmoveSummary(mm, st = {}) {
                  ...(o.scale ? { scale: o.scale } : {}), solved: sol ? { rms: round(sol.rms), frames: Object.keys(sol.frames || {}).length } : null };
     });
     const s = mm.settings;
-    out.settings = { features: s.n, min_ncc: s.minNcc, min_dist: s.minDist, from: s.from, to: s.to, mode: s.mode, refine: s.refine };
+    out.settings = { features: s.n, min_ncc: s.minNcc, min_dist: s.minDist, from: s.from, to: s.to, mode: s.mode, refine: s.refine,
+                     depth: s.depth || "off", depth_strength: s.depthStrength || 1 };
+    if (mm.depthRun) out.ai_depth = { frames: Object.keys(mm.depthRun.images).map(Number).sort((a, b) => a - b), workflow: mm.depthRun.workflow };
     if (mm.tracks.length) {
         const ts = D.trackStats(mm);
         out.tracks = { total: ts.tracks, camera: ts.camera, camera_on: ts.on, median_length: ts.medianLength,
@@ -83,6 +85,7 @@ export function matchmoveSummary(mm, st = {}) {
             notes: sv.notes || [],
             units: sv.units || "",
             ...(sv.focal_check ? { focal_check: sv.focal_check } : {}),
+            ...(sv.depth ? { depth: sv.depth } : {}),
         };
     } else out.solve = null;
     // An iPhone film or photo (src/iphone_io.py): which camera, how it was turned, and whether it carries depth.
@@ -411,7 +414,9 @@ export const PrevizAgentMatchmoveMixin = {
 
     /**
      * Delete tracks: ids, worst_share (0..0.5 of the solved tracks, the worst by error), error_over (px), shorter_than
-     * (frames), all. Several may be given; what any of them names goes. The solve is kept until solved again.
+     * (frames), all, depth_edges (true | phone | ai: the tracks the depth says not to trust - on a depth edge or
+     * jumping in depth -, measured tracks kept; edge_tol the edge's spread, 0.15). Several may be given; what any
+     * of them names goes. The solve is kept until solved again.
      */
     async _asa_matchmove_track_delete(scene, a) {
         const st = await this._amm();
@@ -426,10 +431,19 @@ export const PrevizAgentMatchmoveMixin = {
         }
         if (isNum(a.shorter_than)) for (const id of D.shortTracks(mm, Math.round(Number(a.shorter_than)))) gone.add(id);
         if (a.all) for (const t of mm.tracks) gone.add(t.id);
-        if (!gone.size) return this._ammAnswer(st, { deleted: 0 });
+        let edges = null;
+        if (a.depth_edges) {
+            // the tracks the depth says not to trust (on a depth edge, or jumping in depth); measured ones kept
+            const src = ["phone", "ai"].includes(a.depth_edges) ? a.depth_edges : null;
+            const r = await this.matchmoveDepthEdges({ source: src, edgeTol: isNum(a.edge_tol) ? Number(a.edge_tol) : null });
+            edges = { source: r.source, frames: r.frames, tracks: r.tracks.slice(0, 50).map((t) => [t.id, t.why]) };
+            for (const id of D.withoutMeasured(st.mm, r.tracks.map((t) => t.id))) gone.add(id);
+        }
+        if (!gone.size) return this._ammAnswer(st, { deleted: 0, ...(edges ? { depth_edges: edges } : {}) });
         this._mmEdit("delete tracks", (m) => { D.removeTracks(m, [...gone]); if (a.all) m.solve = null; });
         for (const id of gone) st.sel.delete(id);
-        return this._ammAnswer(st, { deleted: gone.size });
+        if (edges) st.depthEdges = null;
+        return this._ammAnswer(st, { deleted: gone.size, ...(edges ? { depth_edges: edges } : {}) });
     },
 
     /** Switch tracks off / on (ids, on) without deleting them; or move them to an object (object) or the camera (object: "camera"). */
@@ -475,17 +489,29 @@ export const PrevizAgentMatchmoveMixin = {
 
     // ── the solve ────────────────────────────────────────────────────────────
 
-    /** {mode: auto | free | tripod, refine: auto | on | off (the focal length)} */
+    /** {mode: auto | free | tripod, refine: auto | on | off (the focal length), depth: off | phone | ai (pull the
+     * solve into the depth the plate was seen at; ai runs a depth workflow on a dozen frames first, kept for the
+     * next solves), depth_strength (0.1..10, 1), depth_workflow, depth_scale (0.1..1), depth_again} */
     async _asa_matchmove_solve(scene, a) {
         const st = await this._amm();
         if (st.mm.tracks.filter((t) => t.on).length < 8) throw new Error("a solve needs 8 or more tracks on every frame: matchmove_track first");
         this._mmEdit("solve settings", (m) => {
             if (["auto", "free", "tripod"].includes(a.mode)) m.settings.mode = a.mode;
             if (["auto", "on", "off"].includes(a.refine)) m.settings.refine = a.refine;
+            if (D.DEPTH_SOURCES.includes(a.depth)) m.settings.depth = a.depth;
+            if (isNum(a.depth_strength)) m.settings.depthStrength = Math.max(0.1, Math.min(10, Number(a.depth_strength)));
         });
+        if (st.mm.settings.depth === "phone") {
+            const ph = st.facts && st.facts.phone;
+            if (!ph || !ph.depth || !ph.tracks) throw new Error("the plate is not an iPhone film with a depth track (a Cinematic film); use depth ai");
+        }
+        // a new AI depth run when asked for one (another workflow, or again), or when none is kept
+        if (st.mm.settings.depth === "ai" && (!st.mm.depthRun || a.depth_workflow || a.depth_again))
+            if (!(await this.matchmoveDepthRun({ workflow: a.depth_workflow || null, ask: false, scale: isNum(a.depth_scale) ? Number(a.depth_scale) : null })))
+                throw new Error("the AI depth did not run");
         this._ammStep(st, "solve");
         const was = st.mm.solve;
-        await this.matchmoveSolve();
+        await this.matchmoveSolve({ ask: false });
         if (!st.mm.solve || st.mm.solve === was) throw new Error("the solve was stopped");
         return this._ammAnswer(st);
     },
