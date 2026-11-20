@@ -901,6 +901,9 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertGreater(len(ids), 10)
             pairs = [(ids[0], ids[-1]), (min(ids, key=lambda k: truth[k][2]), max(ids, key=lambda k: truth[k][2]))]
             pg.evaluate("() => { const P = window.__panel; P._mmCur().mm.step = 'solve'; P._mmRender(); }")
+            # Measurements is a fold of the Solve step: open it (kept open over the redraws)
+            pg.evaluate("() => { const d = window.__panel.mmGuidePanel.querySelector('details[data-fold=solve-measure]'); d.open = true; }")
+            pg.wait_for_timeout(50)
             for a, b in pairs:
                 metres = float(np.linalg.norm(truth[a] - truth[b]))
                 pg.evaluate("""([a, b, m]) => { const P = window.__panel, st = P._mmCur(); st.sel = new Set([a, b]); st.measureMetres = m; P._mmRender(); }""",
