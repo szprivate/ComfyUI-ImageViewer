@@ -3,7 +3,7 @@ name = "ComfyUI-ImageViewer"
 description = "The ComfyUI Image Viewer by sebastianzilius is a professional floating image viewer for ComfyUI - multi-tab, history snapshots, side-by-side comparison, playback timeline, exposure/channel controls, and a live parameter panel."
 authors = [{name = "Sebastian Zilius"}]  
 
-version = "0.6.3"
+version = "0.7.0"
 license = "Noncommercial" 
 classifiers = [
     "Operating System :: Microsoft :: Windows"
