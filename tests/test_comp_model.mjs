@@ -536,7 +536,7 @@ test("channelsAt follows the graph: added, shuffled, written into, merged and re
     const r = C.addNode(c, read(c, "a.png"));
     const add = C.addNode(c, C.makeNode(c, "addchannels", { channels: "mask.a, depth.z", inputs: [r.id] }));
     const key = C.addNode(c, C.makeNode(c, "keyer", { write: "matte", inputs: [add.id] }));
-    const sh = C.addNode(c, C.makeNode(c, "shuffle", { out: "lay", r: "-", g: "a", b: "0", a: "1", inputs: [key.id] }));
+    const sh = C.addNode(c, C.makeNode(c, "shuffle", { out1: "lay", route: { "lay.g": "B:a", "lay.b": "0", "lay.a": "1" }, inputs: [key.id] }));
     const rm = C.addNode(c, C.makeNode(c, "removechannels", { channels: "matte, depth", inputs: [sh.id] }));
     assert.deepEqual(C.channelsAt(c, add.id), ["mask.a", "depth.z"]);
     assert.deepEqual(C.channelsAt(c, key.id), ["mask.a", "depth.z", "matte.r", "matte.g", "matte.b", "matte.a"]);
@@ -703,4 +703,40 @@ test("bounding boxes: a small thing carries its box through transform, blur and 
     let d = 0;
     for (let i = 0; i < out.data.length; i++) d = Math.max(d, Math.abs(out.data[i] - plain.data[i]));
     assert.ok(d < 1e-6, `same numbers: ${d}`);
+});
+
+test("Shuffle: two inputs routed through a grid, constants, and an older node read as the same routing", () => {
+    const { CH } = C;
+    // An older node: its `out` and picks.
+    assert.deepEqual(CH.shuffleRoute({ out: "lay", r: "-", g: "a", b: "0", a: "depth.z" }), { "lay.g": "B:a", "lay.b": "0", "lay.a": "B:depth.z" });
+    assert.deepEqual(CH.shuffleRoute({}), { r: "B:r", g: "B:g", b: "B:b", a: "B:a" });
+    assert.deepEqual(CH.shuffleRoute({ route: { r: "A:g", "bad name": "B:r", g: "C:r", b: "1" } }), { r: "A:g", b: "1" });
+    assert.deepEqual(CH.shuffleUpgrade({ g: "mask.a" }).in1, "mask");
+    // A layer change keeps each wire in its place in the grid.
+    const r0 = { r: "B:r", g: "A:g", a: "1" };
+    assert.deepEqual(CH.shuffleRemap(r0, "B", ["r", "g", "b", "a"], ["depth.z"]), { r: "B:depth.z", g: "A:g", a: "1" });
+    assert.deepEqual(CH.shuffleRemap(r0, "A", ["r", "g", "b", "a"], ["m.r", "m.g"]), { r: "B:r", g: "A:m.g", a: "1" });
+    assert.deepEqual(CH.shuffleRemap(r0, "out", ["r", "g", "b", "a"], ["o.r", "o.g", "o.b"]), { "o.r": "B:r", "o.g": "A:g" });
+    assert.deepEqual(CH.shuffleLayerChannels("depth", ["depth.z", "mask.a"]), ["depth.z"]);
+    assert.deepEqual(CH.shuffleLayerChannels("new", []), ["new.r", "new.g", "new.b", "new.a"]);
+    assert.deepEqual(CH.shuffleLayerChannels("none", []), []);
+    // The render: A's green into red, white into alpha, B's blue kept, a layer of A's into an extra layer.
+    const c = C.newComp({ width: 2, height: 1, fps: 24, frames: 1 });
+    const b = C.addNode(c, C.makeNode(c, "constant", { color: [0.1, 0.2, 0.3, 0.4] }));
+    const a = C.addNode(c, C.makeNode(c, "constant", { color: [0.5, 0.6, 0.7, 0.8] }));
+    const sh = C.addNode(c, C.makeNode(c, "shuffle", { inputs: [b.id, a.id], in2: "rgba", out2: "keep", route: { r: "A:g", a: "1", "keep.a": "A:a", "keep.r": "B:r" } }));
+    const res = C.renderNode(c, sh.id, 0, { scale: 1, source: () => null });
+    assert.deepEqual(Array.from(res.data.slice(0, 4)).map((v) => +v.toFixed(3)), [0.48, 0.08, 0.12, 1]);   // constants are premultiplied
+    assert.ok(Math.abs(res.ch["keep.a"][0] - 0.8) < 1e-6 && Math.abs(res.ch["keep.r"][1] - 0.04) < 1e-6);
+    assert.deepEqual(C.channelsAt(c, sh.id), ["keep.a", "keep.r"]);
+    // An older saved node comes in upgraded, its mask moved past input A.
+    const { comp } = C.normalizeComp({ comp: 1, format: { width: 2, height: 1 }, nodes: [
+        { id: "K", type: "constant" }, { id: "M", type: "constant" },
+        { id: "S", type: "shuffle", out: "lay", r: "a", g: "-", b: "0", a: "1", inputs: ["K", "M"] }] });
+    const s2 = comp.nodes.find((n) => n.id === "S");
+    assert.deepEqual(s2.inputs, ["K", null, "M"]);
+    assert.deepEqual(s2.route, { "lay.r": "B:a", "lay.b": "0", "lay.a": "1" });
+    assert.equal(s2.out1, "lay"); assert.equal(s2.r, undefined);
+    // ... and once upgraded it stays as it is.
+    assert.deepEqual(C.normalizeComp(comp).comp.nodes.find((n) => n.id === "S").inputs, ["K", null, "M"]);
 });

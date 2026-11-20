@@ -165,10 +165,12 @@ export const NODE_TYPES = {
         bottomright: { kind: "vec2", def: null, key: true, step: 1, help: "The box's bottom right corner. Empty: the picture's" },
         softness: { kind: "num", def: 0, min: 0, key: true, step: 0.5, help: "A soft edge this many pixels wide" },
     } },
-    shuffle: { label: "Shuffle", cat: "Channel", inputs: ["src"], params: {
-        out: { kind: "layer", def: "rgba", help: "The layer written: rgba, or a layer of extra channels (made if it is not there)" },
-        r: { kind: "chan", def: "r", help: "Any channel of what comes in, 0, 1, or - (not written)" }, g: { kind: "chan", def: "g" },
-        b: { kind: "chan", def: "b" }, a: { kind: "chan", def: "a" },
+    shuffle: { label: "Shuffle", cat: "Channel", inputs: ["B", "A"], params: {
+        in1: { kind: "layer", def: "rgba", from: "B", label: "in 1", help: "The layer of input B the grid reads" },
+        in2: { kind: "layer", def: "none", from: "A", none: true, label: "in 2", help: "The layer of input A the grid reads (none: A is not used)" },
+        out1: { kind: "layer", def: "rgba", label: "out 1", help: "The first layer written: rgba, or a layer of extra channels (made if it is not there)" },
+        out2: { kind: "layer", def: "none", none: true, label: "out 2", help: "A second layer written (none: only out 1)" },
+        route: { kind: "route", def: { r: "B:r", g: "B:g", b: "B:b", a: "B:a" }, help: "Which channel, black or white each output channel takes; one without is not written (B's passes)" },
     } },
     addchannels: { label: "AddChannels", cat: "Channel", inputs: ["src"], params: {
         channels: { kind: "chanlist", def: "mask.a", help: "Channels or layers to add, commas between: mask.a, depth.z, or a layer name (its r g b a)" },
@@ -601,7 +603,13 @@ function normalizeLevel(raw, errors, where, depth) {
             node.nodes = normalizeLevel(n.nodes, errors, `${where}${n.id}/`, depth + 1);
             G.groupInputs(node).forEach((x, k) => { x.index = k; });
         } else delete node.nodes;
-        const ins = Array.isArray(n.inputs) ? n.inputs : [];
+        let ins = Array.isArray(n.inputs) ? n.inputs : [];
+        // An older Shuffle (one input, `out` and a pick per r g b a): its routing, and its mask moved past input A.
+        if (n.type === "shuffle" && !isObj(n.route)) {
+            Object.assign(node, CH.shuffleUpgrade(n));
+            for (const k of ["out", "r", "g", "b", "a"]) delete node[k];
+            ins = [ins[0], null, ins[1]];
+        }
         node.inputs = inputsOf(node).map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
         if (node.tracks && !isObj(node.tracks)) delete node.tracks;
         if (node.expr !== undefined && !isObj(node.expr)) delete node.expr;
@@ -1731,8 +1739,7 @@ export function channelsAt(comp, id, depth = 0) {
         const named = CH.expandChannels(CH.parseChannels(n.channels), have, false);
         have = have.filter((c) => (n.operation === "keep" ? named.includes(c) : !named.includes(c)));
     } else if (n.type === "shuffle") {
-        const out = n.out || "rgba";
-        if (out !== "rgba" && CH.isLayer(out)) CH.layerChannels(out).forEach((c, k) => { const pk = n["rgba"[k]] || "rgba"[k]; if (pk !== "-" && !have.includes(c)) have = [...have, c]; });
+        for (const c of Object.keys(CH.shuffleRoute(n))) if (!CH.RGBA.includes(c) && !have.includes(c)) have = [...have, c];
     }
     if (WRITES.has(n.type)) {
         const w = n.write || "rgba";
@@ -2096,7 +2103,13 @@ export function renderNode(comp, id, frame, ctx) {
         }
         case "shuffle": {
             const src = run(n.inputs[0], f, d1);
-            const [img, ex] = CH.shuffleChannels(src, exOf(n.inputs[0], f), n.out || "rgba", ["r", "g", "b", "a"].map((k) => n[k] || k));
+            const route = CH.shuffleRoute(n);
+            let A = null, aex = null;
+            if (n.inputs[1] && Object.values(route).some((v) => v[0] === "A")) {
+                const a = run(n.inputs[1], f, d1);
+                A = conform(a, src.w, src.h); aex = conformExtras(exOf(n.inputs[1], f), a.w, a.h, src.w, src.h);
+            }
+            const [img, ex] = CH.shuffleRouted(src, exOf(n.inputs[0], f), A, aex, route);
             return X(img, ex);
         }
         case "addchannels": {

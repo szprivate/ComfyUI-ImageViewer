@@ -71,6 +71,12 @@ def channel_cases(sources):
     c.append(({"comp": comp([read(1), N("shuffle", 1, ["Read1"], out="lay", r="-", g="a", b="0", a="g"),
                              N("shuffle", 2, ["shuffle1"], out="rgba", r="lay.a", g="-", b="lay.r", a="lay.g"), out("shuffle2")])}, sources))
     c.append(({"comp": comp([read(1), N("lensflare", 1, ["Read1", None], position=[10, 8], write="flare"), out("lensflare1")])}, sources))
+    # Shuffle's routing: two inputs (A smaller, laid at the bottom left), constants, a layer of A's into a layer.
+    c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read2"], channels="dz.z", value=0.3),
+                             N("reformat", 1, ["addchannels1"], width=20, height=9, resize="none"),
+                             N("shuffle", 1, ["Read1", "reformat1", "Read2"], in2="dz", out2="o",
+                               route={"r": "A:g", "g": "B:b", "a": "1", "o.r": "A:dz.z", "o.g": "0", "o.b": "B:a"},
+                               mask_channel="r", mix=0.7), out("shuffle1")])}, sources))
     return c
 
 
@@ -88,7 +94,8 @@ def mask_cases(sources):
     c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=12, height=9, resize="none"),
                              N("erode", 1, ["Read1", "reformat1"], size=1.5), out("erode1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("addchannels", 1, ["Read1"], channels="z.a", value=0.5),
-                             N("shuffle", 1, ["addchannels1", "Read2"], r="b", b="r", mask_channel="r"), out("shuffle1")])}, sources))
+                             N("shuffle", 1, ["addchannels1", None, "Read2"], route={"r": "B:b", "g": "B:g", "b": "B:r", "a": "B:a"},
+                               mask_channel="r"), out("shuffle1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("copy", 1, ["Read1", "Read2", "Read2"], mask_channel="b"), out("copy1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("colorcorrect", 1, ["Read1", "Read2"], master_saturation=150, mix=0.6), out("colorcorrect1")])}, sources))
     c.append(({"comp": comp([read(1), N("unpremult", 1, ["Read1", None], mix=0.5,

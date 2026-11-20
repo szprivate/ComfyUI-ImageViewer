@@ -173,6 +173,22 @@ const CSS = `
 .cp-panehead button{padding:0 6px;min-width:0}
 .cp-pane > .mg-prop,.cp-pane > .mg-empty,.cp-pane > div{margin-left:4px;margin-right:4px}
 input.cp-newch{flex:1;min-width:0}
+.cp-shuf{padding:4px 6px 2px}.cp-shuf-layers{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;margin-bottom:6px}
+.cp-shuf-lay{display:flex;align-items:center;gap:5px;min-width:0}.cp-shuf-lay.off .cp-shuf-port{opacity:.35}
+.cp-shuf-port{flex:0 0 auto;min-width:34px;font-size:11px;opacity:.8}select.cp-shuf-layer,input.cp-shuf-new{flex:1;min-width:0;width:0;font-size:11px}
+.cp-shuf-grid{border-collapse:collapse;font-size:11px;margin:0 auto}
+.cp-shuf-grid td,.cp-shuf-grid th{padding:1px 0;text-align:center;font-weight:normal}
+.cp-shuf-gh{font-size:10px;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;padding:0 3px!important}
+.cp-shuf-oh{text-align:left!important;font-size:10px;opacity:.6;padding:5px 0 1px!important;border-top:1px solid #3a3a3a}
+.cp-shuf-ch{width:20px;min-width:20px}.cp-shuf-ch.row{width:auto;text-align:right!important;padding-right:6px!important;max-width:60px;overflow:hidden;text-overflow:ellipsis}
+.cp-shuf-ch.unwired{opacity:.4}.cp-shuf-grid .gs{padding-left:7px!important}
+.cp-shuf-ch.t-r{color:#ff6b6b}.cp-shuf-ch.t-g{color:#5fd17a}.cp-shuf-ch.t-b{color:#6aa8ff}.cp-shuf-ch.t-a{color:#d8d8d8}.cp-shuf-ch.t-x{color:#c9a3ff}.cp-shuf-ch.t-k{color:#9a9a9a}
+.cp-shuf-cell{width:20px;height:18px}
+span.cp-shuf-dot{box-sizing:border-box;display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid #5a5a5a;background:#1b1b1b;cursor:pointer;vertical-align:middle}
+span.cp-shuf-dot:hover{border-color:#bbb}span.cp-shuf-dot.on{border-color:transparent}
+span.cp-shuf-dot.on.t-r{background:#e05252}span.cp-shuf-dot.on.t-g{background:#46b864}span.cp-shuf-dot.on.t-b{background:#4a8ef0}
+span.cp-shuf-dot.on.t-a{background:#e6e6e6}span.cp-shuf-dot.on.t-x{background:#a47be6}span.cp-shuf-dot.on.t-k{background:#8a8a8a}
+.cp-shuf-extra{padding:4px 0!important}.cp-shuf-btns{display:flex;gap:4px;justify-content:flex-end;margin-top:6px}
 .mg-prop textarea.cp-text{flex:1;min-width:0;resize:vertical;font:inherit;background:#1b1b1b;color:inherit;border:1px solid #3a3a3a;border-radius:3px;padding:3px 5px}.mg-empty.cp-warn{color:#e0a64a;opacity:.9}.cp-pane > .mg-empty.cp-ai{padding:6px 4px}.mg-prop.cp-btnrow{flex-wrap:wrap;gap:4px}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
@@ -2355,7 +2371,7 @@ export function createCompEditor(host, opts = {}) {
      */
     function channelSelect(n, p, d, value, write) {
         // A map's channels are the map's (STMap, VectorWarp: input 1), everyone else's what comes in.
-        const have = C.channelsAt(st.comp, fid(n.type === "stmap" || n.type === "vectorwarp" ? n.inputs[1] : n.inputs[0]));
+        const have = C.channelsAt(st.comp, fid(n.type === "stmap" || n.type === "vectorwarp" || d.from === "A" ? n.inputs[1] : n.inputs[0]));
         const s = el(doc, "select");
         const add = (v, label, parent = s) => parent.append(new Option(label || v, v));
         const group = (label) => { const g = doc.createElement("optgroup"); g.label = label; s.append(g); return g; };
@@ -2368,6 +2384,7 @@ export function createCompEditor(host, opts = {}) {
                 if (n.type === "shuffle") add("-", "- (not written)", g);
             }
         } else {
+            if (d.none) add(C.CH.SHUFFLE_NONE, "none");
             add("rgba", "rgba (the whole picture)");
             const layers = C.CH.layersOf(have);
             if (d.kind === "target") { const g = group("one channel"); for (const c of C.CH.RGBA) add(c, c, g); for (const c of have) add(c, c, g); }
@@ -2391,6 +2408,130 @@ export function createCompEditor(host, opts = {}) {
             i.focus();
         };
         return s;
+    }
+    /**
+     * Shuffle's routing grid: the layers read (B's in 1 and A's in 2) across the top, a column per channel and
+     * black / white; the layers written (out 1, out 2) down the side, a row per channel. A dot is a wire: a click
+     * routes that source into that output channel, a click on the lit one takes it off (not written: B's passes).
+     */
+    const SHUFFLE_OWN = new Set(["in1", "in2", "out1", "out2", "route"]);
+    function shuffleSection(n) {
+        const P = C.NODE_TYPES.shuffle.params, CHN = C.CH;
+        const val = (p) => (typeof n[p] === "string" ? n[p] : P[p].def);
+        const haveB = C.channelsAt(st.comp, fid(n.inputs[0])), haveA = C.channelsAt(st.comp, fid(n.inputs[1]));
+        const haveOf = (p) => (p === "in2" ? haveA : haveB);
+        const route = CHN.shuffleRoute(n);
+        const chans = (p) => CHN.shuffleLayerChannels(val(p), haveOf(p));
+        const ins = [["in1", "B"], ["in2", "A"]].map(([p, side]) => ({ p, side, ch: chans(p) }));
+        const outs = ["out1", "out2"].map((p) => ({ p, ch: chans(p) }));
+        const clean = () => { for (const k of ["out", "r", "g", "b", "a"]) delete n[k]; };
+        const setLayer = (p, side, v) => mutate(() => {
+            const from = chans(p), to = CHN.shuffleLayerChannels(v, haveOf(p));
+            n.route = CHN.shuffleRemap(CHN.shuffleRoute(n), side, from, to);
+            n[p] = v; clean();
+        }, { structure: false });
+        const setWire = (out, src) => mutate(() => {
+            const r = CHN.shuffleRoute(n);
+            if (r[out] === src) delete r[out]; else r[out] = src;
+            n.route = r; clean();
+        }, { structure: false });
+        const short = (c) => (c.includes(".") ? c.slice(c.indexOf(".") + 1) : c);
+        const tint = (c) => { const k = short(c); return k === "r" || k === "red" ? "r" : k === "g" || k === "green" ? "g" : k === "b" || k === "blue" ? "b" : k === "a" || k === "alpha" ? "a" : "x"; };
+        const says = (src) => (src === "0" ? "black" : src === "1" ? "white" : `${src[0]}'s ${src.slice(2)}`);
+        /** A layer menu: none (in 2 / out 2), rgba, the layers there, a new one typed in. */
+        const layerSel = (p, side) => {
+            const s = el(doc, "select", "cp-shuf-layer");
+            const v = val(p), layers = CHN.layersOf(haveOf(p));
+            if (P[p].none) s.append(new Option("none", CHN.SHUFFLE_NONE));
+            s.append(new Option("rgba", "rgba"));
+            for (const l of layers) s.append(new Option(l, l));
+            if (![...s.options].some((x) => x.value === v)) s.append(new Option(v + (p.startsWith("in") ? " (not there)" : " (new)"), v));
+            s.append(new Option("New layer…", "\u0001"));
+            s.value = v; s.title = P[p].help; s.dataset.param = p;
+            s.onchange = () => {
+                if (s.value !== "\u0001") { setLayer(p, side, s.value); return; }
+                const i = el(doc, "input", "cp-newch cp-shuf-new"); i.type = "text"; i.placeholder = "a layer: mask";
+                const done = (ok) => {
+                    const t = i.value.trim();
+                    if (ok && CHN.isLayer(t) && t !== CHN.SHUFFLE_NONE) setLayer(p, side, t);
+                    else { if (ok && t) toast(`"${t}" is not a layer name: letters, digits and _`, "warn"); renderProps(); }
+                };
+                i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
+                i.onblur = () => done(true);
+                s.replaceWith(i); i.focus();
+            };
+            return s;
+        };
+        const box = el(doc, "div", "cp-shuf");
+        // The four layers, as the grid lays them out: what is read across the top, what is written down the side.
+        const layers = el(doc, "div", "cp-shuf-layers");
+        for (const [p, side, label] of [["in1", "B", "B"], ["in2", "A", "A"], ["out1", "out", "out 1"], ["out2", "out", "out 2"]]) {
+            const cell = el(doc, "label", "cp-shuf-lay" + (p === "in2" && !n.inputs[1] ? " off" : ""));
+            cell.append(el(doc, "span", "cp-shuf-port", label), layerSel(p, side));
+            if (p === "in2" && !n.inputs[1]) cell.title = "Nothing is plugged into input A: its channels read black";
+            layers.append(cell);
+        }
+        box.append(layers);
+        const tab = el(doc, "table", "cp-shuf-grid");
+        const cols = [...ins.flatMap((g) => g.ch.map((c) => ({ src: `${g.side}:${c}`, c, side: g.side }))), { src: "0", c: "0" }, { src: "1", c: "1" }];
+        const groupOf = (col) => col.side || "k";
+        // Row 1: whose columns; row 2: a channel per column.
+        const r1 = el(doc, "tr"), r2 = el(doc, "tr");
+        r1.append(el(doc, "td")); r2.append(el(doc, "td"));
+        for (const g of [...ins.map((x) => ({ key: x.side, ch: x.ch, label: x.side })), { key: "k", ch: ["0", "1"], label: "" }]) {
+            if (!g.ch.length) continue;
+            const td = el(doc, "td", `cp-shuf-gh g-${g.key}`, g.key === "k" ? "" : `${g.label} · ${val(g.key === "B" ? "in1" : "in2")}`);
+            td.colSpan = g.ch.length; r1.append(td);
+            g.ch.forEach((c, i) => {
+                const th = el(doc, "th", `cp-shuf-ch t-${g.key === "k" ? "k" : tint(c)} g-${g.key}` + (i === 0 ? " gs" : ""), short(c));
+                th.title = g.key === "k" ? (c === "0" ? "black" : "white") : `${g.key}'s ${c}`;
+                r2.append(th);
+            });
+        }
+        tab.append(r1, r2);
+        for (const o of outs) {
+            if (!o.ch.length) continue;
+            const hd = el(doc, "tr", "cp-shuf-outhead");
+            const td = el(doc, "td", "cp-shuf-oh", `${o.p === "out1" ? "out 1" : "out 2"} · ${val(o.p)}`); td.colSpan = cols.length + 1;
+            hd.append(td); tab.append(hd);
+            for (const oc of o.ch) {
+                const tr = el(doc, "tr", "cp-shuf-outrow");
+                const lab = el(doc, "th", `cp-shuf-ch row t-${tint(oc)}` + (route[oc] ? "" : " unwired"), short(oc));
+                lab.title = route[oc] ? `${oc} takes ${says(route[oc])}` : `${oc} is not written: B's passes`;
+                tr.append(lab);
+                cols.forEach((col, k) => {
+                    const cell = el(doc, "td", "cp-shuf-cell" + (k === 0 || groupOf(cols[k - 1]) !== groupOf(col) ? " gs" : ""));
+                    const on = route[oc] === col.src;
+                    const d = el(doc, "span", `cp-shuf-dot t-${col.side ? tint(col.c) : "k"}` + (on ? " on" : ""));
+                    d.setAttribute("role", "button");
+                    d.dataset.out = oc; d.dataset.src = col.src;
+                    d.title = on ? `${oc} takes ${says(col.src)}: click to take the wire off (not written)` : `${says(col.src)} into ${oc}`;
+                    d.onclick = () => setWire(oc, col.src);
+                    cell.append(d); tr.append(cell);
+                });
+                tab.append(tr);
+            }
+        }
+        box.append(tab);
+        // Wires the grid does not show (set by hand or by the agent, or left by a layer changed elsewhere) still work: listed.
+        const shownOut = new Set(outs.flatMap((o) => o.ch)), shownSrc = new Set(cols.map((c) => c.src));
+        const extra = Object.entries(route).filter(([k, v]) => !shownOut.has(k) || !shownSrc.has(v));
+        if (extra.length) {
+            const note = el(doc, "div", "mg-empty cp-shuf-extra");
+            note.append(`Also routed: ${extra.map(([k, v]) => `${k} ← ${v}`).join(", ")} `);
+            note.append(btn("Clear these", "Take these wires off", () => mutate(() => {
+                const r = CHN.shuffleRoute(n); for (const [k] of extra) delete r[k]; n.route = r; clean();
+            }, { structure: false })));
+            box.append(note);
+        }
+        const row = el(doc, "div", "cp-shuf-btns");
+        row.append(btn("Straight", "Each output channel from the input channel in the same place (in 1 into out 1, in 2 into out 2)", () => mutate(() => {
+            const r = {};
+            [[outs[0].ch, ins[0]], [outs[1].ch, ins[1]]].forEach(([och, g]) => och.forEach((c, i) => { if (i < g.ch.length) r[c] = `${g.side}:${g.ch[i]}`; }));
+            n.route = r; clean();
+        }, { structure: false })), btn("Clear", "Take every wire off (nothing written: B passes as it is)", () => mutate(() => { n.route = {}; clean(); }, { structure: false })));
+        box.append(row);
+        pane.append(box);
     }
     /** The Roto node's shapes are the viewer's Roto tool's: its options go into this slot, its outlines over the picture. */
     function rotoSection(n) {
@@ -2784,6 +2925,9 @@ export function createCompEditor(host, opts = {}) {
         if (n.type === "colorcorrect") {
             ccSection(pn, t.params);
             if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
+        } else if (n.type === "shuffle") {
+            shuffleSection(pn);
+            for (const [p, d] of ps) if (!SHUFFLE_OWN.has(p) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
         if (WUI.draws(n.type)) WUI.section(wctx(), n);

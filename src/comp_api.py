@@ -49,6 +49,29 @@ NODE_GAP = 60
 # The AI nodes (comp_ai.AI_KINDS): their pictures come from a ComfyUI run, kept as the node's results.
 AI_TYPES = ("ai_matte", "ai_depth", "ai_inpaint", "ai_upscale")
 
+
+def _shuffle_legacy(n, params):
+    """A Shuffle set the older way (``out`` and a pick per r g b a, from input B) as its routing."""
+    if n.get("type") != "shuffle" or not any(k in params for k in ("out", "r", "g", "b", "a")):
+        return params
+    params = dict(params)
+    lay = params.pop("out", None) or n.get("out1") or "rgba"
+    if not M.is_layer(lay):
+        raise CompError("shuffle.out is a layer: rgba, or letters, digits and _")
+    route = dict(params.get("route") or M.shuffle_route(n))
+    for k, dst in zip(M.RGBA, M.layer_channels(lay)):
+        if k not in params:
+            continue
+        v = params.pop(k)
+        if v == "-" or v is None:
+            route.pop(dst, None)
+        else:
+            v = str(v)
+            route[dst] = v if v in ("0", "1") or v[:2] in ("A:", "B:") else "B:" + v
+    params["route"] = route
+    params["out1"] = lay
+    return params
+
 class CompError(ValueError):
     pass
 
@@ -154,6 +177,10 @@ class Comp:
             raise CompError(f"{n['type']} has no parameter {p!r} (it has: {', '.join(t['params']) or 'none'})")
         if d.get("choices") is not None and d["kind"] in ("enum",) and v not in d["choices"]:
             raise CompError(f"{n['type']}.{p} is one of {', '.join(map(str, d['choices']))}")
+        if d["kind"] == "route" and v is not None:
+            if not isinstance(v, dict) or any(not M.is_channel(k) or not M.is_source(x) for k, x in v.items()):
+                raise CompError(f"{n['type']}.{p} is {{output channel: source}}, a source being B:<channel>, A:<channel>, 0 or 1")
+            v = dict(v)
         if d["kind"] in ("num", "int") and v is not None:
             if not M._is_num(v):
                 raise CompError(f"{n['type']}.{p} is a number")
@@ -173,6 +200,7 @@ class Comp:
         for p, d in t["params"].items():
             if d["def"] is not None:
                 n[p] = copy.deepcopy(d["def"])
+        params = _shuffle_legacy(n, params)
         for p, v in params.items():
             n[p] = self._check_param(n, p, v)
         if name:
@@ -215,6 +243,7 @@ class Comp:
     def set(self, nid, **params):
         """Parameters set (a keyed parameter gets a key at frame 0... use :meth:`key` for that; here its keys go)."""
         n = self.node(nid)
+        params = _shuffle_legacy(n, params)
         for p, v in params.items():
             if p in ("name", "disable"):
                 if v in (None, "", False):
