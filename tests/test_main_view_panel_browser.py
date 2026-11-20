@@ -105,6 +105,50 @@ class MainViewPanelTests(unittest.TestCase):
         self.assertAlmostEqual(self.rect(pg, "view")["w"], before["w"], delta=2)
         self.assertEqual(self.errors, [])
 
+    def test_a_panel_dropped_on_the_middle_of_the_main_view_becomes_a_tab_of_it(self):
+        # Sebastian 2026-11-20: "in the main panel it's not possible to drop another panel so that it appears as a tab".
+        pg = self.page()
+        v = self.rect(pg, "view")
+        self.drag(pg, self.header(pg, "#params-panel"), (v["l"] + v["w"] / 2, v["t"] + v["h"] / 2))
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),V,params,col(browser)))")
+        st = pg.evaluate("""()=>{const P=__panel, R=P.dockLayout.root, f=(n)=>n.view?n:(n.children||[]).map(f).find(Boolean);
+            const v=f(R), bar=P.paramsPanel.querySelector(':scope > .panel-titlebar .pt-name');
+            return {behind: P.isViewBehind(), tab: v.tab, front: P.isPanelFront('params'),
+                    shown: getComputedStyle(P.dockViewEl).display, tabs: [...bar.querySelectorAll('.pt-tab')].map(e=>e.textContent),
+                    view: P._dockViewText()}}""")
+        self.assertTrue(st["behind"])
+        self.assertTrue(st["front"])
+        self.assertEqual(st["shown"], "none")
+        self.assertEqual(st["tabs"], [st["view"], "Parameters"])
+        p = self.rect(pg, "#params-panel")
+        self.assertAlmostEqual(p["w"], v["w"], delta=4)      # it has the main view's room
+        self.shot(pg, "5-parameters-as-a-tab-of-the-main-view")
+        # the main view's tab brings it back; its title bar now names both
+        pg.evaluate("()=>__panel.paramsPanel.querySelector('.pt-tab-view').click()")
+        pg.wait_for_timeout(100)
+        st = pg.evaluate("""()=>{const P=__panel; return {behind: P.isViewBehind(), front: P.isPanelFront('params'),
+            tabs: [...P.dockViewEl.querySelectorAll(':scope > .panel-titlebar .pt-tab')].map(e=>e.textContent)}}""")
+        self.assertFalse(st["behind"])
+        self.assertFalse(st["front"])
+        self.assertEqual(len(st["tabs"]), 2)
+        self.assertAlmostEqual(self.rect(pg, "view")["w"], v["w"], delta=4)
+        self.shot(pg, "6-the-main-view-in-front-of-its-tab")
+        # picking a tab while a panel is in front brings the main view up
+        pg.evaluate("()=>__panel.dockTabFront('params')")
+        self.assertTrue(pg.evaluate("()=>__panel.isViewBehind()"))
+        pg.evaluate("""()=>{const P=__panel; P.allTabs.pic_c=[{path:'D:/c.png',name:'c.png',external:true}]; P.tabLabels.pic_c='pic_c';
+            P.tabOrder=[...(P.tabOrder||[]),'pic_c']; P.switchTab('pic_c');}""")
+        self.assertFalse(pg.evaluate("()=>__panel.isViewBehind()"))
+        self.assertIn("pic_c", pg.evaluate("()=>[...__panel.dockViewEl.querySelectorAll('.pt-tab')].map(e=>e.textContent)"))
+        # dragged out again, the main view is alone
+        m = self.rect(pg, "#dock-root")
+        pg.evaluate("()=>__panel.dockTabFront('params')")
+        on = self.rect(pg, "#params-panel > .panel-titlebar .pt-tab.on")      # its own tab is what a drag holds
+        self.drag(pg, (on["l"] + on["w"] / 2, on["t"] + on["h"] / 2), (m["r"] - 4, m["t"] + m["h"] / 2))
+        self.assertFalse(pg.evaluate("()=>__panel.isViewBehind()"))
+        self.assertEqual(pg.evaluate("()=>__panel.dockViewEl.querySelector('.pt-name').textContent"), "pic_c")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

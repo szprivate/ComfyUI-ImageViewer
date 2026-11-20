@@ -378,36 +378,43 @@ export const DockMixin = {
     },
 
     // The title bar of a panel that shares its place names every panel there:
-    // the one in front as it is, the others as tabs to press.
+    // the one in front as it is, the others as tabs to press. The main view can be one of them.
     _syncDockTabs() {
         DT.walk(this.dockLayout.root, (entry, parent) => {
-            if (!DT.isPanel(entry) || !parent) return;
-            const list = parent.children;
-            const el = this._dockPanelEl(entry.id);
+            if (!DT.isTabbable(entry) || !parent) return;
+            const isView = DT.isView(entry);
+            const el = isView ? this.dockViewEl : this._dockPanelEl(entry.id);
             const bar = el && el.querySelector(":scope > .panel-titlebar");
             const name = bar && bar.querySelector(":scope > .pt-name");
             if (!name) return;
-            const mates = entry.tab ? list.filter((p) => DT.isPanel(p) && p.tab === entry.tab && !p.hidden) : [];
+            const mates = DT.tabMates(parent.children, entry.tab).filter((p) => !p.hidden);
             if (entry.hidden || entry.behind || mates.length < 2) {
-                if (name._tabs) { name._tabs = ""; name.classList.remove("pt-tabs"); name.textContent = DOCK_PANELS[entry.id].label; }
+                if (name._tabs) {
+                    name._tabs = ""; name.classList.remove("pt-tabs");
+                    name.textContent = isView ? this._dockViewText() : DOCK_PANELS[entry.id].label;
+                }
                 return;
             }
-            const sig = mates.map((p) => p.id).join(",") + "|" + entry.id;
+            const label = (p) => (DT.isView(p) ? this._dockViewText() : DOCK_PANELS[p.id].label);
+            const sig = mates.map(label).join(",") + "|" + label(entry);
             if (name._tabs === sig) return;
             name._tabs = sig;
             name.classList.add("pt-tabs");
             const doc = name.ownerDocument;
             name.replaceChildren(...mates.map((p) => {
-                const front = p.id === entry.id;
+                const front = p === entry;
                 // The front one is part of the bar (it is what a drag takes
                 // hold of); the others are buttons, and a press brings them up.
                 const tab = doc.createElement(front ? "span" : "button");
-                tab.className = "pt-tab" + (front ? " on" : "");
-                tab.textContent = DOCK_PANELS[p.id].label;
+                tab.className = "pt-tab" + (front ? " on" : "") + (DT.isView(p) ? " pt-tab-view" : "");
+                tab.textContent = label(p);
                 if (!front) {
-                    tab.title = "Show " + DOCK_PANELS[p.id].label;
+                    tab.title = DT.isView(p) ? "Show the main view" : "Show " + DOCK_PANELS[p.id].label;
                     tab.addEventListener("pointerdown", (e) => e.stopPropagation());
-                    tab.addEventListener("click", (e) => { e.stopPropagation(); this.dockTabFront(p.id); });
+                    tab.addEventListener("click", (e) => {
+                        e.stopPropagation();
+                        if (DT.isView(p)) this.dockViewFront(); else this.dockTabFront(p.id);
+                    });
                 }
                 return tab;
             }));
@@ -564,7 +571,27 @@ export const DockMixin = {
 
     _dockTabMates(found) {
         const tab = found.entry.tab;
-        return tab ? found.list.filter((p) => DT.isPanel(p) && p.tab === tab) : [found.entry];
+        return tab ? DT.tabMates(found.list, tab) : [found.entry];
+    },
+
+    /** Is the main view behind a panel's tab (Sebastian 2026-11-20: panels can be tabs of the main view)? */
+    isViewBehind() {
+        const v = this.dockLayout && DT.findView(this.dockLayout.root);
+        return !!(v && v.node.tab && v.node.behind);
+    },
+
+    /** Bring the main view to the front of the place it shares with panels as tabs. */
+    dockViewFront() {
+        const v = this.dockLayout && DT.findView(this.dockLayout.root);
+        if (!v || !v.parent || !v.node.tab || !v.node.behind) return false;
+        const mates = DT.tabMates(v.parent.children, v.node.tab);
+        const was = mates.find((p) => !p.hidden && !p.behind && p !== v.node);
+        if (was && was.size > 0) v.node.size = was.size;
+        for (const p of mates) p.behind = p !== v.node;
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        if (this.updateTransform) { try { this.updateTransform(); } catch (_) { /* drawn on the next change */ } }
+        return true;
     },
 
     // One entry takes another's room in a place (a tab coming to the front).
@@ -586,7 +613,8 @@ export const DockMixin = {
 
     /** Put a panel into the place of another, as a tab beside it, in front. */
     dockPanelAsTab(id, ontoId) {
-        if (id === ontoId || !DOCK_PANELS[id] || !DT.locate(this.dockLayout.root, ontoId)) return;
+        const onView = ontoId === "view";
+        if (id === ontoId || !DOCK_PANELS[id] || !(onView ? DT.findView(this.dockLayout.root) : DT.locate(this.dockLayout.root, ontoId))) return;
         const L = this.dockLayout;
         const entry = DT.detach(L.root, id);
         if (!entry) return;
@@ -960,9 +988,18 @@ export const DockMixin = {
         const plate = this._mmPlateOverlayShow ? this._mmPlateOverlayShow() : false;
         if (!name) return;
         const label = this._dockViewLabel(this.activeTab);
-        const text = plate ? `Plate · ${label || "3D"}` : label ? label : "Main view";
-        if (name.textContent !== text) name.textContent = text;
         name.title = label ? `Main view: ${label}` : "Main view";
+        // Sharing its place with panels as tabs: the tabs carry the name (the label changes with the tab shown).
+        if (name._tabs) { this._syncDockTabs(); return; }
+        const text = this._dockViewText(plate);
+        if (name.textContent !== text) name.textContent = text;
+    },
+
+    /** What the main view is called: the tab it shows. */
+    _dockViewText(plate) {
+        if (plate === undefined) plate = !!(this._mmPlateMainShown && this._mmPlateMainShown());
+        const label = this._dockViewLabel(this.activeTab);
+        return plate ? `Plate · ${label || "3D"}` : label ? label : "Main view";
     },
 
     /** The main view's switch: every open tab, the one shown ticked; then the panels it can trade places with. */
@@ -1026,7 +1063,7 @@ export const DockMixin = {
     dockViewSwap(panelId) {
         const L = this.dockLayout;
         const p = DT.locate(L.root, _dockId(panelId)), v = DT.findView(L.root);
-        if (!p || !v || !p.parent || !v.parent || p.node.tab || p.node.hidden) return false;
+        if (!p || !v || !p.parent || !v.parent || p.node.tab || v.node.tab || p.node.hidden) return false;
         const room = (n) => ({ px: n.px, size: n.size });
         const rp = room(p.node), rv = room(v.node);
         p.parent.children[p.index] = v.node;
@@ -1169,6 +1206,7 @@ export const DockMixin = {
     /** One panel over the whole viewer between its tab bar and its transport, until pressed again (not saved). */
     dockToggleMaximized(id, on) {
         const want = on === undefined ? this._dockMaxId !== id : !!on;
+        if (want && id === VIEW_ID && this.isViewBehind()) this.dockViewFront();
         if (want && id !== VIEW_ID) {
             const e = this._dockEntryOf(id);
             if (!e || e.hidden) return;
@@ -1294,7 +1332,7 @@ export const DockMixin = {
             if (target.kind === "edge") return this.dockViewBeside(target.ref, target.edge);
             return false;
         }
-        if (target.kind === "tab") { this.dockPanelAsTab(id, target.ref.id); return true; }
+        if (target.kind === "tab") { this.dockPanelAsTab(id, target.ref.kind === "view" ? "view" : target.ref.id); return true; }
         if (target.kind === "edge") return this.dockPanelBeside(id, target.ref, target.edge);
         return false;
     },
@@ -1383,7 +1421,7 @@ export const DockMixin = {
      *
      * Along the whole area's edge: beside everything. Over a docked panel: its middle means INTO its place, as a
      * tab; nearer an edge, beside it on that edge (the place splits in two). Over the outer part of the picture:
-     * beside the picture on that side. The middle of the picture is not a drop.
+     * beside the picture on that side; its middle: into the main view's place, as a tab.
      */
     _dockDropTarget(x, y, dragId) {
         const R = this._dockRects;
@@ -1401,8 +1439,9 @@ export const DockMixin = {
             if (!inside(p.r)) continue;
             if (p.id === dragId) return null;
             const fx = (x - p.r.left) / Math.max(1, p.r.width), fy = (y - p.r.top) / Math.max(1, p.r.height);
-            // The main view dropped on a panel's middle trades places with it (not with one of a tab group).
-            const tabbed = dragId === VIEW_ID && DT.locate(this.dockLayout.root, p.id)?.node?.tab;
+            // The main view dropped on a panel's middle trades places with it (not with one of a tab group, nor while
+            // it is a tab itself).
+            const tabbed = dragId === VIEW_ID && (DT.locate(this.dockLayout.root, p.id)?.node?.tab || DT.findView(this.dockLayout.root)?.node?.tab);
             if (fx > 0.3 && fx < 0.7 && fy > 0.3 && fy < 0.7 && !tabbed) return { kind: "tab", ref: p };
             const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
             const edge = DT.EDGES.reduce((a, k) => (d[k] < d[a] ? k : a), "left");
@@ -1419,6 +1458,8 @@ export const DockMixin = {
             else if (fy >= 1 - EDGE_ZONE / 2) edge = "bottom";
             else if (fy <= EDGE_ZONE / 2) edge = "top";
             if (edge) return { kind: "edge", ref: { kind: "view" }, edge, r: v, side: edge };
+            // The middle of the picture: into its place, as a tab of the main view.
+            return { kind: "tab", ref: { kind: "view", r: v }, r: v };
         }
         return null;
     },

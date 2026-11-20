@@ -14,7 +14,8 @@
 // "right", "bottom"); a panel that comes back to where it shipped goes there.
 //
 // Tabs are as they were in a rail: children of ONE split that carry the same `tab`, next to each other, one of the
-// open ones in front (`behind` on the rest).
+// open ones in front (`behind` on the rest). The view can be one of them (Sebastian 2026-11-20: a panel dropped on
+// the main view's middle becomes a tab of it); it is never hidden, so it is always one of the open ones.
 
 export const LAYOUT_VERSION = 2;
 export const EDGES = ["left", "right", "top", "bottom"];
@@ -22,6 +23,10 @@ export const EDGES = ["left", "right", "top", "bottom"];
 export const isSplit = (n) => !!(n && Array.isArray(n.children) && (n.split === "row" || n.split === "col"));
 export const isView = (n) => !!(n && n.view === true);
 export const isPanel = (n) => !!(n && typeof n.id === "string" && !isSplit(n) && !isView(n));
+/** Can the node be a member of a tab group: a panel, or the view. */
+export const isTabbable = (n) => isPanel(n) || isView(n);
+/** The members of tab group `tab` among a split's children (none for no tab). */
+export const tabMates = (list, tab) => (tab ? list.filter((p) => isTabbable(p) && p.tab === tab) : []);
 /** The split direction an edge belongs to: beside = a row, above / below = a column. */
 export const edgeDir = (edge) => (edge === "left" || edge === "right") ? "row" : "col";
 const before = (edge) => edge === "left" || edge === "top";
@@ -128,6 +133,7 @@ export function tidy(root, known = () => true) {
             if (views++) return null;
             const v = { view: true };
             if (n.size > 0) v.size = n.size;
+            if (typeof n.tab === "string" && n.tab) { v.tab = n.tab; v.behind = !!n.behind; }
             return v;
         }
         if (isPanel(n)) {
@@ -184,7 +190,10 @@ export function tidy(root, known = () => true) {
     // The view's chain never has a fixed size.
     const up = ancestors(root, findView(root).node) || [];
     for (const s of up) delete s.px;
-    delete findView(root).node.px;
+    const vat = findView(root);
+    delete vat.node.px;
+    // ...nor do the panels that share its place as tabs: they take the room the view has.
+    if (vat.node.tab && vat.parent) for (const p of tabMates(vat.parent.children, vat.node.tab)) delete p.px;
     return root;
 }
 
@@ -193,23 +202,27 @@ export function regroupTabs(split) {
     const list = split.children;
     const groups = new Map();
     for (const p of list) {
-        if (!isPanel(p)) continue;
-        if (typeof p.tab !== "string" || !p.tab) { delete p.tab; p.behind = false; continue; }
+        if (!isTabbable(p)) continue;
+        if (typeof p.tab !== "string" || !p.tab) { delete p.tab; if (isView(p)) delete p.behind; else p.behind = false; continue; }
         if (!groups.has(p.tab)) groups.set(p.tab, []);
         groups.get(p.tab).push(p);
     }
     for (const members of groups.values()) {
-        if (members.length < 2) { delete members[0].tab; members[0].behind = false; continue; }
+        if (members.length < 2) {
+            delete members[0].tab;
+            if (isView(members[0])) delete members[0].behind; else members[0].behind = false;
+            continue;
+        }
         const open = members.filter((p) => !p.hidden);
         const front = open.find((p) => !p.behind) || open[0];
         for (const p of members) p.behind = p !== front;
     }
     const out = [], done = new Set();
     for (const p of list) {
-        if (!isPanel(p) || !p.tab) { out.push(p); continue; }
+        if (!isTabbable(p) || !p.tab) { out.push(p); continue; }
         if (done.has(p.tab)) continue;
         done.add(p.tab);
-        out.push(...list.filter((q) => isPanel(q) && q.tab === p.tab));
+        out.push(...tabMates(list, p.tab));
     }
     split.children = out;
 }
@@ -222,15 +235,16 @@ export function detach(root, match) {
     if (!at || !at.parent) return null;
     at.parent.children.splice(at.index, 1);
     const n = at.node;
-    if (isPanel(n)) {
+    if (isTabbable(n)) {
         if (n.tab) {
-            const mates = at.parent.children.filter((p) => isPanel(p) && p.tab === n.tab);
+            const mates = tabMates(at.parent.children, n.tab);
             if (!n.behind && !n.hidden) {
                 const next = mates.find((p) => !p.hidden);
                 if (next) { next.behind = false; if (n.size > 0) next.size = n.size; if (n.px > 0) next.px = n.px; }
             }
         }
-        delete n.tab; n.behind = false;
+        delete n.tab;
+        if (isView(n)) delete n.behind; else n.behind = false;
     }
     delete n.px; delete n.size;
     return n;
@@ -255,8 +269,8 @@ export function insertBeside(root, ref, edge, node, px = 300) {
         const list = at.parent.children;
         // Not into the middle of a tab group: beside the group as a whole.
         let i = at.index;
-        if (isPanel(ref) && ref.tab) {
-            const idx = list.map((p, k) => (isPanel(p) && p.tab === ref.tab ? k : -1)).filter((k) => k >= 0);
+        if (isTabbable(ref) && ref.tab) {
+            const idx = list.map((p, k) => (isTabbable(p) && p.tab === ref.tab ? k : -1)).filter((k) => k >= 0);
             i = before(edge) ? idx[0] : idx[idx.length - 1];
         }
         sizeNew(list);
@@ -272,14 +286,14 @@ export function insertBeside(root, ref, edge, node, px = 300) {
     const holder = at.parent;
     const wrap = { split: dir, children: [] };
     let group = [ref];
-    if (holder && isPanel(ref) && ref.tab) group = holder.children.filter((p) => isPanel(p) && p.tab === ref.tab);
+    if (holder && isTabbable(ref) && ref.tab) group = tabMates(holder.children, ref.tab);
     const first = holder ? holder.children.indexOf(group[0]) : -1;
     const room = group.find((p) => !p.behind && !p.hidden) || ref;
     if (room.px > 0) wrap.px = room.px;
     if (room.size > 0) wrap.size = room.size;
     for (const g of group) { delete g.px; delete g.size; }
     sizeNew(group);
-    if (!containsView(ref)) { delete node.px; node.size = 1; }
+    if (!group.some(containsView)) { delete node.px; node.size = 1; }
     for (const g of group) if (!containsView(g)) g.size = 1;
     wrap.children = before(edge) ? [node, ...group] : [...group, node];
     if (!holder) {
@@ -292,21 +306,21 @@ export function insertBeside(root, ref, edge, node, px = 300) {
     return root;
 }
 
-/** Put a panel into the place of another, as a tab beside it, in front. */
+/** Put a panel into the place of another (a panel id, or the view node), as a tab beside it, in front. */
 export function insertAsTab(root, ontoId, node) {
-    const at = locate(root, ontoId);
-    if (!at || !at.parent || !isPanel(at.node)) return root;
+    const at = ontoId === "view" || isView(ontoId) ? findView(root) : locate(root, ontoId);
+    if (!at || !at.parent || !isTabbable(at.node)) return root;
     const onto = at.node;
-    if (!onto.tab) onto.tab = "t" + onto.id;
+    if (!onto.tab) onto.tab = "t" + (isView(onto) ? "view" : onto.id);
     node.tab = onto.tab;
     node.hidden = false;
     if (onto.px > 0) node.px = onto.px; else delete node.px;
     if (onto.size > 0) node.size = onto.size; else delete node.size;
     const list = at.parent.children;
     let i = at.index;
-    list.forEach((p, k) => { if (isPanel(p) && p.tab === node.tab) i = k; });
+    list.forEach((p, k) => { if (isTabbable(p) && p.tab === node.tab) i = k; });
     list.splice(i + 1, 0, node);
-    for (const p of list) if (isPanel(p) && p.tab === node.tab) p.behind = p !== node;
+    for (const p of list) if (isTabbable(p) && p.tab === node.tab) p.behind = p !== node;
     return root;
 }
 
@@ -347,7 +361,7 @@ export function isRailLayout(data) {
 
 /** A deep copy that keeps only the fields a layout is made of. */
 export function cleanCopy(n) {
-    if (isView(n)) return { view: true, ...(n.size > 0 ? { size: n.size } : {}) };
+    if (isView(n)) return { view: true, ...(n.size > 0 ? { size: n.size } : {}), ...(n.tab ? { tab: n.tab, behind: !!n.behind } : {}) };
     if (isSplit(n)) {
         return { split: n.split, children: n.children.map(cleanCopy).filter(Boolean),
                  ...(n.size > 0 ? { size: n.size } : {}), ...(n.px > 0 ? { px: Math.round(n.px) } : {}),
