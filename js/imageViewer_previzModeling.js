@@ -9,6 +9,7 @@
 import * as S from "./imageViewer_scene3d.js";
 import * as MD from "./imageViewer_meshData.js";
 import * as MO from "./imageViewer_meshOps.js";
+import * as MX from "./imageViewer_meshModel.js";
 import { notice } from "./imageViewer_exportUI.js";
 
 const SHAPES = [
@@ -156,7 +157,8 @@ export const PrevizModelingMixin = {
         const o = { ...view.meshEditOptions(), ...(opts || {}) };
         const sel = view.meshEditSelection();
         const work = MD.unpack(item.mesh);
-        if (!sel.ids.length && name !== "fill" && name !== "weld") {
+        const whole = ["fill", "weld", "subdivide", "mirror", "symmetrize"].includes(name);
+        if (!sel.ids.length && !whole) {
             notice("info", "Nothing selected", "Pick vertices, edges or faces first.");
             return false;
         }
@@ -198,6 +200,13 @@ export const PrevizModelingMixin = {
             if (!res.merged) { notice("info", "Nothing welded", "No vertices lie that close together."); return false; }
             notice("info", "Welded", `${res.merged} vertices merged.`);
             mode = "vertex";
+        } else if (name === "subdivide") {
+            res = { mesh: MX.subdivide(work, 1), ids: [] };
+            mode = sel.mode;
+        } else if (name === "mirror" || name === "symmetrize") {
+            res = { mesh: MX.mirrorMesh(work, o.mirrorAxis, { symmetrize: name === "symmetrize", side: o.mirrorSide,
+                                                            tol: view.meshEditLocalLength(o.weld) }), ids: [] };
+            if (!res.mesh.f.length) { notice("info", "Nothing left", "No face lies wholly on the side kept."); return false; }
         } else if (name === "flip") {
             const faces = MD.selFaces(work, sel.mode, sel.ids);
             res = { mesh: MD.flipFaces(work, faces), ids: sel.ids };
@@ -243,6 +252,96 @@ export const PrevizModelingMixin = {
         const on = !view.meshEditOptions().soft;
         view.setMeshEditOptions({ soft: on });
         notice("info", on ? "Soft selection on" : "Soft selection off", on ? "Moves now carry what lies near the selection along." : "");
+    },
+
+    // ── Whole meshes: subdivision, UVs, booleans ────────────────────────────
+
+    _previzMeshItems(ids = null) {
+        const scene = this.previzScene();
+        if (!scene) return [];
+        return (ids || this.previzSelectedIds()).map((id) => S.itemById(scene, id)).filter((it) => it && it.kind === "mesh");
+    },
+
+    /** The level the selected meshes are drawn subdivided at (the cage is kept and edited). */
+    previzMeshSetSubdiv(level, ids = null) {
+        const list = this._previzMeshItems(ids);
+        if (!list.length) return false;
+        const n = MX.cleanSubdiv(level);
+        this.previzSnapshot(`subdivision ${n}`);
+        for (const it of list) { if (n) it.subdiv = n; else delete it.subdiv; }
+        this.previzChanged({ reload: true });
+        return true;
+    },
+
+    /** Make the drawn subdivision the mesh itself: the cage is replaced, the level goes back to 0. */
+    async previzMeshApplySubdiv(ids = null) {
+        const list = this._previzMeshItems(ids).filter((it) => MX.cleanSubdiv(it.subdiv));
+        if (!list.length) { notice("info", "Nothing to apply", "Set a subdivision level on a mesh first."); return false; }
+        const made = list.map((it) => MD.cleanMesh(MD.pack(MX.subdivide(MD.unpack(it.mesh), MX.cleanSubdiv(it.subdiv)))));
+        if (made.some((m) => !m)) { notice("info", "Too big", "The subdivided mesh would have more vertices than a mesh may hold."); return false; }
+        this.previzSnapshot("apply subdivision");
+        list.forEach((it, k) => { it.mesh = made[k]; it.smooth = true; delete it.subdiv; });
+        await this.previzChanged({ reload: true });
+        return true;
+    },
+
+    /** A UV projection on the selected meshes ({type, axis, scale, checker}, merged); type "none" takes it off. */
+    previzMeshSetUv(patch, ids = null) {
+        const list = this._previzMeshItems(ids);
+        if (!list.length) return false;
+        this.previzSnapshot("UVs");
+        for (const it of list) {
+            const next = MX.cleanUv({ ...(it.uv || { type: "box" }), ...(patch || {}) });
+            if (next) it.uv = next; else delete it.uv;
+        }
+        this.previzChanged({ reload: true });
+        return true;
+    },
+
+    /**
+     * Union, subtract or intersect: the first selected mesh keeps the result,
+     * the others are hidden (their own meshes are left as they were). Shapes
+     * are converted first. One undo step.
+     */
+    async previzMeshBoolean(op = "union", ids = null) {
+        const scene = this.previzScene();
+        const view = this._modelView();
+        if (!scene || !view) return false;
+        if (!MX.BOOLEAN_OPS.includes(op)) return false;
+        let list = (ids || this.previzSelectedIds()).map((id) => S.itemById(scene, id)).filter(Boolean);
+        list = list.filter((it) => it.kind === "mesh" || it.kind === "primitive");
+        if (list.length < 2) {
+            notice("info", "Select two meshes", "Select the mesh to keep, then the one(s) to " + (op === "subtract" ? "take from it" : op === "intersect" ? "intersect it with" : "join to it") + ".");
+            return false;
+        }
+        if (view.meshEditing()) view.meshEditEnd();
+        this.previzSnapshot(`${op} ${list[0].name}`);
+        let converted = false;
+        for (const it of list) if (it.kind === "primitive") { S.primitiveToMesh(it); converted = true; }
+        if (converted) await this.previzChanged({ reload: true, snapshot: false });
+        const [a, ...rest] = list;
+        let mesh = MD.unpack(a.mesh);
+        for (const b of rest) {
+            const m = view.meshMatrixBetween(b.id, a.id);
+            if (!m) continue;
+            mesh = MX.booleanMesh(mesh, MX.transformMesh(MD.unpack(b.mesh), m), op);
+        }
+        mesh = MX.dissolveCoplanar(mesh);
+        const packed = MD.cleanMesh(MD.pack(mesh));
+        if (!packed) {
+            notice("info", `Nothing left`, `The ${op} leaves no faces; nothing was changed.`);
+            const state = this._undoState();
+            if (state.past.length) this.previzUndo();
+            return false;
+        }
+        a.mesh = packed;
+        a.smooth = false;
+        for (const b of rest) b.visible = false;
+        this._previzSelection = a.id;
+        this._previzAlso = new Set();
+        await this.previzChanged({ reload: true });
+        notice("info", op[0].toUpperCase() + op.slice(1), `${rest.map((b) => b.name).join(", ")} ${rest.length > 1 ? "are" : "is"} hidden now.`);
+        return true;
     },
 
     /** Smooth or flat shading on the selected meshes. */
@@ -296,6 +395,26 @@ export const PrevizModelingMixin = {
             op("Flip normals", "flip"),
             op("Delete", "delete", "MeshDelete"),
             "-",
+            op("Subdivide", "subdivide"),
+            op("Mirror", "mirror", "MeshMirror"),
+            op("Symmetrize", "symmetrize"),
+            { label: "Mirror axis", disabled: !view, sub: () => MX.AXES.map((a) => ({ label: tick(o.mirrorAxis === a, a.toUpperCase()),
+                run: () => view.setMeshEditOptions({ mirrorAxis: a }) })) },
+            "-",
+            { label: "Subdivision level", disabled: kind !== "mesh", title: "Select a mesh",
+              sub: () => [0, 1, 2, 3].map((n) => ({ label: tick(((item && item.subdiv) || 0) === n, n ? `${n}` : "Off"), run: () => this.previzMeshSetSubdiv(n) })) },
+            { label: "Apply subdivision", disabled: !(kind === "mesh" && item.subdiv), title: "Set a level first",
+              run: () => this.previzMeshApplySubdiv() },
+            { label: "UVs", disabled: kind !== "mesh", title: "Select a mesh", sub: () => [
+                ...MX.UV_TYPES.map((t) => ({ label: tick(((item && item.uv && item.uv.type) || "none") === t, t === "none" ? "None" : t[0].toUpperCase() + t.slice(1)),
+                    run: () => this.previzMeshSetUv({ type: t }) })),
+                "-",
+                { label: tick(!!(item && item.uv && item.uv.checker), "Show checker"), disabled: !(item && item.uv),
+                  run: () => this.previzMeshSetUv({ checker: !(item.uv && item.uv.checker) }) },
+            ] },
+            { label: "Boolean", sub: () => MX.BOOLEAN_OPS.map((b) => ({ label: b[0].toUpperCase() + b.slice(1),
+                title: "The first selected keeps the result", run: () => this.previzMeshBoolean(b) })) },
+            "-",
             { label: tick(o.individual, "Each face on its own"), disabled: !view,
               run: () => view.setMeshEditOptions({ individual: !o.individual }) },
             { label: tick(o.soft, "Soft selection"), cmd: "MeshSoft", disabled: !view,
@@ -331,6 +450,26 @@ export const PrevizModelingMixin = {
         sel.onchange = () => this.previzMeshSetSmooth(sel.value === "smooth");
         row.append(tag, sel);
         t.append(row);
+        const pick = (label, cls, options, value, change) => {
+            const r = doc.createElement("div");
+            r.className = "cb-row";
+            const s2 = doc.createElement("select");
+            s2.className = `cb-val cb-sel ${cls}`;
+            for (const [v, l] of options) s2.append(Object.assign(doc.createElement("option"), { value: v, textContent: l }));
+            s2.value = value;
+            s2.onchange = () => change(s2.value);
+            r.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: label }), s2);
+            t.append(r);
+        };
+        pick("Subdivision", "cb-mesh-subdiv", [["0", "off"], ["1", "1"], ["2", "2"], ["3", "3"]], String(item.subdiv || 0),
+             (v) => this.previzMeshSetSubdiv(Number(v)));
+        pick("UVs", "cb-mesh-uv", MX.UV_TYPES.map((u) => [u, u]), (item.uv && item.uv.type) || "none",
+             (v) => this.previzMeshSetUv({ type: v }));
+        if (item.uv) {
+            pick("UV axis", "cb-mesh-uvaxis", MX.AXES.map((a) => [a, a.toUpperCase()]), item.uv.axis, (v) => this.previzMeshSetUv({ axis: v }));
+            pick("Checker", "cb-mesh-checker", [["off", "off"], ["on", "on"]], item.uv.checker ? "on" : "off",
+                 (v) => this.previzMeshSetUv({ checker: v === "on" }));
+        }
         const edit = doc.createElement("button");
         edit.type = "button";
         edit.className = "previz-btn cb-mesh-edit";

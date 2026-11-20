@@ -22,6 +22,7 @@
 // Clean-room: written from how polygon editing behaves, no code of any program.
 import * as MD from "./imageViewer_meshData.js";
 import * as MO from "./imageViewer_meshOps.js";
+import * as MX from "./imageViewer_meshModel.js";
 
 const STORE = "imageviewer.viewer.meshEdit";
 const PICK_PX = 14;             // a vertex within this many pixels of a click is taken
@@ -46,6 +47,8 @@ export function cleanMeshEditOptions(raw) {
         weld: num(o.weld, 0.001, 0, 1000),
         soft: o.soft === true,
         softRadius: num(o.softRadius, 0.5, 0, 1000),
+        mirrorAxis: ["x", "y", "z"].includes(o.mirrorAxis) ? o.mirrorAxis : "x",
+        mirrorSide: o.mirrorSide === -1 ? -1 : 1,
     };
 }
 
@@ -74,12 +77,13 @@ export const View3DMeshEditMixin = {
 
     _buildMesh(entry, item) {
         const { THREE } = this.libs;
-        const work = MD.unpack(item.mesh);
-        const geometry = this._meshGeometry(work, !!item.smooth);
+        const geometry = this._meshItemGeometry(item);
+        const uv = MX.cleanUv(item.uv);
         const material = new THREE.MeshStandardMaterial({
             color: new THREE.Color(item.color || "#9a9a9a"), roughness: 0.85, metalness: 0,
             // An open mesh (a plane, a box with a face taken out) is looked into from behind as often as not.
             side: THREE.DoubleSide,
+            map: uv && uv.checker ? this._meCheckerTexture() : null,
         });
         const mesh = new THREE.Mesh(geometry, material);
         mesh.name = "editmesh";
@@ -92,6 +96,7 @@ export const View3DMeshEditMixin = {
         entry.color = item.color;
         entry.meshRef = item.mesh;
         entry.smooth = !!item.smooth;
+        entry.meshLook = this._meshLookKey(item);
         entry.key = "mesh";
         entry.stats = this._statsOf(group, "mesh");
         this._keepOriginal(mesh, material);
@@ -101,15 +106,76 @@ export const View3DMeshEditMixin = {
 
     /** True when the item's mesh or shading is not what is drawn any more. */
     _meshStale(entry, item) {
-        return entry.meshRef !== item.mesh || entry.smooth !== !!item.smooth;
+        return entry.meshRef !== item.mesh || entry.smooth !== !!item.smooth || entry.meshLook !== this._meshLookKey(item);
     },
 
-    _meshGeometry(work, smooth) {
+    /** Subdivision level and UVs as drawn; editing shows the cage (level 0), so that counts too. */
+    _meshLookKey(item) {
+        const cage = !!(this._me && this._me.id === item.id);
+        return JSON.stringify([cage ? 0 : MX.cleanSubdiv(item.subdiv), MX.cleanUv(item.uv)]);
+    },
+
+    /** What an item draws: its mesh, subdivided unless it is being edited, with UVs when it has a projection. */
+    _meshItemGeometry(item) {
+        let work = MD.unpack(item.mesh);
+        const editing = !!(this._me && this._me.id === item.id);
+        const level = editing ? 0 : MX.cleanSubdiv(item.subdiv);
+        if (level) work = MX.subdivide(work, level);
+        return this._meshGeometry(work, !!item.smooth || level > 0, item.uv);
+    },
+
+    /** Swap the drawn geometry of a mesh item for what it should show now (edit mode on / off). */
+    _meshRefresh(entry) {
+        if (!entry || !entry.editMesh || !entry.item) return;
+        const key = this._meshLookKey(entry.item);
+        if (entry.meshLook === key) return;
+        const old = entry.editMesh.geometry;
+        entry.editMesh.geometry = this._meshItemGeometry(entry.item);
+        if (old) old.dispose();
+        entry.meshLook = key;
+        this.requestRender();
+    },
+
+    /**
+     * The 4x4 (column-major numbers) that takes the mesh space of item `from`
+     * into the mesh space of item `to`: both drawn where they are now.
+     */
+    meshMatrixBetween(from, to) {
+        const a = this._entries.get(from), b = this._entries.get(to);
+        if (!a || !b || !a.object || !b.object) return null;
+        const ha = this._bodyOf(a), hb = this._bodyOf(b);
+        ha.updateMatrixWorld(true); hb.updateMatrixWorld(true);
+        return hb.matrixWorld.clone().invert().multiply(ha.matrixWorld).elements.slice();
+    },
+
+    /** A grey checker for looking at UVs, made once per view. */
+    _meCheckerTexture() {
+        if (this._meChecker) return this._meChecker;
+        const { THREE } = this.libs;
+        const c = this.doc.createElement("canvas");
+        c.width = c.height = 256;
+        const g = c.getContext("2d");
+        const n = 8, w = 256 / n;
+        for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+            g.fillStyle = (i + j) % 2 ? "#5a5a5a" : "#d8d8d8";
+            g.fillRect(i * w, j * w, w, w);
+        }
+        g.fillStyle = "#e0702a";
+        g.fillRect(0, 0, w / 2, w / 2);           // the corner: which way the texture turns
+        const t = new THREE.CanvasTexture(c);
+        t.wrapS = t.wrapT = THREE.RepeatWrapping;
+        t.colorSpace = THREE.SRGBColorSpace;
+        this._meChecker = t;
+        return t;
+    },
+
+    _meshGeometry(work, smooth, uv = null) {
         const { THREE } = this.libs;
         const t = MD.meshTriangles(work, smooth);
         const g = new THREE.BufferGeometry();
         g.setAttribute("position", new THREE.BufferAttribute(t.position, 3));
         g.setAttribute("normal", new THREE.BufferAttribute(t.normal, 3));
+        if (MX.cleanUv(uv)) g.setAttribute("uv", new THREE.BufferAttribute(MX.projectUVs(work, t, uv), 2));
         g.computeBoundingBox();
         g.computeBoundingSphere();
         g.userData.triFace = t.triFace;
@@ -197,6 +263,7 @@ export const View3DMeshEditMixin = {
         this.selected = id;
         this.root.classList.add("mesh-editing");
         this._meBarBuild();
+        this._meshRefresh(entry);
         this._meAfterBuild(entry);
         this._syncSelection();
         this._meTell();
@@ -215,6 +282,7 @@ export const View3DMeshEditMixin = {
         if (this.gizmo && this.gizmo.object === me.handle) this.gizmo.detach();
         this._me = null;
         this._meGroup = null;
+        this._meshRefresh(this._entries.get(me.id));
         this.root.classList.remove("mesh-editing");
         if (this._meBar) { this._meBar.remove(); this._meBar = null; }
         this._syncSelection();
@@ -776,6 +844,16 @@ export const View3DMeshEditMixin = {
         btn("Fill", "Close the holes the selection touches (all of them with nothing selected)", () => this._meOp("fill"));
         btn("Connect", "Split a face between the selected vertices, or the middles of the selected edges", () => this._meOp("connect"));
         sep();
+        btn("Subdivide", "Split every face once, rounding the mesh (the whole mesh)", () => this._meOp("subdivide"));
+        btn("Mirror", "Add the mesh's reflection across its own origin, on the axis beside it, joined at the seam", () => this._meOp("mirror"));
+        const ax = doc.createElement("select");
+        ax.className = "model-mesh-num";
+        ax.dataset.opt = "mirrorAxis";
+        ax.title = "The axis Mirror and Symmetrize reflect along";
+        for (const a of ["x", "y", "z"]) ax.append(Object.assign(doc.createElement("option"), { value: a, textContent: a.toUpperCase() }));
+        ax.addEventListener("change", () => this.setMeshEditOptions({ mirrorAxis: ax.value }));
+        bar.append(ax);
+        sep();
         btn("Merge", "Weld the selected vertices into one at their middle", () => this._meOp("merge"));
         btn("Weld", "Merge vertices closer than the distance beside it (the selected ones, or all)", () => this._meOp("weld"));
         num("weld", "How close vertices must be to be welded (scene units)", 0.001);
@@ -812,6 +890,7 @@ export const View3DMeshEditMixin = {
         const o = this.meshEditOptions();
         const me = this._me;
         for (const b of bar.querySelectorAll("[data-mode]")) b.classList.toggle("on", !!me && me.mode === b.dataset.mode);
+        for (const i of bar.querySelectorAll("select[data-opt]")) i.value = String(o[i.dataset.opt]);
         for (const i of bar.querySelectorAll("input[data-opt]")) {
             const k = i.dataset.opt;
             if (i.type === "checkbox") i.checked = !!o[k];

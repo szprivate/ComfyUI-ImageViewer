@@ -41,6 +41,8 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
     "matchmove_measure", "matchmove_phone_export",
+    // Modeling's (imageViewer_previzAgentMesh.js, MESH_AGENT_ACTIONS).
+    "mesh_add", "mesh_convert", "mesh_info", "mesh_edit", "mesh_set", "mesh_apply_subdiv", "mesh_boolean",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",
