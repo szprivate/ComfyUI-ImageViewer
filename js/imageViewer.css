@@ -2757,6 +2757,43 @@ audio.src-media { width: 90%; }
 .model-toolcol .model-btn:hover { background: #333; color: #fff; }
 .model-toolcol .model-btn.active { color: #f60; border-color: #f60; }
 .model-toolcol-sep { height: 1px; margin: 2px 0; background: #444; }
+/* Snapping (imageViewer_view3dSnap.js): the magnet, its caret (what to snap to) and the mark at the target. */
+.model-snap-wrap { position: relative; display: flex; }
+.model-toolcol .model-btn.model-snap-more {
+    position: absolute; right: 0; bottom: 0; width: 10px; height: 10px; border: none; background: transparent;
+    color: #888; font-size: 8px; line-height: 10px; padding: 0;
+}
+.model-toolcol .model-btn.model-snap-more:hover { background: transparent; color: #fff; }
+.model-snap-menu { top: 0; right: auto; left: 100%; margin: 0 0 0 8px; }
+.model-snap-mark {
+    position: absolute; z-index: 4; pointer-events: none; width: 0; height: 0;
+}
+.model-snap-mark i {
+    position: absolute; left: -6px; top: -6px; width: 10px; height: 10px; border: 2px solid #ffd23c;
+    border-radius: 2px; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
+}
+.model-snap-mark[data-kind="locator"] i, .model-snap-mark[data-kind="pivot"] i { border-radius: 50%; }
+.model-snap-mark[data-kind="edge"] i { transform: rotate(45deg); }
+.model-snap-mark[data-kind="surface"] i, .model-snap-mark[data-kind="grid"] i { border-style: dashed; }
+.model-snap-mark span {
+    position: absolute; left: 10px; top: 6px; padding: 0 4px; border-radius: 2px; white-space: nowrap;
+    background: rgba(0, 0, 0, 0.7); color: #ffd23c; font-size: 10px; line-height: 14px;
+}
+/* The measure tool (imageViewer_view3dMeasure.js): labels at the stretches and corners, the readout top right. */
+.model-view.measuring .model-stage canvas { cursor: crosshair; }
+.model-measure { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.model-measure-label {
+    position: absolute; transform: translate(-50%, -130%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;
+    background: rgba(0, 0, 0, 0.75); color: #ffd23c; font-size: 11px; line-height: 15px; font-variant-numeric: tabular-nums;
+}
+.model-measure-label[data-kind="ang"] { color: #9fe0ff; transform: translate(8px, 4px); }
+.model-measure-info {
+    position: absolute; left: 56px; top: 8px; max-width: 320px; padding: 5px 8px; border-radius: 4px;
+    background: rgba(0, 0, 0, 0.75); border: 1px solid #444; color: #ddd; font-size: 11px; line-height: 16px;
+    font-variant-numeric: tabular-nums;
+}
+.model-measure-info b { color: #ffd23c; font-weight: 600; }
+.model-measure-info .tip { color: #888; margin-top: 2px; }
 .model-panes { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .model-pane { position: absolute; box-sizing: border-box; }
 .model-pane.active { box-shadow: inset 0 0 0 1px rgba(255, 102, 0, 0.8); }

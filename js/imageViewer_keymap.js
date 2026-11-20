@@ -128,6 +128,10 @@ const ACTION_DEFS = [
       enabled: _previz, run: (p) => p.previzSetGizmoMode("scale") },
     { key: "GizmoSpace",  label: "Previz: Local / World Axes", combo: { key: "x" },
       enabled: _previz, run: (p) => p.previzToggleGizmoSpace() },
+    { key: "View3DSnap",  label: "3D View: Snapping On / Off", combo: { key: "n" },
+      enabled: _previz, run: (p) => p.previzToggleSnap() },
+    { key: "View3DMeasure", label: "3D View: Measure Tool (distances and angles)", combo: { key: "m" },
+      enabled: _previz, run: (p) => p.previzToggleMeasure() },
     // Maya's key for it, and the same meaning: the gizmo drags the pivot.
     { key: "PivotMode",   label: "Previz: Move the Pivot", combo: { key: "Insert" },
       enabled: _previz, run: (p) => p.previzTogglePivotMode() },

@@ -248,6 +248,18 @@ export const PrevizMixin = {
         this._previzRenderPanel();
     },
 
+    /** Snapping on / off (imageViewer_view3dSnap.js). */
+    previzToggleSnap() {
+        if (!this.isPrevizTab()) return;
+        this._modelView().toggleSnap();
+    },
+
+    /** The measure tool on / off (imageViewer_view3dMeasure.js). */
+    previzToggleMeasure() {
+        if (!this.isPrevizTab()) return;
+        this._modelView().toggleMeasure();
+    },
+
     previzToggleGizmoSpace() {
         if (!this.isPrevizTab()) return;
         const view = this._modelView();

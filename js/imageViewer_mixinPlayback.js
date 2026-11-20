@@ -344,25 +344,34 @@ export const PlaybackMixin = {
     renderCacheMarks() {
         const box = this.container && this.container.querySelector('#timeline-cache');
         if (!box) return;
+        const put = (html) => { if (box._marks !== html) { box._marks = html; box.innerHTML = html; } };
         // A comp tab: the frames of the picture on screen that its editor keeps (rendered, or rendered ahead).
         if (this._cpOn) {
             const ed = this.compEditor && this.compEditor();
             const kept = ed && ed.cachedFrames ? ed.cachedFrames() : new Set();
             const n = this._cpFrameCount();
-            let html = '';
-            if (n > 1 && kept.size) {
-                const bounds = this.getTimelineBounds(n), span = bounds.max - bounds.min;
-                const pct = (v) => (Math.max(0, Math.min(span, v)) / span * 100).toFixed(3);
-                if (span > 0) for (let d = bounds.min; d <= bounds.max; d++) {
-                    if (!kept.has(d)) continue;
-                    let e = d;
-                    while (e < bounds.max && kept.has(e + 1)) e++;
-                    const a = d - bounds.min - 0.5, b = e - bounds.min + 0.5;
-                    html += `<i style="left:${pct(a)}%;width:${(pct(b) - pct(a)).toFixed(3)}%"></i>`;
-                    d = e;
-                }
-            }
-            if (box._marks !== html) { box._marks = html; box.innerHTML = html; }
+            put(n > 1 && kept.size ? this._cacheRunsHtml(n, (d) => kept.has(d)) : '');
+            return;
+        }
+        // A 3D tab: the frames every image plane with pictures over time (a plate, a film) holds
+        // (Sebastian 2026-11-20; imageViewer_view3dVideoPlane.js planeCacheTest).
+        if (this.isPrevizTab && this.isPrevizTab()) {
+            const view = this._model3d;
+            const has = view && view.planeCacheTest ? view.planeCacheTest() : null;
+            const n = this.getImgCount();
+            put(has && n > 1 ? this._cacheRunsHtml(n, has) : '');
+            return;
+        }
+        // A film in the Viewer: what the browser has buffered of it.
+        if (this._videoMode && this.videoBase && !this._editPlayOn && !this._gridOn && this._videoFrames > 1) {
+            const v = this.videoBase, ranges = [];
+            try { for (let i = 0; i < v.buffered.length; i++) ranges.push([v.buffered.start(i), v.buffered.end(i)]); } catch (e) {}
+            const fps = this._videoFps || 24;
+            const has = (d) => {
+                const t = (d + 0.5) / fps;
+                return ranges.some(([a, b]) => t >= a - 1e-6 && t <= b + 1e-6);
+            };
+            put(ranges.length ? this._cacheRunsHtml(this._videoFrames, has) : '');
             return;
         }
         const imgs   = this._baseFrames() || [];
@@ -370,29 +379,28 @@ export const PlaybackMixin = {
         const stills = imgs.length > 1 && cached && cached.size
             && !(this.isPrevizTab && this.isPrevizTab())
             && !this._frameIsVideo(imgs[0]) && !this._frameIsModel(imgs[0]);
+        put(stills ? this._cacheRunsHtml(imgs.length, (d) => {
+            const o = imgs[this.displayFrameToImageIndex(d, imgs.length)];
+            return !!(o && (o.path || o.url) && cached.has(this.buildImgUrl(o)));
+        }) : '');
+    },
+
+    /** The marks for frames of the timeline (n frames) that `has` says are cached: one element per run. */
+    _cacheRunsHtml(n, has) {
+        const bounds = this.getTimelineBounds(n), span = bounds.max - bounds.min;
+        if (!(span > 0)) return '';
+        // Each frame half a step either side of its position.
+        const pct = (v) => (Math.max(0, Math.min(span, v)) / span * 100).toFixed(3);
         let html = '';
-        if (stills) {
-            const bounds = this.getTimelineBounds(imgs.length);
-            const span   = bounds.max - bounds.min;
-            if (span > 0) {
-                const has = (d) => {
-                    const o = imgs[this.displayFrameToImageIndex(d, imgs.length)];
-                    return !!(o && (o.path || o.url) && cached.has(this.buildImgUrl(o)));
-                };
-                // One element per run of cached frames, each frame half a step
-                // either side of its position.
-                const pct = (v) => (Math.max(0, Math.min(span, v)) / span * 100).toFixed(3);
-                for (let d = bounds.min; d <= bounds.max; d++) {
-                    if (!has(d)) continue;
-                    let e = d;
-                    while (e < bounds.max && has(e + 1)) e++;
-                    const a = d - bounds.min - 0.5, b = e - bounds.min + 0.5;
-                    html += `<i style="left:${pct(a)}%;width:${(pct(b) - pct(a)).toFixed(3)}%"></i>`;
-                    d = e;
-                }
-            }
+        for (let d = bounds.min; d <= bounds.max; d++) {
+            if (!has(d)) continue;
+            let e = d;
+            while (e < bounds.max && has(e + 1)) e++;
+            const a = d - bounds.min - 0.5, b = e - bounds.min + 0.5;
+            html += `<i style="left:${pct(a)}%;width:${(pct(b) - pct(a)).toFixed(3)}%"></i>`;
+            d = e;
         }
-        if (box._marks !== html) { box._marks = html; box.innerHTML = html; }
+        return html;
     },
 
     // ── Timeline event setup ─────────────────────────────────────────────────
@@ -834,6 +842,8 @@ export const PlaybackMixin = {
             v.addEventListener("seeked",         () => this._audioDraw?.());
             v.addEventListener("loadedmetadata", () => this._videoOnMeta());
             v.addEventListener("ended",          () => this._videoOnEnded());
+            // What the browser holds of the film: the timeline's green marks.
+            v.addEventListener("progress",       () => this.queueCacheMarks());
             // The base's decoded size feeds both the compare layer's scale and the
             // white frame outline, and `resize` is the one event that always fires
             // when it becomes known — including when the clip was already loaded
