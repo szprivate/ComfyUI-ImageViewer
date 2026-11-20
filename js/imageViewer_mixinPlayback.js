@@ -156,7 +156,8 @@ export const PlaybackMixin = {
         if (!this.showOverlays) { this.shapeOverlay.style.display = "none"; return; }
 
         if (this._modelMode) {
-            const info = this._modelInfoText();
+            // Matchmove's panels are up: the scene's stats would sit over the plate and the guide
+            const info = this._mmShown && this._mmShown() ? "" : this._modelInfoText();
             this.shapeOverlay.style.display = info ? "block" : "none";
             this.shapeOverlay.innerText = info;
             return;

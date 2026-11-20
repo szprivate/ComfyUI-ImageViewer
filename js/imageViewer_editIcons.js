@@ -101,6 +101,17 @@ export const EDIT_ICONS = {
     fit: [P("M3 7V5a2 2 0 0 1 2-2h2"), P("M17 3h2a2 2 0 0 1 2 2v2"), P("M21 17v2a2 2 0 0 1-2 2h-2"), P("M7 21H5a2 2 0 0 1-2-2v-2"), C(12, 12, 3), P("m16 16-1.9-1.9")],
     // a frame with letterbox bars: the Viewer's framing mask (imageViewer_frameMasks.js)
     frameMask: [["rect", { width: 20, height: 16, x: 2, y: 4, rx: 2 }], P("M2 8.5h20"), P("M2 15.5h20")],
+    // the Matchmove Plate panel's bar (imageViewer_previzMatchmove.js): crosshair, a mask's outline, a line
+    // through points, the ground in perspective, a path behind a point, a solved point in its ring, box / lasso, swap
+    mmAdd: [C(12, 12, 9), P("M12 3v4"), P("M12 17v4"), P("M3 12h4"), P("M17 12h4")],
+    mmMask: [P("M12 3 21 10 17.5 21h-11L3 10z")],
+    mmLines: [P("M4 19 20 5"), C(4, 19, 1.5), C(12, 12, 1.5), C(20, 5, 1.5)],
+    mmGround: [P("M2 20h20"), P("M5.5 14h13"), P("M8 9h8"), P("M2 20 8 9"), P("M22 20 16 9"), P("M12 9v11")],
+    mmTrails: [P("M3 19c4 0 5-5 8-6s5-5 7-5"), C(19, 7, 2)],
+    mmSolved: [C(12, 12, 2), C(12, 12, 8)],
+    mmBox: [["rect", { x: 3, y: 3, width: 18, height: 18, rx: 2, "stroke-dasharray": "4 3" }]],
+    mmLasso: [P("M7 18.5C4 17.2 2 14.8 2 12c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8c-1.2 0-2.3-.2-3.3-.5"), C(7, 19, 2), P("M7 21v1")],
+    mmSwap: [P("m8 3-4 4 4 4"), P("M4 7h16"), P("m16 21 4-4-4-4"), P("M20 17H4")],
 };
 
 /** Put icon `name` on button `b`, in place of its text. */

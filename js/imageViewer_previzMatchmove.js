@@ -18,6 +18,7 @@ import * as S from "./imageViewer_scene3d.js";
 import * as D from "./imageViewer_matchmoveData.js";
 import { openFilePicker, notice, canvasContext } from "./imageViewer_exportUI.js";
 import { openLensChart } from "./imageViewer_lensChart.js";
+import { setEditIcon } from "./imageViewer_editIcons.js";
 
 const PLATE_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".heic", ".heif"];
 const PICT_EXTS = [".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".mp4", ".mov"];
@@ -36,21 +37,42 @@ const TOOLS = [
     ["ground", "Ground", "Click round the floor (3 or more corners), Enter or a double-click to end: the solved tracks inside set the ground"],
 ];
 
+const TOOL_ICONS = { select: "select", add: "mmAdd", mask: "mmMask", lines: "mmLines", ground: "mmGround" };
+
 const STYLE = `
-.mm-body { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; color: #ddd; }
-.mm-steps { display: flex; flex-wrap: wrap; gap: 3px; padding: 6px 6px 4px; border-bottom: 1px solid #333; }
-.mm-chip { flex: 1 1 auto; min-width: 0; padding: 3px 4px; border-radius: 4px; border: 1px solid #3a3a3a;
-  background: #252525; color: #aaa; font-size: 11px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-body { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; color: #ddd; container-type: inline-size; }
+.mm-steps { display: flex; flex-wrap: nowrap; gap: 2px; padding: 6px 6px 4px; border-bottom: 1px solid #333; }
+.mm-chip { flex: 1 1 0; min-width: 0; min-height: 24px; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 3px 4px;
+  border-radius: 4px; border: 1px solid #3a3a3a; background: #252525; color: #aaa; font-size: 11px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.mm-chip .mm-chip-n { flex: none; width: 15px; height: 15px; line-height: 15px; border-radius: 50%; background: #333; color: #ccc; font-size: 10px; text-align: center; }
+.mm-chip .mm-chip-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .mm-chip.done { color: #9fd89f; border-color: #345; }
-.mm-chip.on { background: #ff6600; color: #fff; border-color: #ff6600; }
+.mm-chip.done .mm-chip-n { background: #2f4a33; color: #9fd89f; }
+.mm-chip.on { flex: 0 0 auto; background: #ff6600; color: #fff; border-color: #ff6600; }
+.mm-chip.on .mm-chip-n { background: rgba(0, 0, 0, 0.25); color: #fff; }
+@container (max-width: 420px) { .mm-chip:not(.on) .mm-chip-l { display: none; } }
 .mm-scroll { flex: 1 1 auto; overflow: auto; padding: 8px 10px 10px; }
-.mm-title { font-size: 14px; font-weight: 600; margin: 2px 0 6px; }
+.mm-title { font-size: 14px; font-weight: 600; margin: 2px 0 4px; }
 .mm-help { color: #bbb; line-height: 1.4; margin-bottom: 8px; }
+.mm-more-text { display: none; }
+.mm-open .mm-more-text { display: inline; }
+.mm-q { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; min-width: 15px; min-height: 0; max-height: 15px;
+  box-sizing: border-box; margin-left: 5px; padding: 0;
+  border-radius: 50%; border: 1px solid #555; background: none; color: #aaa; font-size: 10px; line-height: 1; cursor: pointer; vertical-align: 1px; }
+.mm-q:hover, .mm-open .mm-q { border-color: #ff6600; color: #ff6600; }
 .mm-row { display: flex; align-items: center; gap: 6px; margin: 5px 0; flex-wrap: wrap; }
+.mm-row.mm-lab { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px; }
+.mm-row.mm-lab > label { color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-fields { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; min-width: 0; }
+.mm-row.mm-lab > .mm-fields:not(.mm-wrap) { flex-wrap: nowrap; }
+.mm-row.mm-lab > .mm-fields > * { flex: 0 1 auto; min-width: 0; }
+.mm-row.mm-lab > .mm-fields > input { flex: 0 0 auto; }
+.mm-row.mm-lab > .mm-fields > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-row > label { color: #aaa; min-width: 84px; }
-.mm-row input[type=number], .mm-row input[type=text] { width: 70px; background: #1b1b1b; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; padding: 2px 4px; }
-.mm-row select { background: #1b1b1b; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; }
-.mm-btn { background: #2d2d2d; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 3px 9px; cursor: pointer; font-size: 12px; }
+.mm-row input[type=number], .mm-row input[type=text] { width: 58px; background: #1b1b1b; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; padding: 2px 4px; }
+.mm-row select { background: #1b1b1b; color: #eee; border: 1px solid #3a3a3a; border-radius: 3px; min-height: 22px; padding: 2px 4px; text-align: left; max-width: 100%; text-overflow: ellipsis; }
+.mm-btn { background: #2d2d2d; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 3px 9px; cursor: pointer; font-size: 12px; min-height: 24px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-btn:hover { border-color: #777; }
 .mm-btn.primary { background: #ff6600; border-color: #ff6600; color: #fff; }
 .mm-btn:disabled { opacity: 0.45; cursor: default; }
@@ -58,6 +80,20 @@ const STYLE = `
 .mm-note.warn { color: #e8b04a; }
 .mm-note.bad { color: #ef6b6b; }
 .mm-good { color: #9fd89f; }
+.mm-summary { display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; font-weight: 600; }
+.mm-summary .mm-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #e8b04a; }
+.mm-summary.good .mm-dot { background: #6fcf7f; }
+.mm-summary.bad .mm-dot { background: #ef6b6b; }
+.mm-fold { border-top: 1px solid #2e2e2e; margin: 0; }
+.mm-fold > summary { cursor: pointer; color: #bbb; padding: 5px 0; list-style: none; display: flex; align-items: center; gap: 6px; }
+.mm-fold > summary::-webkit-details-marker { display: none; }
+.mm-fold > summary::before { content: "▸"; color: #777; width: 9px; }
+.mm-fold[open] > summary::before { content: "▾"; }
+.mm-fold > summary .mm-fold-sum { margin-left: auto; color: #888; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mm-fold > .mm-fold-body { padding: 0 0 6px; }
+.mm-saved { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.mm-saved .mm-note { margin: 0; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-saved .mm-btn { padding: 1px 7px; font-size: 11px; flex: none; }
 .mm-facts { background: #1c1c1c; border: 1px solid #333; border-radius: 4px; padding: 6px 8px; margin: 6px 0; line-height: 1.5; }
 .mm-tips { margin-top: 10px; border-top: 1px solid #333; padding-top: 6px; }
 .mm-tips summary { cursor: pointer; color: #aaa; }
@@ -73,7 +109,11 @@ const STYLE = `
 .mm-progress > div { height: 100%; background: #ff6600; width: 0; }
 .mm-plate { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .mm-pbar { display: flex; align-items: center; gap: 4px; padding: 3px 6px; border-bottom: 1px solid #333; flex-wrap: nowrap; overflow: hidden; }
-.mm-pbar .mm-btn { padding: 2px 7px; font-size: 11px; }
+.mm-pbar .mm-btn { padding: 2px 7px; font-size: 11px; flex: none; min-height: 22px; }
+.mm-pbar .mm-btn.edit-iconbtn { padding: 2px 5px; gap: 4px; }
+.mm-pbar .mm-btn .edit-icon { width: 14px; height: 14px; }
+.mm-pgroup { display: flex; align-items: center; gap: 2px; flex: none; }
+.mm-psep { width: 1px; height: 16px; background: #3a3a3a; margin: 0 4px; flex: none; }
 .mm-pbar .mm-btn.on { background: #ff6600; border-color: #ff6600; color: #fff; }
 .mm-pbar .mm-info { margin-left: auto; color: #999; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-stage { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; background: #111; outline: none; }
@@ -310,6 +350,7 @@ export const PrevizMatchmoveMixin = {
         }
         // The 3D tab went: the plate in the main view goes with it (and comes back with the next 3D tab).
         if (this._mmPlateMainSync) this._mmPlateMainSync();
+        if (this.updateShapeInfo) this.updateShapeInfo();
     },
 
     _mmRestore() {
@@ -343,18 +384,19 @@ export const PrevizMatchmoveMixin = {
         const mm = st.mm;
         const steps = el(doc, "div", "mm-steps");
         const done = this._mmDone(st);
-        for (const s of D.MM_STEPS) {
-            const c = el(doc, "button", "mm-chip", s.label);
+        D.MM_STEPS.forEach((s, n) => {
+            const c = el(doc, "button", "mm-chip");
+            c.append(el(doc, "span", "mm-chip-n", done[s.id] && mm.step !== s.id ? "✓" : String(n + 1)), el(doc, "span", "mm-chip-l", s.label));
             c.dataset.step = s.id;
-            c.title = s.title;
+            c.title = `${n + 1}. ${s.title}`;
             c.classList.toggle("on", mm.step === s.id);
             c.classList.toggle("done", !!done[s.id]);
             c.onclick = () => { mm.step = s.id; this._mmRender(); this._mmSaveSoon(st); };
             steps.append(c);
-        }
+        });
         const scroll = el(doc, "div", "mm-scroll");
         const spec = D.MM_STEPS.find((s) => s.id === mm.step) || D.MM_STEPS[0];
-        scroll.append(el(doc, "div", "mm-title", spec.title), el(doc, "div", "mm-help", spec.help));
+        scroll.append(el(doc, "div", "mm-title", spec.title), this._mmHelp(doc, "mm-help", spec.help));
         if (st.loadError) scroll.append(el(doc, "div", "mm-note bad", st.loadError));
         if (st.busy) {
             const row = el(doc, "div", "mm-row");
@@ -375,7 +417,20 @@ export const PrevizMatchmoveMixin = {
         if (mm.step !== "plate" && !mm.plate) scroll.append(el(doc, "div", "mm-note warn", "Pick the plate first (step 1)."));
         else draw.call(this, ctx);
         if (st.saveError) scroll.append(el(doc, "div", "mm-note bad", `Not saved: ${st.saveError}`));
-        else if (st.file) scroll.append(el(doc, "div", "mm-note", `Kept in ${st.file}`));
+        else if (st.file) {
+            const saved = el(doc, "div", "mm-saved");
+            const name = el(doc, "span", "mm-note", `Saved as ${st.file.split(/[\\/]/).pop()}`);
+            name.title = st.file;
+            const copy = el(doc, "button", "mm-btn", "Copy path");
+            copy.title = st.file;
+            copy.onclick = () => {
+                const nav = (doc.defaultView || window).navigator;
+                Promise.resolve(nav.clipboard && nav.clipboard.writeText(st.file))
+                    .then(() => notice("info", "Path copied", st.file), () => notice("warn", "Not copied", st.file));
+            };
+            saved.append(name, copy);
+            scroll.append(saved);
+        }
         const tips = el(doc, "details", "mm-tips");
         tips.open = !!st.tipsOpen;
         tips.ontoggle = () => { st.tipsOpen = tips.open; };
@@ -397,6 +452,58 @@ export const PrevizMatchmoveMixin = {
         host.append(body);
         scroll.scrollTop = top;
         this._mmPlateEnsure();
+        if (this.updateShapeInfo) this.updateShapeInfo();
+    },
+
+    /** Matchmove is up on this tab: its panels are out and it has a plate (the 3D view's scene stats stand aside). */
+    _mmShown() {
+        if (!this.isPrevizTab || !this.isPrevizTab()) return false;
+        const st = this._mmCur(false);
+        const up = (this.isPanelDocked && this.isPanelDocked("mmGuide")) || (this._mmPlateUp && this._mmPlateUp());
+        return !!(st && st.mm.plate && up);
+    },
+
+    /**
+     * A help text cut to its first sentence; the rest behind a "?" (stays in the DOM, only hidden). Which ones are
+     * open is remembered while the viewer is up.
+     */
+    _mmHelp(doc, cls, text) {
+        const box = el(doc, "div", cls);
+        const t = String(text || "");
+        const m = t.match(/^(.+?[.!?:])\s+(\S[\s\S]*)$/);
+        if (!m) { box.textContent = t; return box; }
+        const open = this._mmHelpOpen || (this._mmHelpOpen = new Set());
+        box.classList.toggle("mm-open", open.has(t));
+        const q = el(doc, "button", "mm-q", "?");
+        q.title = "More about this";
+        q.onclick = () => {
+            if (open.has(t)) open.delete(t); else open.add(t);
+            box.classList.toggle("mm-open", open.has(t));
+        };
+        box.append(doc.createTextNode(m[1]), el(doc, "span", "mm-more-text", ` ${m[2]}`), q);
+        return box;
+    },
+
+    /** A foldable section; its body is the ctx to draw into. Open / closed kept per viewer by key. */
+    _mmFold(ctx, key, title, summary = "") {
+        const folds = this._mmFolds || (this._mmFolds = (() => {
+            try { return new Set(JSON.parse(localStorage.getItem("imageviewer.viewer.mmFolds") || "[]")); } catch (_) { return new Set(); }
+        })());
+        const d = el(ctx.doc, "details", "mm-fold");
+        d.dataset.fold = key;
+        d.open = folds.has(key);
+        const sum = el(ctx.doc, "summary", "", "");
+        sum.append(el(ctx.doc, "span", "", title));
+        if (summary) sum.append(el(ctx.doc, "span", "mm-fold-sum", summary));
+        const body = el(ctx.doc, "div", "mm-fold-body");
+        d.append(sum, body);
+        d.ontoggle = () => {
+            if (d.open) folds.add(key); else folds.delete(key);
+            try { localStorage.setItem("imageviewer.viewer.mmFolds", JSON.stringify([...folds])); } catch (_) { /* kept for this visit only */ }
+            if (d.open) for (const c of body.querySelectorAll("canvas.mm-graph")) if (c._mmRedraw) c._mmRedraw();
+        };
+        ctx.box.append(d);
+        return { ...ctx, box: body };
     },
 
     _mmProgress() {
@@ -418,16 +525,24 @@ export const PrevizMatchmoveMixin = {
 
     // small builders
     _mmRow(ctx, label, ...kids) {
-        const row = el(ctx.doc, "div", "mm-row");
-        if (label) row.append(el(ctx.doc, "label", "", label));
-        row.append(...kids.filter(Boolean));
+        const row = el(ctx.doc, "div", label ? "mm-row mm-lab" : "mm-row");
+        if (label) {
+            const l = el(ctx.doc, "label", "", label);
+            l.title = label;
+            const fields = el(ctx.doc, "div", "mm-fields");
+            const list = kids.filter(Boolean);
+            // buttons alone wrap whole; a row with a field keeps to one line and shrinks instead
+            if (list.length > 1 && list.every((k) => k.tagName === "BUTTON")) fields.classList.add("mm-wrap");
+            fields.append(...list);
+            row.append(l, fields);
+        } else row.append(...kids.filter(Boolean));
         ctx.box.append(row);
         return row;
     },
 
     _mmBtn(ctx, text, run, { primary = false, title = "", disabled = false } = {}) {
         const b = el(ctx.doc, "button", `mm-btn${primary ? " primary" : ""}`, text);
-        b.title = title;
+        b.title = title || text;
         b.disabled = disabled || !!ctx.st.busy;
         b.onclick = () => { Promise.resolve(run()).catch((e) => notice("error", text.replace(/…$/, ""), e.message)); };
         return b;
@@ -457,15 +572,28 @@ export const PrevizMatchmoveMixin = {
         return s;
     },
 
-    _mmNote(ctx, text, kind = "") { ctx.box.append(el(ctx.doc, "div", `mm-note ${kind}`.trim(), text)); },
+    /** A note; a long plain one (an explanation, not a warning or a result) shows its first sentence and a "?". */
+    _mmNote(ctx, text, kind = "") {
+        const cls = `mm-note ${kind}`.trim();
+        ctx.box.append(!kind && String(text).length > 110 ? this._mmHelp(ctx.doc, cls, text) : el(ctx.doc, "div", cls, text));
+    },
 
     // ── step 1: the plate ────────────────────────────────────────────────────
 
     _mmStepPlate(ctx) {
         const { mm, st } = ctx;
-        this._mmRow(ctx, "", this._mmBtn(ctx, mm.plate ? "Another plate…" : "Choose the plate…", () => this.matchmovePickPlate(), { primary: !mm.plate }),
-                    this._mmBtn(ctx, "From the History", () => this.matchmovePlateFromHistory(), { title: "The film or picture picked in the History" }),
-                    this._mmBtn(ctx, "Open matchmove…", () => this.matchmoveOpenFile(), { title: "A matchmove saved before (.mm.json)" }));
+        // one "Open" menu for the ways in; with no plate yet, choosing one is the step's main button
+        const entries = [
+            { label: mm.plate ? "Another plate…" : "Choose the plate…", title: "A film, a picture or a sequence on disk", run: () => this.matchmovePickPlate() },
+            { label: "From the History", title: "The film or picture picked in the History", run: () => this.matchmovePlateFromHistory() },
+            { label: "Open matchmove…", title: "A matchmove saved before (.mm.json)", run: () => this.matchmoveOpenFile() },
+        ];
+        const open = this._mmBtn(ctx, "Open ▾", () => {
+            const r = open.getBoundingClientRect();
+            this._previzOpenMenu(mm.plate ? entries : entries.slice(1), r.left, r.bottom + 2, open);
+        }, { title: mm.plate ? "Another plate, one from the History, or a matchmove saved before" : "A plate from the History, or a matchmove saved before" });
+        open.classList.add("mm-open-menu");
+        this._mmRow(ctx, "", mm.plate ? null : this._mmBtn(ctx, "Choose the plate…", () => this.matchmovePickPlate(), { primary: true }), open);
         if (!mm.plate) return;
         const p = mm.plate;
         const facts = el(ctx.doc, "div", "mm-facts");
@@ -963,16 +1091,27 @@ export const PrevizMatchmoveMixin = {
     _mmStepSolve(ctx) {
         const { mm, st } = ctx;
         const s = mm.settings;
+        const sv = mm.solve;
+        // the button and the one-line answer first; the settings under them; the details folded below
+        this._mmRow(ctx, "", this._mmBtn(ctx, sv ? "Solve again" : "Solve the camera", () => this.matchmoveSolve(), { primary: true, disabled: mm.tracks.length < 8 }));
+        if (mm.tracks.length < 8) this._mmNote(ctx, "Track the plate first: a solve needs 8 or more tracks on every frame.", "warn");
+        if (sv) {
+            const fmm = D.focalMmOf(sv.focal_px, mm);
+            const line = el(ctx.doc, "div", `mm-summary ${sv.rms < 0.5 ? "good" : sv.rms < 1 ? "" : "bad"}`.trim());
+            line.append(el(ctx.doc, "span", "mm-dot"),
+                        el(ctx.doc, "span", "", `${Number(sv.rms).toFixed(2)} px · ${fmm ? `${fmm.toFixed(1)} mm` : `${Number(sv.focal_px).toFixed(0)} px focal`} · ${D.solveVerdict(sv.rms)}`));
+            line.title = `Error ${Number(sv.rms).toFixed(3)} px over ${Object.keys(sv.frames).length} frames`;
+            ctx.box.append(line);
+        }
         this._mmRow(ctx, "Camera", this._mmSelect(ctx, [["auto", "Find out"], ["free", "Moves freely"], ["tripod", "Only turns (tripod)"]], s.mode,
                                                   (v) => this._mmEdit("solve mode", (m) => { m.settings.mode = v; })));
         this._mmRow(ctx, "Focal length", this._mmSelect(ctx, [["auto", mm.camera.focalKnown ? "Start from the camera's, refine it" : "Find it"], ["on", "Refine it"], ["off", "Keep it fixed"]], s.refine,
                                                         (v) => this._mmEdit("refine", (m) => { m.settings.refine = v; })));
         this._mmDepthSection(ctx);
-        this._mmMeasurements(ctx);
-        this._mmRow(ctx, "", this._mmBtn(ctx, mm.solve ? "Solve again" : "Solve the camera", () => this.matchmoveSolve(), { primary: true, disabled: mm.tracks.length < 8 }));
-        if (mm.tracks.length < 8) this._mmNote(ctx, "Track the plate first: a solve needs 8 or more tracks on every frame.", "warn");
-        const sv = mm.solve;
+        const nm = (mm.constraints || []).length;
+        this._mmMeasurements(this._mmFold(ctx, "solve-measure", "Measurements", nm ? `${nm} set` : "none"));
         if (!sv) return;
+        const dctx = this._mmFold(ctx, "solve-details", "Details", `${Object.keys(sv.frames).length} frames · ${(sv.points || []).length} points`);
         const facts = el(ctx.doc, "div", "mm-facts");
         const verdict = D.solveVerdict(sv.rms);
         const rms = el(ctx.doc, "div", sv.rms < 1 ? "mm-good" : "mm-note warn", `Error ${Number(sv.rms).toFixed(3)} px - ${verdict}`);
@@ -987,17 +1126,26 @@ export const PrevizMatchmoveMixin = {
             fc.better ? `Proportions: a focal length 10 % ${fc.better === "short" ? "shorter" : "longer"} fits better - the depth is likely squashed or stretched.`
                       : "Proportions: the shot does not pin its focal length down, so the depth may be squashed or stretched. Measure two distances or a right angle."));
         else if (fc) facts.append(el(ctx.doc, "div", "mm-good mm-proportions", "Proportions: the focal length is pinned down by the shot."));
-        this._mmDepthFacts(ctx, facts, sv);
+        this._mmDepthFacts(dctx, facts, sv);
         for (const n of sv.notes || []) facts.append(el(ctx.doc, "div", "mm-note", n));
-        ctx.box.append(facts);
+        dctx.box.append(facts);
+        // a warning in the details shows on the fold's own line, so it is not missed while folded
+        if (fc && (fc.weak || fc.better) && !(fc.held_by_depth && !fc.better)) {
+            const sum = dctx.box.parentNode.querySelector(":scope > summary .mm-fold-sum");
+            if (sum) { sum.textContent = "proportions loose"; sum.classList.add("mm-note", "warn"); }
+        }
         const n = mm.plate.frames;
         const per = Array.from({ length: n }, (_, f) => Number((sv.per_frame || {})[f]) || 0);
+        const over = per.filter((v) => v > 1).length;
+        const gctx = this._mmFold(ctx, "solve-graph", "Error per frame", over ? `${over} frame(s) over 1 px` : `max ${Math.max(0, ...per).toFixed(2)} px`);
         const g = el(ctx.doc, "canvas", "mm-graph");
-        ctx.box.append(g);
-        requestAnimationFrame(() => this._mmBars(g, per, -1, "error a frame, px (red: over 1)", { max: Math.max(1.5, ...per) }));
+        g._mmRedraw = () => this._mmBars(g, per, -1, "error a frame, px (red: over 1)", { max: Math.max(1.5, ...per) });
+        gctx.box.append(g);
+        requestAnimationFrame(g._mmRedraw);
         const worst = (sv.points || []).slice().sort((a, b) => b.error - a.error).slice(0, 12);
+        const wctx = this._mmFold(ctx, "solve-worst", "Worst tracks and clean-up", worst.length ? `worst ${Number(worst[0].error).toFixed(2)} px` : "");
         if (worst.length) {
-            this._mmNote(ctx, "The worst tracks (click to pick, then look at them on the plate):");
+            this._mmNote(wctx, "Click to pick, then look at them on the plate:");
             const list = el(ctx.doc, "div", "mm-list");
             for (const p of worst) {
                 const li = el(ctx.doc, "div", "mm-li", "");
@@ -1012,21 +1160,22 @@ export const PrevizMatchmoveMixin = {
                 };
                 list.append(li);
             }
-            ctx.box.append(list);
+            wctx.box.append(list);
         }
         const share = st.worstShare || 10;
-        this._mmRow(ctx, "Clean up", this._mmBtn(ctx, "Delete the worst", () => this._mmEdit("delete worst", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { share: share / 100 }))))),
-                    this._mmNum(ctx, share, (v) => { st.worstShare = Math.max(1, Math.min(50, v || 10)); }, { step: 1, width: "44px" }), el(ctx.doc, "span", "", "%"),
-                    this._mmBtn(ctx, "over 1 px", () => this._mmEdit("delete over 1 px", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { px: 1 }))))));
+        this._mmRow(wctx, "Delete", this._mmBtn(wctx, "The worst", () => this._mmEdit("delete worst", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { share: share / 100 })))),
+                                                { title: "Delete the worst share of the tracks (measured tracks are kept)" }),
+                    this._mmNum(wctx, share, (v) => { st.worstShare = Math.max(1, Math.min(50, v || 10)); }, { step: 1, width: "40px" }), el(ctx.doc, "span", "", "%"),
+                    this._mmBtn(wctx, "Over 1 px", () => this._mmEdit("delete over 1 px", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { px: 1 })))),
+                                { title: "Delete every track whose error is over 1 px (measured tracks are kept)" }));
         this._mmRow(ctx, "", this._mmBtn(ctx, "Into the scene ›", () => { mm.step = "scene"; this._mmRender(); }));
     },
 
     /** The Measurements section of the Solve step: real distances and shapes from the tracks picked. */
     _mmMeasurements(ctx) {
         const { mm, st } = ctx;
-        const box = el(ctx.doc, "div", "mm-facts mm-measure");
-        box.append(el(ctx.doc, "div", "", "Measurements"),
-                   el(ctx.doc, "div", "mm-note", "Pick tracks in the Plate panel (click, Shift+click, a box or the lasso), then say what they are. They keep the solve's proportions true: two distances in different directions, or a right angle, cure a squashed solve."));
+        const box = el(ctx.doc, "div", "mm-measure");
+        box.append(this._mmHelp(ctx.doc, "mm-note", "Pick tracks in the Plate panel, then say what they are. Click, Shift+click, a box or the lasso picks them. They keep the solve's proportions true: two distances in different directions, or a right angle, cure a squashed solve."));
         const picked = [...st.sel];
         const row = el(ctx.doc, "div", "mm-row");
         const dist = this._mmNum(ctx, st.measureMetres ?? null, (v) => { st.measureMetres = v; }, { step: 0.01, width: "60px" });
@@ -1516,37 +1665,52 @@ export const PrevizMatchmoveMixin = {
             host.querySelectorAll(":scope > .mm-plate").forEach((n) => n.remove());
             const doc = host.ownerDocument;
             const root = el(doc, "div", "mm-plate");
+            // three groups: the tools (and how Select drags) | what is drawn over the plate | the view
             const bar = el(doc, "div", "mm-pbar");
+            const group = () => { const g = el(doc, "div", "mm-pgroup"); bar.append(g); return g; };
+            const sep = () => bar.append(el(doc, "span", "mm-psep"));
+            const icon = (b, name) => { const t = b.title; setEditIcon(b, name); b.title = t; };
+            const gTools = group();
             const tools = {};
+            let shape = null;
             for (const [id, label, title] of TOOLS) {
                 const b = el(doc, "button", "mm-btn", label);
-                b.title = title;
+                b.title = `${label}: ${title}`;
                 b.dataset.tool = id;
                 b.onclick = () => this.matchmoveTool(id);
+                icon(b, TOOL_ICONS[id]);
                 tools[id] = b;
-                bar.append(b);
+                gTools.append(b);
+                if (id === "select") {
+                    shape = el(doc, "button", "mm-btn mm-select-shape", "");
+                    shape.title = "Box or lasso: how a drag with Select picks tracks (Shift adds, Ctrl takes away)";
+                    shape.onclick = () => { const s2 = this._mmCur(); s2.selectShape = s2.selectShape === "lasso" ? "box" : "lasso"; if (s2.tool !== "select") this.matchmoveTool("select"); this._mmPlateEnsure(); };
+                    gTools.append(shape);
+                }
             }
+            sep();
+            const gShow = group();
             const toggles = {};
-            for (const [id, label, title] of [["trails", "Trails", "The tracks' paths over the last frames"],
-                                               ["solved", "Solved", "Where the solved 3D points land (cyan): far from their track = a bad track"]]) {
+            for (const [id, label, title, ic] of [["trails", "Trails", "the tracks' paths over the last frames", "mmTrails"],
+                                                   ["solved", "Solved", "where the solved 3D points land (cyan): far from their track = a bad track", "mmSolved"]]) {
                 const b = el(doc, "button", "mm-btn", label);
-                b.title = title;
-                b.onclick = () => { const s = this._mmCur(); s.show[id] = !s.show[id]; this._mmDraw(); };
+                b.title = `${label}: ${title}`;
+                b.onclick = () => { const s = this._mmCur(); s.show[id] = !s.show[id]; this._mmDraw(); this._mmPlateEnsure(); };
+                icon(b, ic);
                 toggles[id] = b;
-                bar.append(b);
+                gShow.append(b);
             }
-            const shape = el(doc, "button", "mm-btn mm-select-shape", "Box");
-            shape.title = "How a drag with Select picks tracks: a box, or a lasso drawn round them (Shift adds, Ctrl takes away)";
-            shape.onclick = () => { const s2 = this._mmCur(); s2.selectShape = s2.selectShape === "lasso" ? "box" : "lasso"; if (s2.tool !== "select") this.matchmoveTool("select"); this._mmPlateEnsure(); };
-            bar.append(shape);
+            sep();
+            const gView = group();
             const swap = el(doc, "button", "mm-btn mm-plate-swap", "");
             swap.onclick = () => this.matchmovePlateMain();
-            bar.append(swap);
-            const fit = el(doc, "button", "mm-btn", "Fit");
-            fit.title = "The whole plate in view (F)";
+            const fit = el(doc, "button", "mm-btn mm-fit", "Fit");
+            fit.title = "Fit: the whole plate in view (F)";
             fit.onclick = () => { this._mmCur().view = null; this._mmDraw(); };
+            icon(fit, "fit");
+            gView.append(swap, fit);
             const info = el(doc, "span", "mm-info", "");
-            bar.append(fit, info);
+            bar.append(info);
             const stage = el(doc, "div", "mm-stage");
             stage.tabIndex = 0;
             const canvas = el(doc, "canvas");
@@ -1562,12 +1726,22 @@ export const PrevizMatchmoveMixin = {
         const inMain = !!this._mmPlateMain;
         ui.swap = ui.swap || ui.bar.querySelector(".mm-plate-swap");
         if (ui.swap) {
-            ui.swap.textContent = inMain ? "⇄ 3D view" : "⇄ Main view";
+            const want = inMain ? "3D view" : "Main view";
+            if (ui.swap.dataset.label !== want) {
+                setEditIcon(ui.swap, "mmSwap");
+                ui.swap.append(el(ui.swap.ownerDocument, "span", "", want));
+                ui.swap.dataset.label = want;
+            }
             ui.swap.title = inMain ? "Back to the 3D view in the main view; the plate goes back to its panel"
                                    : "The plate in the main view, in place of the 3D view";
         }
-        ui.shape.textContent = st.selectShape === "lasso" ? "Lasso" : "Box";
-        ui.shape.classList.toggle("on", st.selectShape === "lasso");
+        const lasso = st.selectShape === "lasso";
+        if (ui.shape.dataset.icon !== (lasso ? "mmLasso" : "mmBox")) {
+            const t = ui.shape.title;
+            setEditIcon(ui.shape, lasso ? "mmLasso" : "mmBox");
+            ui.shape.title = t;
+        }
+        ui.shape.dataset.shape = lasso ? "lasso" : "box";
         this._mmLoop();
         return ui;
     },
