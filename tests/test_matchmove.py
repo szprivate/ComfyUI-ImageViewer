@@ -223,6 +223,83 @@ class Tracking(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def _panning(self, dx=6.0, dy=1.0, w=360, h=200, seed=3):
+        rng = np.random.default_rng(seed)
+        base = MM._blur_gauss(rng.random((h * 3, w * 3)).astype(np.float32), 2.0)
+
+        def frame(f):
+            xs = np.arange(w)[None, :] + 0.5 + dx * f + 200 + 0 * np.arange(h)[:, None]
+            ys = np.arange(h)[:, None] + 0.5 + dy * f + 100 + 0 * np.arange(w)[None, :]
+            return T.sample(base, xs, ys).astype(np.float32)
+        return frame
+
+    def _check_motion(self, tracks, dx=6.0, dy=1.0):
+        errs = []
+        for t in tracks:
+            k0 = t["keys"][0]
+            for k in t["keys"][1:]:
+                df = k[0] - k0[0]
+                errs.append(math.hypot(k[1] - (k0[1] - dx * df), k[2] - (k0[2] - dy * df)))
+        self.assertLess(np.median(errs), 0.1)
+
+    def test_a_hard_shot_is_tracked_both_ways_from_a_frame_in_the_middle(self):
+        frame = self._panning(dx=10)                                        # features leave the picture
+        r = MM.track_shot(frame, 0, 30, [15], n=60, direction="both")
+        tr = r["tracks"]
+        self.assertGreater(len(tr), 60)
+        self._check_motion(tr, dx=10)
+        self.assertEqual(min(t["keys"][0][0] for t in tr), 0)
+        self.assertEqual(max(t["keys"][-1][0] for t in tr), 30)
+        counts = [sum(1 for t in tr for k in t["keys"] if k[0] == f) for f in range(31)]
+        self.assertGreaterEqual(min(counts), 30, counts)                    # found again where they ran out
+        # a feature found part way is followed back the other way: longer tracks than without
+        short = MM.track_shot(frame, 0, 30, [15], n=60, direction="both", follow_new=False)["tracks"]
+        self._check_motion(short, dx=10)
+        keys = lambda ts: sum(len(t["keys"]) for t in ts)
+        self.assertGreater(keys(tr), keys(short) * 1.05)
+        born = {t["id"]: t["keys"][0][0] for t in short if t["keys"][0][0] > 15}     # found on the way forwards
+        self.assertTrue(born)
+        back = [t["keys"][0][0] for t in tr if t["id"] in born]
+        self.assertTrue(all(f < born[t["id"]] for f, t in zip(back, (t for t in tr if t["id"] in born))))
+
+    def test_forwards_or_backwards_only_keys_that_side_of_the_seed(self):
+        frame = self._panning()
+        f = MM.track_shot(frame, 0, 20, [8], n=40, direction="forward")["tracks"]
+        b = MM.track_shot(frame, 0, 20, [8], n=40, direction="backward")["tracks"]
+        self.assertTrue(f and b)
+        self.assertTrue(all(k[0] >= 8 for t in f for k in t["keys"]))
+        self.assertTrue(all(k[0] <= 8 for t in b for k in t["keys"]))
+        self._check_motion(f)
+        self._check_motion(b)
+
+    def test_tracks_are_carried_on_past_their_ends_and_new_ones_keep_clear(self):
+        frame = self._panning()
+        whole = MM.track_shot(frame, 0, 24, [12], n=40, direction="both", follow_new=False)["tracks"]
+        # the shot's tracks, cut to frames 10..14
+        existing = {t["id"]: {k[0]: (k[1], k[2]) for k in t["keys"] if 10 <= k[0] <= 14} for t in whole}
+        existing = {k: v for k, v in existing.items() if len(v) == 5}
+        ids = list(existing)[:8]
+        r = MM.track_shot(frame, 0, 24, [], n=40, direction="both", existing=existing, extend=ids)
+        self.assertEqual(r["tracks"], [])                                   # no seeds: only carried on
+        self.assertEqual(sorted(r["extended"]), sorted(ids))
+        for tid, keys in r["extended"].items():
+            self.assertTrue(all(k[0] < 10 or k[0] > 14 for k in keys))     # only what the track lacked
+            self.assertTrue(any(k[0] < 10 for k in keys) and any(k[0] > 14 for k in keys))
+        errs = []
+        for tid, keys in r["extended"].items():
+            x0, y0 = existing[tid][12]
+            errs += [math.hypot(x - (x0 - 6 * (f - 12)), y - (y0 - 1 * (f - 12))) for f, x, y, _ in keys]
+        self.assertLess(np.median(errs), 0.15)
+        self.assertLess(max(errs), 2)
+        # new features at frame 12 stay away from the tracks there
+        r = MM.track_shot(frame, 0, 24, [12], n=60, direction="forward", existing=existing)
+        at12 = [t["keys"][0][1:3] for t in r["tracks"] if t["keys"][0][0] == 12]
+        self.assertTrue(at12)
+        self.assertLessEqual(len(at12), 60 - len(existing))
+        for x, y in at12:
+            near = min(math.hypot(x - a, y - b) for a, b in (v[12] for v in existing.values()))
+            self.assertGreater(near, 3)
+
     def test_mask_keys_are_straight_in_between(self):
         m = MM.clean_mask({"keys": [{"f": 0, "pts": [[0, 0], [10, 0], [0, 10]]},
                                     {"f": 10, "pts": [[10, 0], [20, 0], [10, 10]]}]})
@@ -482,6 +559,30 @@ class Routes(unittest.TestCase):
             r = await c.get("/imageviewer/mm_from_comp", params={"path": d["path"]})
             back = await r.json()
             self.assertEqual((back["k1"], back["k2"]), (-0.04, 0.01))
+        self.run_c(go)
+
+    def test_a_hard_shot_job_tracks_from_a_frame_both_ways_and_carries_tracks_on(self):
+        async def go(c):
+            r = await c.post("/imageviewer/mm_track", json={"path": self.seq, "from": 0, "to": 5, "n": 30,
+                                                            "direction": "both", "seeds": [3]})
+            d = await self.wait(c, (await r.json())["job"])
+            self.assertEqual(d["state"], "done", d)
+            self.assertGreater(len(d["tracks"]), 10)
+            self.assertEqual(d["extended"], {})
+            self.assertEqual(min(t["keys"][0][0] for t in d["tracks"]), 0)
+            self.assertEqual(max(t["keys"][-1][0] for t in d["tracks"]), 5)
+            t = d["tracks"][0]
+            mid = [k for k in t["keys"] if 2 <= k[0] <= 3]
+            r = await c.post("/imageviewer/mm_track", json={"path": self.seq, "from": 0, "to": 5, "direction": "both",
+                                                            "tracks": [{"id": "a", "keys": mid}], "extend": ["a", "nope"]})
+            d = await self.wait(c, (await r.json())["job"])
+            self.assertEqual(d["state"], "done", d)
+            self.assertEqual(d["tracks"], [])
+            got = sorted(k[0] for k in d["extended"]["a"])
+            self.assertEqual(got[0], 0)
+            self.assertNotIn(2, got)
+            r = await c.post("/imageviewer/mm_track", json={"path": self.seq, "direction": "both", "seeds": ["x"]})
+            self.assertEqual(r.status, 400)
         self.run_c(go)
 
     def test_an_ai_matte_over_the_shot_is_one_job_and_becomes_a_mask(self):

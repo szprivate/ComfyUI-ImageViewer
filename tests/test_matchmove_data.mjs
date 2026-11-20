@@ -187,3 +187,30 @@ test("a matte mask keeps its sequence and names the frame that stands for anothe
     assert.equal(D.cleanMask({ matte: { pattern: "no-hashes.png", frames: [1] } }), null);
     assert.deepEqual(D.groundVotes({ a: [3, 4], b: [1, 4], c: [0, 0] }), ["a"]);
 });
+
+test("a hard shot's tracking: range and start, thin frames to look again on, keys found past a track's ends", () => {
+    const mm = D.newMatchmove({ path: "/p/shot.####.exr", frames: 40, width: 1920, height: 1080, fps: 25 });
+    assert.deepEqual(D.trackRange(mm), { from: 0, to: 39, start: 0, direction: "both" });
+    mm.settings.direction = "backward";
+    assert.equal(D.trackRange(mm).start, 39);                             // backwards starts at the end
+    mm.settings.start = 99; mm.settings.from = 5; mm.settings.to = 20;
+    assert.deepEqual(D.trackRange(mm), { from: 5, to: 20, start: 20, direction: "backward" });
+    const back = D.cleanMatchmove(JSON.parse(JSON.stringify(mm)));
+    assert.equal(back.settings.direction, "backward");
+    assert.equal(back.settings.start, 99);
+    assert.equal(D.cleanMatchmove({ settings: { direction: "sideways" } }).settings.direction, "both");
+    // ten tracks on frames 0..9 and 30..39: 10..29 is thin
+    for (let i = 0; i < 10; i++) {
+        const keys = [];
+        for (let f = 0; f < 40; f++) if (f < 10 || f >= 30) keys.push([f, i, i, 1]);
+        mm.tracks.push({ id: `t${i}`, name: `t${i}`, group: "camera", on: true, keys });
+    }
+    assert.deepEqual(D.thinSeeds(mm, 8), [20]);
+    assert.deepEqual(D.thinSeeds(mm, 8, 25, 39), [27]);
+    assert.deepEqual(D.tracksForServer(mm)[0].keys[0], [0, 0, 0]);
+    const n = D.addExtended(mm, { t0: [[10, 5, 5, 0.9], [11, 6, 6, 0.8], [0, 99, 99, 1]], nope: [[1, 1, 1, 1]] });
+    assert.equal(n, 2);                                                   // a frame it has already is left alone
+    assert.deepEqual(D.keyAt(mm.tracks[0], 11), [11, 6, 6, 0.8]);
+    assert.equal(D.keyAt(mm.tracks[0], 0)[1], 0);
+    assert.deepEqual(mm.tracks[0].keys.map((k) => k[0]).slice(8, 13), [8, 9, 10, 11, 30]);
+});

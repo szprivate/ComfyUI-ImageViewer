@@ -318,7 +318,10 @@ export const PrevizAgentMatchmoveMixin = {
 
     // ── tracks ───────────────────────────────────────────────────────────────
 
-    /** Find and follow features: {features, min_ncc, min_dist, from, to}. Run again to add more where the shot is thin. */
+    /** Find and follow features: {features, min_ncc, min_dist, from, to, direction: forward | backward | both,
+     *  start (the frame to start from), seeds ("thin" = the middle of every thin stretch, or frame numbers: new
+     *  features there), extend (true = carry every track on past its ends, or track ids)}. Run again to add more
+     *  where the shot is thin. */
     async _asa_matchmove_track(scene, a) {
         const st = await this._amm();
         const last = st.mm.plate.frames - 1;
@@ -329,11 +332,23 @@ export const PrevizAgentMatchmoveMixin = {
             if (isNum(a.min_dist)) s.minDist = Math.max(0, Number(a.min_dist));
             if (isNum(a.from)) s.from = Math.max(0, Math.min(last, Math.round(Number(a.from))));
             if (a.to === null) s.to = null; else if (isNum(a.to)) s.to = Math.max(0, Math.min(last, Math.round(Number(a.to))));
+            if (D.TRACK_DIRECTIONS.includes(a.direction)) s.direction = a.direction;
+            if (a.start === null) s.start = null; else if (isNum(a.start)) s.start = Math.max(0, Math.min(last, Math.round(Number(a.start))));
         });
         const before = st.mm.tracks.length;
         this._ammStep(st, "track");
-        await this.matchmoveAutoTrack();
-        return this._ammAnswer(st, { added: st.mm.tracks.length - before });
+        let got;
+        if (a.extend) {
+            const ids = Array.isArray(a.extend) ? a.extend.map(String).filter((i) => st.mm.tracks.some((t) => t.id === i)) : null;
+            if (Array.isArray(a.extend) && !ids.length) throw new Error("extend names no track of this matchmove");
+            got = await this.matchmoveExtendTracks(ids || st.mm.tracks.filter((t) => t.on).map((t) => t.id));
+        } else if (a.seeds === "thin") got = await this.matchmoveFillThin();
+        else if (Array.isArray(a.seeds)) {
+            const seeds = a.seeds.filter(isNum).map((f) => Math.max(0, Math.min(last, Math.round(Number(f)))));
+            if (!seeds.length) throw new Error("seeds are frame numbers (or \"thin\")");
+            got = await this.matchmoveTrackFrom(seeds);
+        } else got = await this.matchmoveAutoTrack();
+        return this._ammAnswer(st, { added: st.mm.tracks.length - before, keys_added: (got && got.keys) || 0 });
     },
 
     /** Tracks by hand: points [{x, y, frame}] (frame: where the feature is at x, y; default the frame shown), followed both ways. */

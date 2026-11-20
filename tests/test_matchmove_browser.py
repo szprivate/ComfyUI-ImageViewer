@@ -288,6 +288,36 @@ class MatchmoveBrowserTests(unittest.TestCase):
             self.assertGreater(n, 40)
             self._shot(pg, "mm_tracked")
 
+            # A hard shot: new points on a frame in the middle, followed both ways; tracks carried on past their ends.
+            hard = pg.evaluate("""async (N) => { const P = window.__panel; const st = P._mmCur();
+                const ids = new Set(st.mm.tracks.map((t) => t.id));
+                // the first five tracks cut to frames 4..6, then carried on
+                const cut = st.mm.tracks.slice(0, 5).map((t) => t.id);
+                P._mmEdit("cut", (m) => { for (const t of m.tracks) if (cut.includes(t.id)) t.keys = t.keys.filter((k) => k[0] >= 4 && k[0] <= 6); });
+                const ext = await P.matchmoveExtendTracks(cut);
+                const spans = st.mm.tracks.filter((t) => cut.includes(t.id)).map((t) => [t.keys[0][0], t.keys[t.keys.length - 1][0]]);
+                P.setFrame(Math.floor(N / 2));
+                const more = await P.matchmoveTrackFrom([Math.floor(N / 2)], { direction: "both" });
+                const fresh = st.mm.tracks.filter((t) => !ids.has(t.id));
+                st.mm.step = "track";
+                P._mmRender();
+                const labels = [...P.mmGuidePanel.querySelectorAll('button')].map((b) => b.textContent);
+                return { ext, spans, more, fresh: fresh.length, first: Math.min(...fresh.map((t) => t.keys[0][0])),
+                         last: Math.max(...fresh.map((t) => t.keys[t.keys.length - 1][0])), labels }; }""", N)
+            self.assertGreater(hard["ext"]["keys"], 5, hard)
+            self.assertTrue(any(a < 4 or b > 6 for a, b in hard["spans"]), hard["spans"])
+            self.assertEqual(hard["fresh"], hard["more"]["added"])
+            if hard["fresh"]:
+                self.assertLess(hard["first"], N // 2)                     # followed backwards too
+                self.assertGreater(hard["last"], N // 2)
+            self.assertIn("New points on this frame", hard["labels"])
+            self.assertTrue(any(t.startswith("Carry") for t in hard["labels"]), hard["labels"])
+            pg.evaluate("() => window.__panel.dockToggleMaximized('mmGuide')")
+            pg.wait_for_timeout(200)
+            self._shot(pg, "mm_hard_shot")
+            pg.evaluate("() => window.__panel.dockToggleMaximized('mmGuide')")
+            n = pg.evaluate("() => window.__panel._mmCur().mm.tracks.length")
+
             # A track picked and deleted with its key, from the Plate panel.
             pg.evaluate("""() => { const P = window.__panel; const st = P._mmCur();
                 st.sel = new Set([st.mm.tracks[0].id]); P._mmUI.stage.focus(); P._mmFocused = true; }""")

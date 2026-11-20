@@ -849,6 +849,207 @@ def auto_track(get, frames, n=200, min_dist=None, masks=None, fb=1.0, min_ncc=0.
     return [t for t in tracks if len(t["keys"]) >= 2]
 
 
+# ── tracking a hard shot: new points on any frame, forwards, backwards or both ─────────────────
+
+DIRECTIONS = ("forward", "backward", "both")
+
+
+def track_shot(get, lo, hi, seeds, n=200, direction="both", existing=None, extend=None, masks=None,
+               fb=1.0, min_ncc=0.75, refill=0.7, min_dist=None, prefix="t", start_id=1, follow_new=True,
+               groups=None, cancel=None, progress=None):
+    """Track frames lo..hi of a shot from the frames in ``seeds``, ``direction`` forward | backward | both.
+
+    At each seed frame new features are found where the tracks there (``existing`` and the ones found so far)
+    are fewer than n, and followed in the direction(s) asked; when fewer than ``refill`` x n are alive on a
+    frame, new ones are found there too. With ``follow_new`` a feature found part way along a pass is then
+    followed the other way as well, back to the range's end, so every track is as long as the picture lets it
+    be. ``existing`` = {id: {f: (x, y)}} (the shot's tracks: kept clear of, and counted); ``extend`` = ids of
+    those to carry on past their last key (forward) and before their first (backward), as the direction says.
+    ``seeds`` None = the frame the direction starts at; [] = no new features (only carrying on).
+
+    Returns {"tracks": [{id, name, group, auto, keys}], "extended": {id: [[f, x, y, score], ...]}} - the
+    extended keys are only the new ones, outside the track's own span."""
+    if direction not in DIRECTIONS:
+        direction = "both"
+    lo, hi = int(min(lo, hi)), int(max(lo, hi))
+    masks = [m for m in (clean_mask(m) for m in masks or []) if m]
+    existing = existing or {}
+    fwd, bwd = direction in ("forward", "both"), direction in ("backward", "both")
+    tracks = []                    # {id, group, keys: {f: [x, y, s]}, born, ext}
+    nid = [start_id]
+    done = [0]
+    pyr_cache = {}
+
+    def pyr_of(f):
+        if f not in pyr_cache:
+            if len(pyr_cache) > 6:
+                pyr_cache.pop(next(iter(pyr_cache)))
+            pyr_cache[f] = pyramid(grey(get(f)))
+        return pyr_cache[f]
+
+    w = h = None
+    md = min_dist
+
+    def taken_at(f, skip=()):
+        pts = [xy[f] for tid, xy in existing.items() if f in xy and tid not in skip]
+        pts += [t["keys"][f][:2] for t in tracks if f in t["keys"]]
+        return pts
+
+    def seed(f):
+        """New features at f (kept clear of every track there); their indices into ``tracks``."""
+        nonlocal w, h, md
+        g = pyr_of(f)[0]
+        if w is None:
+            h, w = g.shape
+            md = md or max(8, int(math.sqrt(w * h / max(1, n)) * 0.5))
+        avoid = [tuple(p) for p in taken_at(f)]          # the tracks alive here are among them
+        want = n - len(avoid)
+        if want <= 0 or len(tracks) >= MAX_TRACKS:
+            return []
+        new = detect_features(g, n=min(want, MAX_TRACKS - len(tracks)), min_dist=md, avoid=avoid or None,
+                              keep=lambda pts: masks_state(masks, f, pts) != "exclude")
+        if not len(new):
+            return []
+        st = masks_state(masks, f, new)
+        out = []
+        for i, p in enumerate(new):
+            grp = st[i][4:] if str(st[i]).startswith("obj:") else "camera"
+            tid = f"{prefix}{nid[0]}"
+            nid[0] += 1
+            tracks.append({"id": tid, "group": grp, "keys": {int(f): [float(p[0]), float(p[1]), 1.0]},
+                           "born": int(f), "ext": False})
+            out.append(len(tracks) - 1)
+        return out
+
+    def sweep(frames, starts, reseed):
+        """Follow tracks through ``frames`` (in order): ``starts`` {f: [track index]} join where they are at f;
+        with ``reseed`` new features are found on thin frames. Returns the indices of the tracks born here."""
+        born = []
+        alive, pos, vel = [], np.zeros((0, 2)), np.zeros((0, 2))
+        for k, f in enumerate(frames):
+            if cancel and cancel():
+                break
+            joining = [i for i in starts.get(f, []) if i not in alive]
+            if joining:
+                alive += joining
+                pos = np.r_[pos, [tracks[i]["keys"][f][:2] for i in joining]]
+                vel = np.r_[vel, np.zeros((len(joining), 2))]
+            if k + 1 >= len(frames):
+                break
+            f1 = frames[k + 1]
+            pyr, pyr1 = pyr_of(f), pyr_of(f1)
+            if alive:
+                new, ok, _ = lk(pyr, pyr1, pos, guess=pos + vel)
+                back, ok2, _ = lk(pyr1, pyr, new)
+                fbe = np.sqrt(((back - pos) ** 2).sum(1))
+                ncc = patch_ncc(pyr[0], pos, pyr1[0], new)
+                good = ok & ok2 & (fbe < fb) & (ncc > min_ncc)
+                if masks:
+                    st = masks_state(masks, f1, new)
+                    for i, ti in enumerate(alive):
+                        grp = tracks[ti]["group"]
+                        if st[i] == "exclude" or (grp != "camera" and st[i] != "obj:" + grp and good[i]
+                                                  and _mask_owned(masks, grp)):
+                            good[i] = False
+                keep = []
+                for i, ti in enumerate(alive):
+                    # a track that runs into keys it already has (another pass) stops there
+                    if good[i] and f1 not in tracks[ti]["keys"]:
+                        tracks[ti]["keys"][int(f1)] = [float(new[i, 0]), float(new[i, 1]), float(ncc[i])]
+                        keep.append(i)
+                alive = [alive[i] for i in keep]
+                vel = (new - pos)[keep]
+                pos = new[keep]
+            if reseed and len(tracks) < MAX_TRACKS:
+                if len(taken_at(f1)) < refill * n:
+                    got = seed(f1)
+                    if got:
+                        born += got
+                        alive += got
+                        pos = np.r_[pos, [tracks[i]["keys"][f1][:2] for i in got]]
+                        vel = np.r_[vel, np.zeros((len(got), 2))]
+            done[0] += 1
+            if progress:
+                progress(done[0], len(tracks))
+        return born
+
+    up = list(range(lo, hi + 1))
+    down = up[::-1]
+
+    # carry on the tracks asked for, from their ends
+    if extend:
+        ext_f, ext_b = {}, {}
+        for tid in extend:
+            xy = existing.get(tid)
+            if not xy:
+                continue
+            first, last = min(xy), max(xy)
+            grp = (groups or {}).get(tid, "camera")
+            for f0, side, store in ((last, fwd, ext_f), (first, bwd, ext_b)):
+                if side and lo <= f0 <= hi:
+                    tracks.append({"id": tid, "group": grp, "keys": {int(f0): [*map(float, xy[f0]), 1.0]},
+                                   "born": int(f0), "ext": True})
+                    store.setdefault(f0, []).append(len(tracks) - 1)
+        if ext_f:
+            sweep([f for f in up if f >= min(ext_f)], ext_f, False)
+        if ext_b:
+            sweep([f for f in down if f <= max(ext_b)], ext_b, False)
+
+    # new features from each seed frame
+    for s in sorted({max(lo, min(hi, int(f))) for f in (seeds if seeds is not None else [lo if fwd else hi])}):
+        if cancel and cancel():
+            break
+        first = seed(s)
+        born = []
+        if fwd:
+            born += [(i, "f") for i in sweep([f for f in up if f >= s], {s: first}, True)]
+        if bwd:
+            born += [(i, "b") for i in sweep([f for f in down if f <= s], {s: first}, True)]
+        if follow_new and direction == "both":
+            # found part way along: follow them the other way too
+            back_starts, fwd_starts = {}, {}
+            for i, way in born:
+                (back_starts if way == "f" else fwd_starts).setdefault(tracks[i]["born"], []).append(i)
+            if back_starts:
+                sweep([f for f in down if f <= max(back_starts)], back_starts, False)
+            if fwd_starts:
+                sweep([f for f in up if f >= min(fwd_starts)], fwd_starts, False)
+
+    def keys_of(t, skip=None):
+        return [[f, round(v[0], 3), round(v[1], 3), round(v[2], 3)] for f, v in sorted(t["keys"].items())
+                if skip is None or f not in skip]
+
+    out, extended = [], {}
+    for t in tracks:
+        if t["ext"]:
+            ks = keys_of(t, existing.get(t["id"], {}))
+            if ks:
+                extended.setdefault(t["id"], []).extend(ks)
+        elif len(t["keys"]) >= 2:          # one-frame tracks say nothing
+            out.append({"id": t["id"], "name": t["id"], "group": t["group"], "auto": True, "keys": keys_of(t)})
+    for tid in extended:
+        extended[tid].sort(key=lambda k: k[0])
+    return {"tracks": out, "extended": extended}
+
+
+def track_cost(lo, hi, seeds, direction, extend):
+    """About how many frame steps track_shot takes (for its progress bar)."""
+    span = abs(hi - lo) + 1
+    per = span * (2 if direction == "both" else 1)
+    return max(1, per * max(1, len(seeds or [0])) + (per if extend else 0))
+
+
+def existing_tracks(raw, limit=MAX_TRACKS):
+    """A page's tracks as ({id: {f: (x, y)}}, {id: group}): what track_shot keeps clear of and carries on."""
+    out, groups = {}, {}
+    for t in clean_tracks(raw, limit):
+        xy = {k[0]: (k[1], k[2]) for k in t["keys"]}
+        if xy:
+            out[t["id"]] = xy
+            groups[t["id"]] = t["group"]
+    return out, groups
+
+
 def _mask_owned(masks, grp):
     return any(m["mode"] == "object" and m["object"] == grp for m in masks)
 
