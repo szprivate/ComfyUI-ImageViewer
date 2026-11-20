@@ -13,6 +13,7 @@ import { describeViewerState, annotationReport } from "./imageViewer_viewerState
 import { frameKind } from "./imageViewer_historySelection.js";
 import * as D from "./imageViewer_editTimelineData.js";
 import { describeScene } from "./imageViewer_agentSceneData.js";
+import * as MM from "./imageViewer_matchmoveData.js";
 
 const safe = (fn, fallback = null) => { try { return fn(); } catch (_) { return fallback; } };
 
@@ -204,6 +205,47 @@ export const AgentStateMixin = {
         return scene ? describeScene(scene) : null;
     },
 
+    /**
+     * The matchmove's plate (imageViewer_previzMatchmove.js keeps one per 3D tab in _mmTabs): this 3D tab's,
+     * else another 3D tab's that has a plate - what the agent's matchmove tool would work on. Before the
+     * tab's .mm.json is read in (after a reload, with the guide shut) only its file is known.
+     */
+    _agentMatchmove() {
+        const tabs = this._mmTabs || {};
+        const key = this.activeTab;
+        const has = (k) => { const st = tabs[k]; return st && st.mm && st.mm.plate ? st : null; };
+        let st = has(key), tab = key;
+        if (!st) {
+            const other = Object.keys(tabs).find((k) => k !== key && has(k));
+            if (other) { st = tabs[other]; tab = other; }
+        }
+        if (!st) {
+            const here = this.isPrevizTab && this.isPrevizTab();
+            const scene = here && this.previzScene ? this.previzScene() : null;
+            const mm = scene && scene.matchmove;
+            if (mm && mm.file) return { tab: key, here: true, file: String(mm.file), loaded: false };
+            return null;
+        }
+        const mm = st.mm, p = mm.plate;
+        const ts = mm.tracks.length ? MM.trackStats(mm) : null;
+        const sv = mm.solve;
+        const fmm = sv ? MM.focalMmOf(sv.focal_px, mm) : null;
+        const here = tab === key;
+        return {
+            tab, here, loaded: true, file: st.file || "", step: mm.step,
+            plate: { path: p.path, frames: p.frames, width: p.width, height: p.height, fps: p.fps, kind: p.kind, first: p.first },
+            current: here ? Math.max(0, Math.min(p.frames - 1, Math.round(this.currentFrame || 0))) : null,
+            lens: (mm.lens && mm.lens.source) || "none",
+            camera: { focal_mm: mm.camera.focalMm, focal_known: !!mm.camera.focalKnown, model: mm.camera.model || "" },
+            masks: mm.masks.length,
+            tracks: ts ? { total: ts.tracks, on: ts.on, fewest_on_a_frame: ts.leastPerFrame } : { total: 0 },
+            solve: sv ? { rms_px: sv.rms, verdict: MM.solveVerdict(sv.rms), focal_mm: fmm } : null,
+            built: !!(mm.scene && mm.scene.group),
+            plate_main: !!this._mmPlateMain,
+            busy: st.busy ? String(st.busy.what || "busy") : "",
+        };
+    },
+
     _agentAnnotCounts() {
         const items = safe(() => this._annotItems(false), null) || [];
         if (!items.length) return null;
@@ -256,6 +298,7 @@ export const AgentStateMixin = {
         snap.camera = safe(() => this._agentCamera(), null);
         snap.characters = safe(() => this._agentCharacters(), null);
         snap.scene3d = safe(() => this._agentScene3d(), null);
+        snap.matchmove = safe(() => this._agentMatchmove(), null);
         snap.annotations = this._agentAnnotCounts();
         return snap;
     },

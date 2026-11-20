@@ -162,3 +162,24 @@ test("something that is not a mark is skipped", () => {
     assert.equal(describeMark(null), null);
     assert.equal(annotationReport({ kind: "image", items: [null, { type: "evil" }] }).annotations.length, 0);
 });
+
+test("the matchmove's plate, its frame and how far the track is", () => {
+    const s = describeViewerState({ open: true, visible: true, tab: { key: "previz:1", mode: "previz" }, matchmove: {
+        tab: "previz:1", here: true, loaded: true, file: "D:/out/plate_mm_v001.mm.json", step: "track",
+        plate: { path: "D:/in/plate.####.exr", frames: 120, width: 3840, height: 2160, fps: 24, kind: "sequence", first: 1001 },
+        current: 37, lens: "grid", camera: { focal_mm: 26, focal_known: true, model: "Apple iPhone 14" }, masks: 2,
+        tracks: { total: 180, on: 170, fewest_on_a_frame: 22 }, solve: { rms_px: 0.41234, verdict: "very good", focal_mm: 25.9 },
+        built: true, plate_main: true, busy: "" } });
+    const m = s.matchmove;
+    assert.deepEqual(m.plate, { path: "D:/in/plate.####.exr", frames: 120, width: 3840, height: 2160, fps: 24, kind: "sequence",
+                                first_file_frame: 1001, frame_range: [0, 119] });
+    assert.equal(m.current_frame, 37);
+    assert.deepEqual(m.tracks, { total: 180, on: 170, fewest_on_a_frame: 22 });
+    assert.deepEqual(m.solve, { rms_px: 0.412, verdict: "very good", focal_mm: 25.9 });
+    assert.equal(m.plate_in_main_view, true);
+    assert.equal(m.on_this_tab, undefined);
+    // only the file known yet (the tab's .mm.json not read in): it is still named
+    const f = describeViewerState({ open: true, matchmove: { tab: "previz:1", here: true, loaded: false, file: "D:/a.mm.json" } });
+    assert.deepEqual(f.matchmove, { tab: "previz:1", file: "D:/a.mm.json", loaded: false });
+    assert.equal(describeViewerState({ open: true, matchmove: { tab: "x" } }).matchmove, undefined);
+});

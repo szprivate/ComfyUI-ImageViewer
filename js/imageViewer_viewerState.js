@@ -382,6 +382,48 @@ export function describeViewerState(s) {
         out.scene3d = o;
     }
 
+    // The matchmove's plate (the agent's matchmove tool works on it; "open" is only for another plate).
+    const mm = snap.matchmove;
+    if (mm && typeof mm === "object") {
+        const o = {};
+        put(o, "tab", mm.tab ? String(mm.tab) : "");
+        if (mm.here === false) o.on_this_tab = false;
+        put(o, "file", mm.file || "");
+        if (mm.loaded === false) {
+            o.loaded = false;
+        } else if (mm.plate && mm.plate.path) {
+            const p = mm.plate;
+            o.plate = { path: String(p.path), frames: Math.round(p.frames || 0), width: Math.round(p.width || 0),
+                        height: Math.round(p.height || 0) };
+            if (p.fps > 0) o.plate.fps = r3(p.fps);
+            put(o.plate, "kind", p.kind || "");
+            if (Number.isInteger(p.first) && p.first) o.plate.first_file_frame = p.first;
+            o.plate.frame_range = [0, Math.max(0, Math.round(p.frames || 1) - 1)];
+            if (Number.isInteger(mm.current)) o.current_frame = mm.current;
+            put(o, "step", mm.step || "");
+            put(o, "lens", mm.lens || "");
+            const c = mm.camera || {};
+            if (finite(c.focal_mm)) o.focal_mm = r3(c.focal_mm);
+            if (c.focal_known) o.focal_known = true;
+            put(o, "camera_model", c.model || "");
+            if (mm.masks) o.masks = mm.masks;
+            const t = mm.tracks || {};
+            o.tracks = { total: Math.round(t.total || 0) };
+            if (t.total) {
+                o.tracks.on = Math.round(t.on || 0);
+                o.tracks.fewest_on_a_frame = Math.round(t.fewest_on_a_frame || 0);
+            }
+            if (mm.solve) {
+                o.solve = { rms_px: r3(mm.solve.rms_px), verdict: mm.solve.verdict || "" };
+                if (finite(mm.solve.focal_mm)) o.solve.focal_mm = r3(mm.solve.focal_mm);
+            } else o.solve = null;
+            if (mm.built) o.built = true;
+            if (mm.plate_main) o.plate_in_main_view = true;
+            put(o, "busy", mm.busy || "");
+        }
+        if (o.plate || o.file) out.matchmove = o;
+    }
+
     const an = snap.annotations;
     if (an && an.count > 0) {
         out.annotations = { count: an.count };
