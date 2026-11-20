@@ -848,6 +848,7 @@ export const PrevizMatchmoveMixin = {
                     this._mmNum(ctx, minLen, (v) => { st.minLen = Math.max(2, Math.round(v || 10)); }, { step: 1, min: 2, width: "48px" }), el(ctx.doc, "span", "", "frames"));
         this._mmRow(ctx, "", this._mmBtn(ctx, `Delete picked (${st.sel.size})`, () => this.matchmoveDeleteSelected(), { disabled: !st.sel.size }),
                     this._mmBtn(ctx, "Delete all", () => this._mmEdit("delete all tracks", (m) => { m.tracks = []; m.solve = null; })));
+        this._mmDepthCheckSection(ctx);
     },
 
     /** A small bar graph: one bar a frame, red under `least`. */
@@ -966,6 +967,7 @@ export const PrevizMatchmoveMixin = {
                                                   (v) => this._mmEdit("solve mode", (m) => { m.settings.mode = v; })));
         this._mmRow(ctx, "Focal length", this._mmSelect(ctx, [["auto", mm.camera.focalKnown ? "Start from the camera's, refine it" : "Find it"], ["on", "Refine it"], ["off", "Keep it fixed"]], s.refine,
                                                         (v) => this._mmEdit("refine", (m) => { m.settings.refine = v; })));
+        this._mmDepthSection(ctx);
         this._mmMeasurements(ctx);
         this._mmRow(ctx, "", this._mmBtn(ctx, mm.solve ? "Solve again" : "Solve the camera", () => this.matchmoveSolve(), { primary: true, disabled: mm.tracks.length < 8 }));
         if (mm.tracks.length < 8) this._mmNote(ctx, "Track the plate first: a solve needs 8 or more tracks on every frame.", "warn");
@@ -980,10 +982,12 @@ export const PrevizMatchmoveMixin = {
                      el(ctx.doc, "div", "", `${(sv.points || []).length} points in 3D`));
         if (sv.units === "m") facts.append(el(ctx.doc, "div", "mm-good", "1 unit = 1 metre, from the distances measured"));
         const fc = sv.focal_check;
-        if (fc && (fc.weak || fc.better)) facts.append(el(ctx.doc, "div", "mm-note warn mm-proportions",
+        if (fc && fc.held_by_depth && !fc.better) facts.append(el(ctx.doc, "div", "mm-good mm-proportions", "Proportions: the tracks alone leave the focal length loose; the depth held it."));
+        else if (fc && (fc.weak || fc.better)) facts.append(el(ctx.doc, "div", "mm-note warn mm-proportions",
             fc.better ? `Proportions: a focal length 10 % ${fc.better === "short" ? "shorter" : "longer"} fits better - the depth is likely squashed or stretched.`
                       : "Proportions: the shot does not pin its focal length down, so the depth may be squashed or stretched. Measure two distances or a right angle."));
         else if (fc) facts.append(el(ctx.doc, "div", "mm-good mm-proportions", "Proportions: the focal length is pinned down by the shot."));
+        this._mmDepthFacts(ctx, facts, sv);
         for (const n of sv.notes || []) facts.append(el(ctx.doc, "div", "mm-note", n));
         ctx.box.append(facts);
         const n = mm.plate.frames;
@@ -1071,18 +1075,22 @@ export const PrevizMatchmoveMixin = {
         return mm.camera.focalKnown && fpx ? fpx : null;
     },
 
-    async matchmoveSolve() {
+    async matchmoveSolve({ ask = true } = {}) {
         const st = this._mmCur();
+        // AI depth chosen but not run yet: run it first (the solve takes its frames as key frames)
+        if (st.mm.settings.depth === "ai" && !st.mm.depthRun && !(await this.matchmoveDepthRun({ ask }))) return;
         const mm = st.mm;
         const p = mm.plate;
         const fpx = this._mmFocalFor(mm) || (mm.settings.refine === "off" && st.lensFocal) || null;
         // "auto": find it when not known, else start from the camera's and refine it - a camera's metadata (a
         // phone's above all: stabilisation crops) is near, and a focal length held a little off squashes the depth
         const refine = mm.settings.refine === "on" ? true : mm.settings.refine === "off" ? false : fpx ? true : null;
+        const depth = D.depthRequest(mm);
         const d = await this._mmJob(st, "Solving", this._mmPost("/imageviewer/mm_solve", {
             width: p.width, height: p.height, tracks: mm.tracks.filter((t) => t.on), lens: this._mmLens(mm), focal_px: fpx || undefined,
             mode: mm.settings.mode, refine, pixel_aspect: D.pixelAspect(mm),
             constraints: (mm.constraints || []).filter((c) => c.on !== false),
+            ...(depth ? { depth } : {}),
         }));
         const res = d.result || {};
         if (d.state === "error" || res.error) throw new Error(res.error || d.error || "the solve failed");

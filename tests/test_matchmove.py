@@ -30,15 +30,16 @@ T = importlib.import_module("imageviewer_mm_under_test.comp_track")
 W, H, F = 1920, 1080, 1500.0
 
 
-def scene(n_frames=40, lens=None, noise=0.25, tripod=False, seed=1, w=W, h=H, f=F):
-    """Tracks of 300 random points seen by a camera that moves (or only turns): (tracks, poses)."""
+def scene(n_frames=40, lens=None, noise=0.25, tripod=False, seed=1, w=W, h=H, f=F, move=1.0):
+    """Tracks of 300 random points seen by a camera that moves (or only turns; *move* scales the path):
+    (tracks, poses)."""
     rng = np.random.default_rng(seed)
     X = np.c_[rng.uniform(-8, 8, 300), rng.uniform(-4, 4, 300), rng.uniform(8, 30, 300)]
     poses = []
     for fr in range(n_frames):
         a = fr / n_frames
         R = S.rodrigues(np.array([0.05 * math.sin(a * 3), 0.3 * a, 0.02]))
-        C = np.zeros(3) if tripod else np.array([3 * a, 0.3 * math.sin(a * 6), 1.5 * a])
+        C = np.zeros(3) if tripod else move * np.array([3 * a, 0.3 * math.sin(a * 6), 1.5 * a])
         poses.append((R, -R @ C))
     tracks = []
     for i, P in enumerate(X):
@@ -351,6 +352,101 @@ def _true_points(seed=1):
     """scene()'s 300 points, as it draws them."""
     rng = np.random.default_rng(seed)
     return np.c_[rng.uniform(-8, 8, 300), rng.uniform(-4, 4, 300), rng.uniform(8, 30, 300)]
+
+
+def depth_maps(poses, X, n=4, f=F, reading="disparity", w=W, h=H):
+    """A depth picture a frame of scene()'s points, at 1/n of the plate: each point a small square, the nearer on
+    top, nothing (0) between - as a phone (disparity, bright = near) or a model (depth, larger = farther) gives."""
+    def get(frames):
+        out = {}
+        for fr in frames:
+            R, t = poses[fr]
+            pc = (R @ X.T).T + t
+            uv = f * pc[:, :2] / pc[:, 2:] + [w / 2, h / 2]
+            m = np.zeros((h // n, w // n), np.float32)
+            for i in np.argsort(-pc[:, 2]):
+                if pc[i, 2] <= 0:
+                    continue
+                x, y = int(uv[i, 0] / n), int(uv[i, 1] / n)
+                if 0 <= x < m.shape[1] and 0 <= y < m.shape[0]:
+                    m[max(0, y - 3):y + 4, max(0, x - 3):x + 4] = 2.0 / pc[i, 2] if reading == "disparity" else pc[i, 2] / 40
+            out[fr] = m
+        return out
+    return get
+
+
+class Depth(unittest.TestCase):
+    """A depth picture for the track itself (matchmove_depth.py): the solve pulled into the depth the plate was seen
+    at, a solve with its depth inside out turned round, and the tracks the depth says not to trust."""
+
+    def test_a_shot_that_hardly_moves_gets_its_focal_and_its_depth_from_the_phone(self):
+        tracks, poses = scene(n_frames=30, move=0.3)
+        X = _true_points()
+        plain = S.solve(tracks, W, H, focal_px=F * 0.8, refine_focal=True)
+        r = S.solve(tracks, W, H, focal_px=F * 0.8, refine_focal=True,
+                    depth={"maps": depth_maps(poses, X), "frames": None, "strength": 1.0, "source": "phone"})
+        self.assertGreater(abs(plain["focal_px"] - F) / F, 0.05, plain["focal_px"])      # without: off
+        self.assertAlmostEqual(r["focal_px"], F, delta=F * 0.02)
+        self.assertLess(r["rms"], 0.5)
+        d = r["depth"]
+        self.assertEqual((d["reading"], d["source"]), ("disparity", "phone"))
+        self.assertLess(d["agreement"], 0.02)
+        self.assertGreater(d["order"], 0.8)
+        self.assertTrue(any("phone's depth pulled" in n for n in r["notes"]), r["notes"])
+        if d.get("turned"):
+            self.assertTrue(any("inside out" in n for n in r["notes"]), r["notes"])
+        # the points' proportions: two distances nobody measured keep their ratio to the true ones
+        pts = {q["id"]: np.asarray(q["X"]) for q in r["points"]}
+        ids = [i for i in (t["id"] for t in tracks) if i in pts]
+        P = lambda i: X[int(i[1:])]  # noqa: E731
+        ratios = [np.linalg.norm(pts[a] - pts[b]) / np.linalg.norm(P(a) - P(b)) for a, b in zip(ids[0:40:2], ids[1:40:2])]
+        self.assertLess(np.std(ratios) / np.mean(ratios), 0.03, ratios)
+
+    def test_an_easy_shot_is_left_as_it_was_and_ai_depth_reads_larger_as_farther(self):
+        tracks, poses = scene(n_frames=24)
+        plain = S.solve(tracks, W, H, focal_px=F, refine_focal=True)
+        some = depth_maps(poses, _true_points(), reading="depth")
+        r = S.solve(tracks, W, H, focal_px=F, refine_focal=True,                        # maps of three frames only
+                    depth={"maps": lambda fr: some([f for f in fr if f in (0, 11, 23)]), "frames": [0, 11, 23],
+                           "reading": "depth", "source": "ai"})
+        self.assertAlmostEqual(r["focal_px"], plain["focal_px"], delta=F * 0.005)
+        self.assertLess(r["rms"], plain["rms"] + 0.05)
+        self.assertFalse(r["depth"].get("turned"))
+        self.assertEqual(r["depth"]["frames"], 3)                                         # the maps it was given
+        self.assertTrue(any(n.startswith("The AI depth pulled") for n in r["notes"]), r["notes"])
+
+    def test_depth_read_the_wrong_way_or_of_another_plate_is_left_out(self):
+        tracks, poses = scene(n_frames=24)
+        X = _true_points()
+        wrong = S.solve(tracks, W, H, focal_px=F, depth={"maps": depth_maps(poses, X), "reading": "depth"})
+        self.assertIn("error", wrong["depth"])                                            # near and far swapped
+        self.assertTrue(any("Solved without the phone's depth" in n for n in wrong["notes"]), wrong["notes"])
+        self.assertLess(wrong["rms"], 0.6)
+        rng = np.random.default_rng(9)
+        noise = lambda frames: {f: rng.uniform(0.05, 0.3, (H // 4, W // 4)).astype(np.float32) for f in frames}  # noqa: E731
+        other = S.solve(tracks, W, H, focal_px=F, depth={"maps": noise})
+        self.assertIn("error", other["depth"])
+        tripod, _ = scene(n_frames=20, tripod=True)
+        t = S.solve(tripod, W, H, focal_px=F, mode="tripod", depth={"maps": noise})
+        self.assertTrue(any("only turns" in n and "depth" in n for n in t["notes"]), t["notes"])
+
+    def test_tracks_on_a_depth_edge_or_jumping_in_depth_are_named(self):
+        MD = importlib.import_module("imageviewer_mm_under_test.matchmove_depth")
+        w, h, frames = 400, 200, list(range(10))
+        maps = {}
+        for f in frames:
+            m = np.full((100, 200), 0.1, np.float32)           # far
+            m[:, :100] = 0.5                                   # a near wall on the left, its edge at x = 200 on the plate
+            m[80:95, 170:190] = 0.5 if f % 2 else 0.1          # a patch that flickers near / far
+            maps[f] = m
+        tracks = [{"id": f"a{i}", "keys": [[f, 40 + 15 * i, 30 + 10 * i, 1] for f in frames]} for i in range(8)]   # on the wall
+        tracks += [{"id": f"b{i}", "keys": [[f, 230 + 15 * i, 30 + 10 * i, 1] for f in frames]} for i in range(8)]  # far
+        tracks.append({"id": "edge", "keys": [[f, 200, 150, 1] for f in frames]})
+        tracks.append({"id": "jump", "keys": [[f, 360, 175, 1] for f in frames]})
+        r = MD.depth_edges(maps, tracks, w, h)
+        why = {t["id"]: t["why"] for t in r["tracks"]}
+        self.assertEqual(why, {"edge": "edge", "jump": "jumps"}, r)
+        self.assertEqual(r["frames"], 10)
 
 
 class Measurements(unittest.TestCase):
@@ -815,6 +911,62 @@ class Routes(unittest.TestCase):
             r = await c.get("/imageviewer/mm_plate", params={"path": "/etc/hostname"})
             self.assertIn(r.status, (403, 404))
         self.run_c(go)
+
+    def test_a_solve_and_the_edge_check_read_an_ai_depth_run(self):
+        """mm_depth_keep keeps a depth job's maps as they are; mm_solve with depth {source: ai, images} pulls the
+        solve into them (larger = farther), and mm_depth_edges checks the tracks against them."""
+        CW = importlib.import_module(self.pkg + ".comp_write")
+        tr, poses = scene(n_frames=20, move=0.3)
+        get = depth_maps(poses, _true_points(), reading="depth")
+        sub = os.path.join("matchmove", "depth", "aitest")
+        os.makedirs(os.path.join(self.dirs["output"], sub), exist_ok=True)
+        images = {}
+        for fr, m in get([0, 5, 10, 15, 19]).items():
+            m = np.where(m > 0, m, 1.0).astype(np.float32)          # a model has depth everywhere: far between
+            name = f"depth.{fr:04d}_00001_.exr"
+            with open(os.path.join(self.dirs["output"], sub, name), "wb") as fh:
+                fh.write(CW.exr_bytes({"R": m, "G": m, "B": m}, depth="float", compression="none"))
+            images[str(fr)] = {"filename": name, "subfolder": sub, "type": "output"}
+
+        async def go(c):
+            r = await c.post("/imageviewer/mm_depth_keep", json={"run": "aitest", "images": {**images, "3": {"filename": "gone.exr", "subfolder": sub, "type": "output"}}})
+            kept = await r.json()
+            self.assertEqual(r.status, 200, kept)
+            self.assertEqual(kept["frames"], [0, 5, 10, 15, 19])                           # the missing one left out
+            r = await c.post("/imageviewer/mm_depth_keep", json={"images": {"0": {"filename": "../../x.exr", "type": "output"}}})
+            self.assertEqual(r.status, 404)
+            r = await c.post("/imageviewer/mm_solve", json={"width": W, "height": H, "tracks": tr, "focal_px": F * 0.8, "refine": True,
+                                                            "depth": {"source": "ai", "images": kept["images"]}})
+            jid = (await r.json())["job"]
+            d = await self.wait_long(c, jid)
+            self.assertEqual(d["state"], "done", d.get("error"))
+            res = d["result"]
+            self.assertEqual(res["depth"]["source"], "ai", res["depth"])
+            self.assertEqual(res["depth"]["reading"], "depth")
+            self.assertAlmostEqual(res["focal_px"], F, delta=F * 0.03)
+            for k in kept["frames"]:
+                self.assertIn(str(k), {str(x) for x in res["frames"]})                    # the depth frames are key frames
+            r = await c.post("/imageviewer/mm_solve", json={"width": W, "height": H, "tracks": tr,
+                                                            "depth": {"source": "ai", "images": {}}})
+            self.assertEqual(r.status, 400)
+            r = await c.post("/imageviewer/mm_solve", json={"width": W, "height": H, "tracks": tr, "depth": {"source": "phone", "plate": self.seq}})
+            self.assertEqual(r.status, 400)                                                # a sequence has no depth track
+            r = await c.post("/imageviewer/mm_depth_edges", json={"width": W, "height": H, "tracks": tr,
+                                                                  "depth": {"source": "ai", "images": kept["images"]}})
+            e = await r.json()
+            self.assertEqual(r.status, 200, e)
+            self.assertEqual((e["source"], e["frames"]), ("ai", 5))
+            self.assertGreater(e["sampled_tracks"], 100)
+            self.assertLess(len(e["tracks"]), e["sampled_tracks"] * 0.3)
+        self.run_c(go)
+
+    async def wait_long(self, c, jid):
+        for _ in range(1200):
+            d = await (await c.get("/imageviewer/mm_job", params={"job": jid})).json()
+            if d["state"] != "running":
+                return d
+            await asyncio.sleep(0.1)
+        self.fail("the job did not end")
 
     def test_a_solve_job(self):
         tr, _ = scene(n_frames=20)

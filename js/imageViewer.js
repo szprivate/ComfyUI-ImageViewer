@@ -57,6 +57,7 @@ import { PrevizChannelsMixin } from "./imageViewer_previzChannels.js";
 import { PrevizLayersMixin } from "./imageViewer_previzLayers.js";
 import { PrevizMatchmoveMixin } from "./imageViewer_previzMatchmove.js";
 import { PrevizMatchmoveAIMixin } from "./imageViewer_previzMatchmoveAI.js";
+import { PrevizMatchmoveDepthMixin } from "./imageViewer_previzMatchmoveDepth.js";
 import { PrevizModelingMixin } from "./imageViewer_previzModeling.js";
 import { AnimLayersMixin } from "./imageViewer_animLayersPanel.js";
 import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
@@ -1691,6 +1692,7 @@ Object.assign(
     PrevizLayersMixin,
     PrevizMatchmoveMixin,
     PrevizMatchmoveAIMixin,
+    PrevizMatchmoveDepthMixin,
     PrevizModelingMixin,
     AnimLayersMixin,
     PrevizHotkeysMixin,

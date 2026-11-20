@@ -214,3 +214,22 @@ test("a hard shot's tracking: range and start, thin frames to look again on, key
     assert.equal(D.keyAt(mm.tracks[0], 0)[1], 0);
     assert.deepEqual(mm.tracks[0].keys.map((k) => k[0]).slice(8, 13), [8, 9, 10, 11, 30]);
 });
+
+test("depth for the solve: the source, its strength and an AI run are kept, and become the request's depth", () => {
+    const mm = D.newMatchmove({ path: "/p/clip.mov", frames: 40, width: 1920, height: 1080, fps: 30 });
+    assert.equal(mm.settings.depth, "off");
+    assert.equal(D.depthRequest(mm), null);
+    assert.deepEqual(D.depthRequest(mm, "phone"), { source: "phone", plate: "/p/clip.mov", strength: 1 });
+    assert.equal(D.depthRequest(mm, "ai"), null);                                     // no run yet
+    const back = D.cleanMatchmove(JSON.parse(JSON.stringify({
+        ...mm, settings: { ...mm.settings, depth: "ai", depthStrength: 40 },
+        depthRun: { workflow: "comp_da3", images: { 4: { filename: "d_4.exr", subfolder: "matchmove/depth/r1", type: "output" },
+                                                    x: { filename: "bad.exr" }, 7: { subfolder: "no name" } } },
+    })));
+    assert.equal(back.settings.depth, "ai");
+    assert.equal(back.settings.depthStrength, 10);                                    // held to 10
+    assert.deepEqual(Object.keys(back.depthRun.images), ["4"]);
+    assert.deepEqual(D.depthRequest(back), { source: "ai", images: back.depthRun.images, strength: 10 });
+    assert.equal(D.cleanMatchmove({ settings: { depth: "lidar" } }).settings.depth, "off");
+    assert.equal(D.cleanDepthRun({ images: {} }), null);
+});
