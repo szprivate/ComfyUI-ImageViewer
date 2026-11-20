@@ -80,7 +80,7 @@ function readFolds() {
 
 const KIND_TITLES = {
     camera: "Camera", light: "Light", environment: "Environment", terrain: "Terrain", scatter: "Scatter",
-    depthmesh: "Depth Mesh", imageplane: "Image Plane", model: "Model", group: "Group",
+    depthmesh: "Depth Mesh", imageplane: "Image Plane", model: "Model", group: "Group", mesh: "Mesh",
 };
 /** The heading of an item's own properties: "Camera Properties", "Box Properties", "IK Control Properties". */
 export function cbPropsTitle(item) {
@@ -173,7 +173,7 @@ export const PrevizChannelsMixin = {
         const scene = this.previzScene();
         const looking = !!(item && scene && scene.activeCamera === item.id);
         // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}|${item.frameMask ? `${item.frameMask.on}:${item.frameMask.key}` : ""}` : "";
+        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}|${item.kind === "mesh" && item.mesh ? `${item.mesh.v.length}:${item.mesh.f.length}:${!!item.smooth}` : ""}|${item.frameMask ? `${item.frameMask.on}:${item.frameMask.key}` : ""}` : "";
         if (sig !== ui.sig) {
             ui.sig = sig;
             this._cbBuildRows(ui, item, ids, looking);
@@ -501,7 +501,7 @@ export const PrevizChannelsMixin = {
                 t.append(r2);
                 ui.rows.set(field, { row: r2, input: sel, kind: "plane", field });
             }
-        } else if (item.kind === "primitive") {
+        } else if (item.kind === "primitive" || item.kind === "mesh") {
             const t = shape();
             const row = doc.createElement("div");
             row.className = "cb-row";
@@ -510,13 +510,15 @@ export const PrevizChannelsMixin = {
             swatch.type = "color";
             swatch.className = "cb-color";
             swatch.oninput = () => {
-                for (const one of this._cbItems()) if (one.kind === "primitive") one.color = swatch.value;
+                for (const one of this._cbItems()) if (one.kind === "primitive" || one.kind === "mesh") one.color = swatch.value;
                 // A colour change repaints the shape; it doesn't rebuild it.
                 this.previzChanged({ reload: true });
             };
             row.append(tag, swatch);
             t.append(row);
             ui.rows.set("color", { row, input: swatch, kind: "color" });
+            // An editable mesh's counts, shading and edit mode (imageViewer_previzModeling.js).
+            if (item.kind === "mesh" && this._cbMeshRows) this._cbMeshRows(t, item, doc);
         }
         // Custom attributes (any item; a rig control's usually) and a model's blendshapes:
         // the extra channels of imageViewer_scene3d.js, keyable like the rest.

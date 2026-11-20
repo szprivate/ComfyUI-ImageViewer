@@ -36,6 +36,7 @@ const MENUS = [
     ["File", "previz-mb-file", (p) => p._previzFileMenuEntries()],
     ["Edit", "previz-mb-edit", (p) => p._previzEditBarEntries()],
     ["Create", "previz-mb-create", (p) => p._previzAddMenuEntries()],
+    ["Mesh", "previz-mb-mesh", (p) => p._previzMeshMenuEntries()],
     ["Rig", "previz-rig", (p, a) => rigMenuOf(p._previzRigMenuEntries(a), "rig")],
     ["Animate", "previz-anim", (p, a) => [...p._previzKeyMenuEntries(), "-", ...rigMenuOf(p._previzRigMenuEntries(a), "anim")]],
     ["Constrain", "previz-constrain", (p) => p._previzConstrainMenuEntries()],

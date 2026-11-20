@@ -210,6 +210,7 @@ export const View3DPathTraceMixin = {
         add(this._spRing);
         add(this._tbRing);
         add(this._msGroup);
+        add(this._meGroup);
         for (const b of (this._alsoBoxes || new Map()).values()) add(b);
         for (const j of (this._joints || new Map()).values()) add(j.group);
         for (const st of (this._atlasViewsShown || new Map()).values()) add(st.group);

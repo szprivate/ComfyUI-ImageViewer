@@ -43,6 +43,7 @@ import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 import { View3DSnapMixin } from "./imageViewer_view3dSnap.js";
 import { View3DMeasureMixin } from "./imageViewer_view3dMeasure.js";
+import { View3DMeshEditMixin } from "./imageViewer_view3dMeshEdit.js";
 
 let _libsPromise = null;
 
@@ -582,6 +583,13 @@ export class Model3DView {
             e.preventDefault();
             return;
         }
+        // Editing a mesh: a press picks its vertices, edges or faces (Alt still navigates).
+        if (this._me && this._meDown(e)) {
+            this._downAt = null;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         // The scatter brush has the left button while it is on (Alt still navigates).
         if ((this._sp && this._spDown(e)) || (this._tb && this._tbDown(e))) {
             this._downAt = null;
@@ -722,6 +730,7 @@ export class Model3DView {
         const d = this._downAt;
         this._downAt = null;
         if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
+        if (this._me) return;
         if (this._mqJustBoxed) { this._mqJustBoxed = false; return; }
         if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return;
         if (this.gizmo && this.gizmo.dragging) return;
@@ -996,6 +1005,7 @@ export class Model3DView {
         }
         this._paneAxesDraw();
         if (this._msBox) this._msPlace();
+        if (this._me) this._meTick();
         if (again) this.requestRender();
     }
 
@@ -1391,6 +1401,14 @@ export class Model3DView {
                     entry.material.color.set(item.color || "#9a9a9a");
                     entry.color = item.color;
                 }
+            } else if (item.kind === "mesh") {
+                if (this._meshStale(entry, item)) {
+                    this._disposeEntry(entry, false);
+                    this._buildMesh(entry, item);
+                } else if (entry.material && entry.color !== item.color) {
+                    entry.material.color.set(item.color || "#9a9a9a");
+                    entry.color = item.color;
+                }
             }
         }
         for (const [id, entry] of [...this._entries]) {
@@ -1414,6 +1432,7 @@ export class Model3DView {
         this.applyFrame(this.sceneFrame);
         this._updateSceneStats();
         this._captureThumbnailSoon(this.hooks.thumbFrame && this.hooks.thumbFrame());
+        if (this._me) this._meAfterScene();
         this.requestRender();
     }
 
@@ -1575,6 +1594,11 @@ export class Model3DView {
 
         if (item.kind === "primitive") {
             this._buildPrimitive(entry, item);
+            return entry;
+        }
+
+        if (item.kind === "mesh") {
+            this._buildMesh(entry, item);
             return entry;
         }
 
@@ -2377,7 +2401,7 @@ export class Model3DView {
         for (const entry of this._entries.values()) {
             if (entry.camera) { total.cameras++; continue; }
             if (entry.item && entry.item.kind === "group") continue;
-            if (entry.item && entry.item.kind === "primitive") total.shapes++;
+            if (entry.item && (entry.item.kind === "primitive" || entry.item.kind === "mesh")) total.shapes++;
             total.objects++;
             if (!entry.stats) continue;
             total.vertices += entry.stats.vertices;
@@ -2488,11 +2512,14 @@ export class Model3DView {
                 ? { root: entry.root.position.clone(), at: evaluateIn(this.scene3d, entry.item, this.sceneFrame) }
                 : null;
             this._snapDragStart(e.value);
+            // A mesh's components being moved: the edit mode takes the drag.
+            if (this._meGizmoDragging(e.value)) return;
             if (!e.value && this.hooks.onTransformEnd) this.hooks.onTransformEnd(this.selected);
         });
         gizmo.addEventListener("objectChange", () => {
             // Snapping first: it moves the dragged object onto its target, and what follows reads it from there.
             this._snapApply();
+            if (this._meGizmoMove()) return;
             const entry = this.selected && this._entries.get(this.selected);
             // Pivot mode: the handle moved, so the pivot moves with it and the
             // position takes up the slack.
@@ -2589,6 +2616,8 @@ export class Model3DView {
         this._ensureGizmo();
         if (!this.gizmo) return;
         this.gizmo.camera = this.activeCameraObject();
+        // Editing a mesh: the gizmo moves the selected components, not the item.
+        if (this._me && this._meSyncGizmo()) { this._aimSync(); return; }
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
         if (entry.item.kind === "camera" && entry.item.id === this._throughCam()) this.gizmo.detach();
@@ -2798,6 +2827,7 @@ export class Model3DView {
         hide(this._pinGroup);           // feedback pins are notes, not part of the shot
         hide(this._spGroup);            // the scatter brush's wash and ring are for painting
         hide(this._spRing);
+        hide(this._meGroup);            // the mesh edit mode's points, edges and faces
         hide(this._tbRing);
         hide(this._msGroup);            // measurements are a tool
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
@@ -3039,3 +3069,4 @@ Object.assign(Model3DView.prototype, TerrainBrush3DMixin);
 Object.assign(Model3DView.prototype, TerrainErode3DMixin);
 Object.assign(Model3DView.prototype, View3DSnapMixin);
 Object.assign(Model3DView.prototype, View3DMeasureMixin);
+Object.assign(Model3DView.prototype, View3DMeshEditMixin);

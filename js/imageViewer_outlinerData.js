@@ -7,6 +7,7 @@
 export const OUTLINER_KINDS = [
     { key: "model", label: "Models", of: ["model"] },
     { key: "primitive", label: "Shapes", of: ["primitive"] },
+    { key: "mesh", label: "Meshes", of: ["mesh"] },
     { key: "camera", label: "Cameras", of: ["camera"] },
     { key: "imageplane", label: "Image planes", of: ["imageplane"] },
     { key: "group", label: "Groups", of: ["group"] },
