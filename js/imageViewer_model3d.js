@@ -41,6 +41,8 @@ import { TerrainBrush3DMixin } from "./imageViewer_terrainBrush3d.js";
 import { TerrainErode3DMixin } from "./imageViewer_terrainErode3d.js";
 import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
+import { View3DSnapMixin } from "./imageViewer_view3dSnap.js";
+import { View3DMeasureMixin } from "./imageViewer_view3dMeasure.js";
 
 let _libsPromise = null;
 
@@ -276,6 +278,12 @@ export class Model3DView {
             toolBtns[mode] = b;
             tools.append(b);
         }
+        // Measure distances and angles (imageViewer_view3dMeasure.js); a tool of its own, so the gizmo steps aside.
+        const measureBtn = el("button", "model-btn model-icon-btn model-measure-btn", "Measure");
+        measureBtn.dataset.tool = "measure";
+        measureBtn.onclick = () => this.toggleMeasure();
+        if (this.hooks.setIcon) this.hooks.setIcon(measureBtn, "icon-ruler");
+        tools.append(measureBtn);
         tools.append(el("div", "model-toolcol-sep"));
         const spaceBtn = el("button", "model-btn model-icon-btn", "World");
         spaceBtn.dataset.tool = "space";
@@ -290,6 +298,8 @@ export class Model3DView {
         };
         if (this.hooks.setIcon) this.hooks.setIcon(pivotBtn, "icon-axis3d");
         tools.append(pivotBtn);
+        // Snapping (imageViewer_view3dSnap.js): on / off, and what to snap to from its caret or a right-click.
+        tools.append(this._snapBuildButton(el));
         // Walk (or fly) through the world. Shown only where the scene can be moved
         // through (hooks.canWalk); the same switch as Shift+J, so it lights up however walking was started.
         const walkBtn = el("button", "model-btn model-icon-btn", "Walk");
@@ -318,7 +328,7 @@ export class Model3DView {
         root.append(menubar, stage, tools, status);
         this.root = root;
         this.stage = stage;
-        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, gridMoreBtn, layoutBtn, layoutMoreBtn, toolBtns, tools, spaceBtn, pivotBtn, walkBtn, status,
+        this.ui = { menubar, menus, look, displayBtn, modeSel, gridBtn, gridMoreBtn, layoutBtn, layoutMoreBtn, toolBtns, tools, measureBtn, spaceBtn, pivotBtn, walkBtn, status,
                     gate, shades, gateFrame, gateLabel };
         if (this.hooks.buildMenuBar) this.hooks.buildMenuBar(menus, this);
         this._paneBuild();
@@ -346,8 +356,16 @@ export class Model3DView {
             b.classList.toggle("active", !single);
         }
         for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
-            btn.classList.toggle("active", mode === this.gizmoMode);
+            btn.classList.toggle("active", mode === this.gizmoMode && !this._msOn);
         }
+        if (this.ui.measureBtn) {
+            const on = !!this._msOn;
+            this.ui.measureBtn.classList.toggle("active", on);
+            this.ui.measureBtn.title = on
+                ? "Measuring: click points for distances and angles, drag one to move it, Esc to clear - click (or Q / W / E / R) to stop (M)"
+                : "Measure distances and angles: click points in the view (M)";
+        }
+        if (this._snapSyncButton) this._snapSyncButton();
         const space = this.ui.spaceBtn;
         if (space) {
             const local = this.gizmoSpace === "local";
@@ -466,6 +484,8 @@ export class Model3DView {
         canvas.addEventListener("pointerdown", (e) => this._onPointerDown(e), true);
         canvas.addEventListener("pointerup", (e) => this._onPointerUp(e));
         canvas.addEventListener("pointermove", (e) => this._tumbleMove(e));
+        // Where the pointer is, read before the gizmo moves anything (snapping, imageViewer_view3dSnap.js).
+        canvas.addEventListener("pointermove", (e) => this._snapTrackPointer(e), true);
         canvas.addEventListener("pointercancel", (e) => this._tumbleEnd(e));
         // Alt can be pressed or let go while the pointer just sits there.
         canvas.addEventListener("pointermove", (e) => {
@@ -555,6 +575,13 @@ export class Model3DView {
     // click only counts as a pick when the pointer stayed put.
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
+        // The measure tool has the left button while it is on (Alt still navigates).
+        if (this._msOn && this._msDown(e)) {
+            this._downAt = null;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         // The scatter brush has the left button while it is on (Alt still navigates).
         if ((this._sp && this._spDown(e)) || (this._tb && this._tbDown(e))) {
             this._downAt = null;
@@ -968,6 +995,7 @@ export class Model3DView {
             again = true;
         }
         this._paneAxesDraw();
+        if (this._msBox) this._msPlace();
         if (again) this.requestRender();
     }
 
@@ -1627,6 +1655,10 @@ export class Model3DView {
             }
             if (film) {
                 entry.video = texture.userData.imageViewerVideo;
+                // What the browser holds of the film is the timeline's cache marks.
+                entry.video.addEventListener("progress", () => this._planeCacheChanged());
+                entry.video.addEventListener("seeked", () => this._planeCacheChanged());
+                this._planeCacheChanged();
                 this._videoPlaneSeek(entry, item, this.sceneFrame || 0);
             }
             texture.colorSpace = THREE.SRGBColorSpace;
@@ -2415,6 +2447,7 @@ export class Model3DView {
     }
 
     setGizmoMode(mode) {
+        if (this._msOn) this.setMeasure(false);
         this.gizmoMode = ["select", "translate", "rotate", "scale"].includes(mode) ? mode : "translate";
         if (this.gizmo && this.gizmoMode !== "select") this.gizmo.setMode(this.gizmoMode);
         this._syncSelection();
@@ -2454,9 +2487,12 @@ export class Model3DView {
             this._pivotDragFrom = (e.value && entry && this.pivotMode && entry.body)
                 ? { root: entry.root.position.clone(), at: evaluateIn(this.scene3d, entry.item, this.sceneFrame) }
                 : null;
+            this._snapDragStart(e.value);
             if (!e.value && this.hooks.onTransformEnd) this.hooks.onTransformEnd(this.selected);
         });
         gizmo.addEventListener("objectChange", () => {
+            // Snapping first: it moves the dragged object onto its target, and what follows reads it from there.
+            this._snapApply();
             const entry = this.selected && this._entries.get(this.selected);
             // Pivot mode: the handle moved, so the pivot moves with it and the
             // position takes up the slack.
@@ -2556,7 +2592,7 @@ export class Model3DView {
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
         if (entry.item.kind === "camera" && entry.item.id === this._throughCam()) this.gizmo.detach();
-        else if (this.gizmoMode === "select") this.gizmo.detach();
+        else if (this.gizmoMode === "select" || this._msOn) this.gizmo.detach();
         else if (this.pivotMode && entry.body) {
             // A stand-in at the pivot point: dragging the item's own root would
             // move the item, which is the one thing moving a pivot must not do.
@@ -2763,6 +2799,7 @@ export class Model3DView {
         hide(this._spGroup);            // the scatter brush's wash and ring are for painting
         hide(this._spRing);
         hide(this._tbRing);
+        hide(this._msGroup);            // measurements are a tool
         for (const box of (this._alsoBoxes || new Map()).values()) hide(box);
         for (const j of (this._joints || new Map()).values()) hide(j.group);
         // An Atlas world's views are there to see where its pictures were taken, never in a picture.
@@ -3000,3 +3037,5 @@ Object.assign(Model3DView.prototype, View3DVideoPlaneMixin);
 Object.assign(Model3DView.prototype, ScatterPaint3DMixin);
 Object.assign(Model3DView.prototype, TerrainBrush3DMixin);
 Object.assign(Model3DView.prototype, TerrainErode3DMixin);
+Object.assign(Model3DView.prototype, View3DSnapMixin);
+Object.assign(Model3DView.prototype, View3DMeasureMixin);

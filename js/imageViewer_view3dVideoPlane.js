@@ -63,7 +63,60 @@ const PLATE_CACHE = 96;   // pictures of a plate kept per plane
 const PLATE_AHEAD = 8;    // frames asked for ahead of the one shown
 const PLATE_FLIGHT = 4;   // pictures on their way at once (ahead of time)
 
+/**
+ * Whether a scene frame is cached on every plane that shows pictures over time
+ * (the timeline's green marks, Sebastian 2026-11-20). planes: [{kind: "plate",
+ * has(n), frames, offset} | {kind: "film", ranges: [[start, end], ...] seconds,
+ * fps, duration, offset}]. No planes: null (nothing to say).
+ */
+export function planeFrameCached(planes, frame) {
+    if (!planes || !planes.length) return null;
+    for (const p of planes) {
+        if (p.kind === "plate") {
+            if (!p.has(plateFrame(frame, p.frames, p.offset))) return false;
+        } else {
+            const t = videoTime(frame, p.fps, p.duration, p.offset);
+            if (!(p.ranges || []).some(([a, b]) => t >= a - 1e-6 && t <= b + 1e-6)) return false;
+        }
+    }
+    return true;
+}
+
 export const View3DVideoPlaneMixin = {
+    /** Tell the panel the planes' caches changed (at most once a frame, the panel's queueCacheMarks). */
+    _planeCacheChanged() {
+        if (this.hooks && this.hooks.onCache) this.hooks.onCache();
+    },
+
+    /** The image planes that change over time, as planeFrameCached takes them. */
+    _cachePlanes() {
+        const out = [];
+        if (!this.scene3d) return out;
+        const fps = this.scene3d.fps || 24;
+        for (const item of this.scene3d.items || []) {
+            const entry = this._entries.get(item.id);
+            if (!entry) continue;
+            const offset = item.plane ? item.plane.offset : 0;
+            if (entry.plateTex && entry.plateCache) {
+                const cache = entry.plateCache;
+                out.push({ kind: "plate", frames: entry.plateInfo && entry.plateInfo.frames, offset,
+                           has: (n) => { const c = cache.get(n); return !!(c && c.ok); } });
+            } else if (entry.video) {
+                const v = entry.video, ranges = [];
+                try { for (let i = 0; i < v.buffered.length; i++) ranges.push([v.buffered.start(i), v.buffered.end(i)]); } catch (_) {}
+                out.push({ kind: "film", ranges, fps, duration: v.duration, offset });
+            }
+        }
+        return out;
+    },
+
+    /** Has(frame) for the timeline's cache marks, or null when no plane changes over time. */
+    planeCacheTest() {
+        const planes = this._cachePlanes();
+        if (!planes.length) return null;
+        return (frame) => planeFrameCached(planes, frame);
+    },
+
     /** Load `url` as a film texture; resolves once its first frame is there. */
     _loadVideoTexture(url) {
         const { THREE } = this.libs;
@@ -182,6 +235,7 @@ export const View3DVideoPlaneMixin = {
         const ps = texture.userData.plate;
         Object.assign(entry, ps, { plateTex: texture, plateWant: ps.plateShown });
         delete texture.userData.plate;
+        this._planeCacheChanged();
     },
 
     /** Picture n of a plane's plate: {img, promise, ok}; asked for once, kept (least recently used out). */
@@ -194,12 +248,14 @@ export const View3DVideoPlaneMixin = {
         img.decoding = "async";
         c = { img, ok: false, done: false };
         c.promise = new Promise((resolve) => {
-            img.onload = () => { c.ok = true; c.done = true; resolve(img); };
+            img.onload = () => { c.ok = true; c.done = true; resolve(img); this._planeCacheChanged(); };
             img.onerror = () => { c.done = true; cache.delete(n); resolve(null); };
         });
         img.src = this.hooks.plateFrameUrl(entry.plateSrc, n);
         cache.set(n, c);
-        while (cache.size > PLATE_CACHE) cache.delete(cache.keys().next().value);
+        let gone = false;
+        while (cache.size > PLATE_CACHE) { cache.delete(cache.keys().next().value); gone = true; }
+        if (gone) this._planeCacheChanged();
         return c;
     },
 
@@ -248,6 +304,7 @@ export const View3DVideoPlaneMixin = {
         if (entry.plateCache) for (const c of entry.plateCache.values()) { try { c.img.src = ""; } catch (_) {} }
         entry.plateCache = null;
         entry.plateTex = null;
+        this._planeCacheChanged();
         const waiting = entry.plateWaiters || [];
         entry.plateWaiters = [];
         for (const done of waiting) done();
@@ -259,6 +316,7 @@ export const View3DVideoPlaneMixin = {
         if (!video) return;
         entry.video = null;
         entry.videoWaiters = [];
+        this._planeCacheChanged();
         try { video.pause(); video.removeAttribute("src"); video.load(); } catch (_) {}
     },
 };

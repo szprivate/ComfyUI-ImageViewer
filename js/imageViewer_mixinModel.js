@@ -40,6 +40,8 @@ export const ModelMixin = {
                 // A plate on an image plane: its facts and a picture per frame (imageViewer_view3dVideoPlane.js).
                 plateInfo: (src) => this.plateInfo(src),
                 plateFrameUrl: (src, n) => this.plateFrameUrl(src, n),
+                // An image plane's pictures came in / went: the timeline's cache marks (mixinPlayback).
+                onCache: () => this.queueCacheMarks && this.queueCacheMarks(),
                 // The layout button's caret: View > Layout (imageViewer_previzMenuBar.js).
                 openLayoutMenu: (anchor) => this.previzOpenLayoutMenu && this.previzOpenLayoutMenu(anchor),
                 onPick: (id, add) => this.previzSelect(id, { add }),

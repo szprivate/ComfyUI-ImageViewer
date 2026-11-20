@@ -44,3 +44,18 @@ test("a plate is an image plane read frame by frame: its frame held at both ends
     assert.equal(plateFrame(2, 24, 4), 0);
     assert.equal(plateFrame(500, 0), 500);
 });
+
+import { planeFrameCached } from "../js/imageViewer_view3dVideoPlane.js";
+
+test("a scene frame is cached when every plane over time holds it", () => {
+    assert.equal(planeFrameCached([], 3), null);
+    const plate = { kind: "plate", frames: 10, offset: 2, has: (n) => n >= 0 && n <= 4 };
+    assert.equal(planeFrameCached([plate], 0), true);      // before the offset: the plate's first frame
+    assert.equal(planeFrameCached([plate], 6), true);      // plate frame 4
+    assert.equal(planeFrameCached([plate], 7), false);     // plate frame 5
+    const film = { kind: "film", ranges: [[0, 1]], fps: 24, duration: 4, offset: 0 };
+    assert.equal(planeFrameCached([film], 23), true);      // 23.5 / 24 s is inside
+    assert.equal(planeFrameCached([film], 24), false);
+    assert.equal(planeFrameCached([plate, film], 5), true);
+    assert.equal(planeFrameCached([plate, film], 30), false);
+});
