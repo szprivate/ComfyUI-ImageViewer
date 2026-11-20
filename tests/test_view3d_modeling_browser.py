@@ -1,9 +1,10 @@
-"""Modeling in the 3D space, part 1, with the real mouse and keys, in a real browser.
+"""Modeling in the 3D space, parts 1 and 2, with the real mouse and keys, in a real browser.
 
 Sebastian 2026-11-20: "add extensive modeling capabilities". An editable mesh item (Create mesh, or a
 shape / model converted), its edit mode (Tab; 1 / 2 / 3 = vertices / edges / faces), picking and boxing
 components, the gizmo moving them, Extrude (Ctrl+E), Inset (I), Delete, each one undo step and saved
-with the scene. js/imageViewer_meshData.js, js/imageViewer_view3dMeshEdit.js,
+with the scene; part 2: a ring by Ctrl+double-click, bevel (Ctrl+B), loop cut (Ctrl+R), bridge, fill,
+weld, soft selection (B) carrying a move along. js/imageViewer_meshData.js, js/imageViewer_meshOps.js, js/imageViewer_view3dMeshEdit.js,
 js/imageViewer_previzModeling.js.
 
 Needs Playwright with an installed browser and node; skipped without them.
@@ -295,6 +296,108 @@ class ModelingTests(unittest.TestCase):
         self.assertIn("mesh", res["usd"])
         self.assertEqual(editing, ids["shape"])
         self.assertIsNone(after)
+
+
+    def test_ring_bevel_loop_cut_bridge_fill_and_soft_selection(self):
+        pg, ids = self._page()
+        box = ids["box"]
+        closed = """(id) => import('/extensions/viewer/imageViewer_meshOps.js').then(async (O) => {
+            const M = await import('/extensions/viewer/imageViewer_meshData.js');
+            const it = window.__panel.previzScene().items.find((i) => i.id === id);
+            return O.boundaryLoops(M.unpack(it.mesh)).length; })"""
+        try:
+            self._hover_view(pg)
+            pg.keyboard.press("Tab")
+            pg.keyboard.press("2")
+            pg.wait_for_timeout(100)
+            # Ctrl+double-click on the near vertical edge: its ring, the four vertical edges.
+            e = pg.evaluate(SCREEN, [0.5, 0.5, 0.5])
+            pg.mouse.move(e["x"], e["y"])
+            pg.wait_for_timeout(40)
+            pg.keyboard.down("Control")
+            pg.mouse.dblclick(e["x"], e["y"])
+            pg.keyboard.up("Control")
+            pg.wait_for_timeout(100)
+            ring = pg.evaluate(STATS, box)
+            # Ctrl+B: bevelled.
+            self._hover_view(pg)
+            pg.keyboard.press("Control+b")
+            pg.wait_for_timeout(200)
+            bevelled = pg.evaluate(STATS, box)
+            bevel_closed = pg.evaluate(closed, box)
+            self._shot(pg, "mesh_bevelled.png")
+            pg.evaluate("() => window.__panel.previzUndo()")
+            pg.wait_for_timeout(150)
+            # One edge, Ctrl+R: a loop round the box.
+            self._click(pg, e)
+            one = pg.evaluate(STATS, box)
+            self._hover_view(pg)
+            pg.keyboard.press("Control+r")
+            pg.wait_for_timeout(200)
+            cut = pg.evaluate(STATS, box)
+            self._shot(pg, "mesh_loop_cut.png")
+            pg.evaluate("() => window.__panel.previzUndo()")
+            pg.wait_for_timeout(150)
+            # Top and bottom out, every vertex selected, Bridge: closed again with a wall across.
+            res = pg.evaluate(f"""async () => {{
+                const P = window.__panel, v = P._modelView();
+                const M = await import('/extensions/viewer/imageViewer_meshData.js');
+                const it = () => P.previzScene().items.find((i) => i.id === '{box}');
+                const w = M.unpack(it().mesh);
+                const caps = w.f.map((f, i) => [f, i]).filter(([f]) => f.every((k) => Math.abs(w.v[k][1]) > 0.4)
+                    && new Set(f.map((k) => w.v[k][1])).size === 1).map(([, i]) => i);
+                v.meshEditSetSelection(caps, 'replace', 'face');
+                await P.previzMeshOp('delete');
+                const tube = M.meshStats(M.unpack(it().mesh)).faces;
+                v.meshEditSetSelection(M.allOf(M.unpack(it().mesh), 'vertex'), 'replace', 'vertex');
+                await P.previzMeshOp('bridge');
+                const bridged = M.meshStats(M.unpack(it().mesh)).faces;
+                P.previzUndo(); await new Promise((r) => setTimeout(r, 150));
+                v.meshEditSetSelection([], 'replace', 'vertex');
+                await P.previzMeshOp('fill');
+                const filled = M.meshStats(M.unpack(it().mesh)).faces;
+                return {{ caps: caps.length, tube, bridged, filled }};
+            }}""")
+            fill_closed = pg.evaluate(closed, box)
+            pg.evaluate("() => { const P = window.__panel; P.previzUndo(); P.previzUndo(); }")
+            pg.wait_for_timeout(200)
+            # B: soft selection on; one corner moved up carries its neighbours, less the further away.
+            self._hover_view(pg)
+            pg.keyboard.press("b")
+            pg.keyboard.press("1")
+            pg.evaluate("() => window.__panel._modelView().setMeshEditOptions({ softRadius: 1.2 })")
+            pg.wait_for_timeout(100)
+            corner = pg.evaluate(SCREEN, [0.5, 1, 0.5])
+            self._click(pg, corner)
+            soft_on = pg.evaluate("() => window.__panel._modelView().meshEditOptions().soft")
+            self._shot(pg, "mesh_soft_selection.png")
+            yh = pg.evaluate(SCREEN, [0.5, 1.45, 0.5])
+            pg.mouse.move(yh["x"], yh["y"])
+            pg.wait_for_timeout(60)
+            pg.mouse.down()
+            pg.mouse.move(yh["x"], yh["y"] - 60, steps=8)
+            pg.mouse.up()
+            pg.wait_for_timeout(150)
+            ys = pg.evaluate(f"""() => {{ const it = window.__panel.previzScene().items.find((i) => i.id === '{box}');
+                const v = it.mesh.v; const out = []; for (let i = 1; i < v.length; i += 3) out.push(v[i]); return out; }}""")
+        finally:
+            pg.close()
+        self.assertEqual(self.errors, [])
+        self.assertEqual((ring["mode"], len(ring["sel"])), ("edge", 4))
+        self.assertEqual((bevelled["verts"], bevelled["faces"]), (24, 18))
+        self.assertEqual(bevel_closed, 0)
+        self.assertEqual(len(one["sel"]), 1)
+        self.assertEqual((cut["verts"], cut["faces"]), (12, 10))
+        self.assertEqual((cut["mode"], len(cut["sel"])), ("edge", 4))
+        self.assertEqual((res["caps"], res["tube"], res["bridged"]), (2, 4, 8))
+        self.assertEqual(res["filled"], 6)
+        self.assertEqual(fill_closed, 0)
+        self.assertTrue(soft_on)
+        top = sorted(y for y in ys if y > 0)
+        bottom = [y for y in ys if y < 0]
+        self.assertGreater(top[-1], 0.6)                  # the corner itself
+        self.assertTrue(any(0.5 + 1e-3 < y < top[-1] - 1e-3 for y in top))   # a neighbour, part of the way
+        self.assertTrue(all(abs(y + 0.5) < 0.5 for y in bottom))
 
 
 if __name__ == "__main__":
