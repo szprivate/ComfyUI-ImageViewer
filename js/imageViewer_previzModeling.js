@@ -10,6 +10,7 @@ import * as S from "./imageViewer_scene3d.js";
 import * as MD from "./imageViewer_meshData.js";
 import * as MO from "./imageViewer_meshOps.js";
 import * as MX from "./imageViewer_meshModel.js";
+import * as MT from "./imageViewer_meshTools.js";
 import { notice } from "./imageViewer_exportUI.js";
 
 const SHAPES = [
@@ -24,7 +25,9 @@ export const PrevizModelingMixin = {
         return {
             onMeshEditState: (sel, id) => this._previzMeshState(sel, id),
             onMeshEditDrag: (id, phase, packed) => this._previzMeshDrag(id, phase, packed),
-            onMeshOp: (name, opts) => this.previzMeshOp(name, opts),
+            onMeshOp: (name) => this.previzMeshTool(name),
+            onMeshToolCommit: (name, params) => this._previzMeshToolCommit(name, params),
+            onMeshAdjust: (params) => this._previzMeshAdjust(params),
         };
     },
 
@@ -148,85 +151,93 @@ export const PrevizModelingMixin = {
 
     // ── Operations on the selected components ──────────────────────────────
 
-    /** extrude / inset / delete / merge / flip on what is selected in edit mode. */
-    async previzMeshOp(name, opts = null) {
+    /**
+     * Run an operation on what is selected in edit mode, at once: one undo
+     * step. `opts` are its numbers (imageViewer_meshTools.js MESH_TOOL_PARAMS,
+     * e.g. {amount}) or the older edit-option names ({extrude, inset, bevel,
+     * cut, weld, mirrorAxis, mirrorSide, individual}); missing ones come from
+     * the remembered edit options. The "adjust last operation" box is offered
+     * afterwards (`adjust: false` leaves it).
+     */
+    async previzMeshOp(name, opts = null, { adjust = true } = {}) {
         const view = this._modelView();
         const id = view.meshEditing();
         const item = this._previzMeshItem(id);
         if (!item || item.kind !== "mesh") return false;
         const o = { ...view.meshEditOptions(), ...(opts || {}) };
+        const params = MT.toolParams(name, o, opts || {});
         const sel = view.meshEditSelection();
-        const work = MD.unpack(item.mesh);
-        const whole = ["fill", "weld", "subdivide", "mirror", "symmetrize"].includes(name);
-        if (!sel.ids.length && !whole) {
-            notice("info", "Nothing selected", "Pick vertices, edges or faces first.");
-            return false;
+        const base = item.mesh;
+        const res = MT.runMeshOp(MD.unpack(base), name, sel, params, (d) => view.meshEditLocalLength(d));
+        if (res.error) { notice("info", res.title, res.error); return false; }
+        if (res.note) notice("info", MT.MESH_TOOL_LABELS[name] || name, res.note);
+        const ok = await this._previzMeshWrite(item, name, res, { snapshot: true });
+        if (!ok) return true;
+        // The numbers are remembered, so the next one starts from them.
+        view.setMeshEditOptions(MT.optionsFromParams(name, params));
+        if (adjust && MT.MESH_TOOL_PARAMS[name] && view.meshAdjustOffer) {
+            this._previzMeshLast = { id: item.id, name, base, sel, params, packed: item.mesh };
+            view.meshAdjustOffer(name, params, item.mesh);
         }
-        let res = null;
-        let mode = sel.mode;
-        if (name === "extrude" || name === "inset") {
-            const faces = MD.selFaces(work, sel.mode, sel.ids);
-            if (!faces.length) { notice("info", `Nothing to ${name}`, "It works on faces: select at least one."); return false; }
-            res = name === "extrude"
-                ? MD.extrudeFaces(work, faces, view.meshEditLocalLength(o.extrude), { individual: o.individual })
-                : MD.insetFaces(work, faces, view.meshEditLocalLength(o.inset), { individual: o.individual });
-            mode = "face";
-        } else if (name === "delete") {
-            res = MD.deleteSel(work, sel.mode, sel.ids);
-        } else if (name === "merge") {
-            res = MD.mergeVertices(work, sel.mode, sel.ids);
-            mode = "vertex";
-        } else if (name === "bevel" || name === "loopcut") {
-            const edges = MD.convertSel(work, sel.mode, "edge", sel.ids);
-            if (!edges.length) { notice("info", "No edges selected", "Select an edge (or the faces whose edges to use) first."); return false; }
-            res = name === "bevel"
-                ? MO.bevelEdges(work, edges, view.meshEditLocalLength(o.bevel))
-                : MO.loopCut(work, edges[edges.length - 1], o.cut);
-            mode = name === "bevel" ? "face" : "edge";
-        } else if (name === "bridge" || name === "fill" || name === "connect") {
-            res = name === "bridge" ? MO.bridge(work, sel.mode, sel.ids)
-                : name === "fill" ? MO.fillHoles(work, sel.mode, sel.ids)
-                : MO.connect(work, sel.mode, sel.ids);
-            if (res.error) { notice("info", `Cannot ${name}`, res.error); return false; }
-            if (!res.ids || !res.ids.length) {
-                const why = { bridge: "Nothing to join.", fill: "The mesh has no holes there.",
-                              connect: "Select two corners of one face, or two edges of one face." }[name];
-                notice("info", `Nothing to ${name}`, why);
-                return false;
-            }
-            mode = name === "connect" ? "edge" : "face";
-        } else if (name === "weld") {
-            res = MO.mergeByDistance(work, view.meshEditLocalLength(o.weld), sel.mode, sel.ids);
-            if (!res.merged) { notice("info", "Nothing welded", "No vertices lie that close together."); return false; }
-            notice("info", "Welded", `${res.merged} vertices merged.`);
-            mode = "vertex";
-        } else if (name === "subdivide") {
-            res = { mesh: MX.subdivide(work, 1), ids: [] };
-            mode = sel.mode;
-        } else if (name === "mirror" || name === "symmetrize") {
-            res = { mesh: MX.mirrorMesh(work, o.mirrorAxis, { symmetrize: name === "symmetrize", side: o.mirrorSide,
-                                                            tol: view.meshEditLocalLength(o.weld) }), ids: [] };
-            if (!res.mesh.f.length) { notice("info", "Nothing left", "No face lies wholly on the side kept."); return false; }
-        } else if (name === "flip") {
-            const faces = MD.selFaces(work, sel.mode, sel.ids);
-            res = { mesh: MD.flipFaces(work, faces), ids: sel.ids };
-        } else {
-            return false;
-        }
+        return true;
+    },
+
+    /** Write an operation's result into the item (one undo step unless `snapshot` is false). False = the item went. */
+    async _previzMeshWrite(item, name, res, { snapshot = true } = {}) {
+        const view = this._modelView();
         const packed = MD.cleanMesh(MD.pack(res.mesh));
-        if (!packed && name !== "delete") return false;
-        this.previzSnapshot(`${name} (${item.name})`);
+        if (snapshot) this.previzSnapshot(`${name} (${item.name})`);
         if (!packed) {
             // Everything went: the item goes with it.
             scene3dRemove(this.previzScene(), item.id);
             view.meshEditEnd();
             this._previzSelection = null;
             await this.previzChanged({ reload: true });
-            return true;
+            return false;
         }
         item.mesh = packed;
         await this.previzChanged({ reload: true });
-        if (view.meshEditing() === item.id) view.meshEditSetSelection(res.ids || [], "replace", mode);
+        if (view.meshEditing() === item.id) view.meshEditSetSelection(res.ids || [], "replace", res.mode);
+        return true;
+    },
+
+    /**
+     * Ctrl+E, I, Ctrl+B, Ctrl+R, the menu and the bar: the operation follows
+     * the mouse in the view until a click (Enter) keeps it or Esc (a right
+     * click) drops it. Operations with nothing to drag run at once.
+     */
+    previzMeshTool(name) {
+        const view = this._modelView();
+        if (view && view.meshToolModal && MT.DRAG_TOOLS.includes(name) && view.meshToolModal(name)) return true;
+        return this.previzMeshOp(name);
+    },
+
+    /** The view's live drag ended: commit it with the numbers it showed. */
+    _previzMeshToolCommit(name, params) {
+        return this.previzMeshOp(name, params);
+    },
+
+    /**
+     * The adjust box changed a number: the last operation again from the mesh
+     * before it, in place of its result - no new undo step.
+     */
+    async _previzMeshAdjust(params) {
+        const last = this._previzMeshLast;
+        const view = this._modelView();
+        const item = last && this._previzMeshItem(last.id);
+        if (!item || item.mesh !== last.packed || view.meshEditing() !== item.id) {
+            if (view.meshAdjustHide) view.meshAdjustHide();
+            return false;
+        }
+        const p = MT.toolParams(last.name, {}, { ...last.params, ...params });
+        const res = MT.runMeshOp(MD.unpack(last.base), last.name, last.sel, p, (d) => view.meshEditLocalLength(d));
+        if (res.error) { notice("info", res.title, res.error); return false; }
+        const ok = await this._previzMeshWrite(item, last.name, res, { snapshot: false });
+        if (!ok) { this._previzMeshLast = null; return true; }
+        last.params = p;
+        last.packed = item.mesh;
+        view.setMeshEditOptions(MT.optionsFromParams(last.name, p));
+        view.meshAdjustOffer(last.name, p, item.mesh);
         return true;
     },
 
@@ -365,7 +376,7 @@ export const PrevizModelingMixin = {
         const mode = editing ? view.meshEditMode() : null;
         const o = view && view.meshEditOptions ? view.meshEditOptions() : {};
         const why = editing ? "" : "Edit a mesh first (Tab)";
-        const op = (label, name, cmd) => ({ label, cmd, disabled: !editing, title: why, run: () => this.previzMeshOp(name) });
+        const op = (label, name, cmd) => ({ label, cmd, disabled: !editing, title: why, run: () => this.previzMeshTool(name) });
         const tick = (on, label) => (on ? "✓ " : "") + label;
         return [
             { label: "Convert to editable mesh", disabled: kind !== "primitive" && kind !== "model",

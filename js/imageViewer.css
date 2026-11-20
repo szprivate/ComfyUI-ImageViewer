@@ -2759,6 +2759,32 @@ audio.src-media { width: 90%; }
 .model-mesh-bar .model-mesh-check { display: flex; align-items: center; gap: 3px; color: #aaa; cursor: pointer; }
 .model-mesh-bar .model-mesh-sep { width: 1px; height: 16px; background: #444; }
 .cb-mesh-edit { margin: 4px 0 2px 8px; }
+/* The modeling tools you drag (imageViewer_view3dMeshTools.js): their column part, the handle, the readout, the adjust box. */
+.model-mesh-tools { display: flex; flex-direction: column; gap: 3px; }
+.model-mesh-handle { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; overflow: visible; }
+.model-mesh-handle .mh-line { stroke: #ffd23c; stroke-width: 2; }
+.model-mesh-handle .mh-dot { fill: #ffd23c; }
+.model-mesh-handle .mh-grip { fill: rgba(0, 0, 0, 0.6); stroke: #ffd23c; stroke-width: 2; }
+.model-mesh-handle .mh-plus { stroke: #ffd23c; stroke-width: 2; }
+.model-mesh-handle .mh-ring { fill: none; stroke: #ffd23c; stroke-width: 1.5; stroke-dasharray: 4 4; }
+.model-mesh-handle .mh-cut { stroke: #ffd23c; stroke-width: 2; }
+.model-mesh-hud { position: absolute; z-index: 8; pointer-events: none; padding: 2px 6px; border-radius: 3px;
+    background: rgba(0, 0, 0, 0.8); color: #ffd23c; font: 11px/16px sans-serif; white-space: nowrap; }
+.model-mesh-hud.error { color: #f88; }
+.model-mesh-adjust { position: absolute; left: 50px; bottom: 44px; z-index: 7; min-width: 190px; padding: 4px 8px 6px;
+    border-radius: 4px; background: rgba(0, 0, 0, 0.8); border: 1px solid #333; color: #ddd; font: 11px/16px sans-serif; }
+.model-mesh-adjust .mma-head { display: flex; justify-content: space-between; align-items: center; color: #f60;
+    font-weight: 600; margin-bottom: 3px; }
+.model-mesh-adjust .mma-close { background: none; border: none; color: #888; cursor: pointer; font-size: 14px; padding: 0 2px; }
+.model-mesh-adjust .mma-close:hover { color: #fff; }
+.model-mesh-adjust .mma-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 3px; }
+.model-mesh-adjust .mma-label { color: #aaa; }
+.model-mesh-adjust .mma-label.scrub { cursor: ew-resize; }
+.model-mesh-adjust .mma-input { width: 70px; height: 20px; background: #1b1b1b; color: #6cf; border: 1px solid #444;
+    border-radius: 3px; font: inherit; padding: 0 4px; box-sizing: border-box; }
+.model-mesh-adjust input[type=checkbox].mma-input { width: auto; height: auto; }
+.model-mesh-adjust .mma-input:focus { outline: none; border-color: #f60; }
+.mesh-tool-live .model-canvas, .mesh-tool-live canvas { cursor: ew-resize; }
 .model-toolcol {
     position: absolute; top: 38px; left: 8px; z-index: 3;
     display: flex; flex-direction: column; gap: 3px; padding: 4px;

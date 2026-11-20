@@ -160,6 +160,7 @@ class ModelingTests(unittest.TestCase):
             # Ctrl+E: extruded; the same face stays selected, one undo step.
             self._hover_view(pg)
             pg.keyboard.press("Control+e")
+            pg.keyboard.press("Enter")      # the operation follows the mouse until kept
             pg.wait_for_timeout(150)
             extruded = pg.evaluate(STATS, box)
             top_y = pg.evaluate(f"""() => {{ const it = window.__panel.previzScene().items.find((i) => i.id === '{box}');
@@ -167,6 +168,7 @@ class ModelingTests(unittest.TestCase):
             self._shot(pg, "mesh_extruded.png")
             # I: inset the same face.
             pg.keyboard.press("i")
+            pg.keyboard.press("Enter")      # the operation follows the mouse until kept
             pg.wait_for_timeout(150)
             inset = pg.evaluate(STATS, box)
             # Delete: the face goes.
@@ -323,6 +325,7 @@ class ModelingTests(unittest.TestCase):
             # Ctrl+B: bevelled.
             self._hover_view(pg)
             pg.keyboard.press("Control+b")
+            pg.keyboard.press("Enter")      # the operation follows the mouse until kept
             pg.wait_for_timeout(200)
             bevelled = pg.evaluate(STATS, box)
             bevel_closed = pg.evaluate(closed, box)
@@ -334,6 +337,7 @@ class ModelingTests(unittest.TestCase):
             one = pg.evaluate(STATS, box)
             self._hover_view(pg)
             pg.keyboard.press("Control+r")
+            pg.keyboard.press("Enter")      # the operation follows the mouse until kept
             pg.wait_for_timeout(200)
             cut = pg.evaluate(STATS, box)
             self._shot(pg, "mesh_loop_cut.png")
@@ -500,6 +504,128 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(agent["info"], [True, 5])             # the bottom and the bevels' four corner triangles in its plane
         self.assertIn("op is one of", agent["err"])
         self.assertEqual(mirror, [True, 12, 10])
+
+    def _drag(self, pg, a, b, steps=12):
+        pg.mouse.move(a["x"], a["y"])
+        pg.wait_for_timeout(40)
+        pg.mouse.down()
+        for k in range(1, steps + 1):
+            pg.mouse.move(a["x"] + (b["x"] - a["x"]) * k / steps, a["y"] + (b["y"] - a["y"]) * k / steps)
+            pg.wait_for_timeout(15)
+
+    def test_tools_are_dragged_live_and_adjusted_after(self):
+        """Sebastian 2026-11-20: tools in the left column, sizes dragged on screen, live, before they are kept."""
+        pg, ids = self._page()
+        box = ids["box"]
+        top_y = f"""() => {{ const it = window.__panel.previzScene().items.find((i) => i.id === '{box}');
+            let m = -1e9; for (let i = 1; i < it.mesh.v.length; i += 3) m = Math.max(m, it.mesh.v[i]); return m; }}"""
+        drawn = "() => { const v = window.__panel._modelView(); return v._me.work.v.length; }"
+        try:
+            self._hover_view(pg)
+            pg.keyboard.press("Tab")
+            pg.keyboard.press("3")
+            top = pg.evaluate(SCREEN, [0, 1, 0])
+            self._click(pg, top)
+            tools = pg.evaluate("""() => [...window.__panel._modelView().ui.tools.querySelectorAll('.model-mesh-tool')]
+                .map((b) => b.dataset.tool)""")
+            # The Extrude tool: no gizmo, an arrow on the face instead.
+            pg.click(".model-mesh-tool[data-tool=mesh-extrude]")
+            pg.wait_for_timeout(100)
+            picked = pg.evaluate("""() => { const v = window.__panel._modelView();
+                return { tool: v.meshTool(), gizmo: !!(v.gizmo && v.gizmo.object), arrow: !!v.stage.querySelector('.model-mesh-handle .mh-grip') }; }""")
+            # A drag upwards from the face: previewed live, nothing written yet.
+            up = pg.evaluate(SCREEN, [0, 1.6, 0])
+            self._drag(pg, top, up)
+            live = pg.evaluate("() => window.__panel._modelView().meshToolLive()")
+            mid = {"drawn": pg.evaluate(drawn), "top": pg.evaluate(top_y),
+                   "hud": pg.evaluate("() => window.__panel._modelView().stage.querySelector('.model-mesh-hud').textContent")}
+            self._shot(pg, "mesh_tool_extrude_drag.png")
+            pg.mouse.up()
+            pg.wait_for_timeout(250)
+            kept = pg.evaluate(STATS, box)
+            kept_top = pg.evaluate(top_y)
+            adjust = pg.evaluate("() => window.__panel._modelView().meshAdjustState()")
+            self._shot(pg, "mesh_tool_adjust.png")
+            # The adjust box: another distance replaces the result, no new undo step.
+            pg.fill(".model-mesh-adjust .mma-input[data-key=amount]", "1")
+            pg.press(".model-mesh-adjust .mma-input[data-key=amount]", "Tab")
+            pg.wait_for_timeout(300)
+            adjusted_top = pg.evaluate(top_y)
+            adjusted = pg.evaluate(STATS, box)
+            pg.evaluate("() => window.__panel.previzUndo()")
+            pg.wait_for_timeout(200)
+            undone = pg.evaluate(STATS, box)
+            box_gone = pg.evaluate("() => !window.__panel._modelView().stage.querySelector('.model-mesh-adjust')")
+            # Ctrl+E: modal, follows the mouse; Esc drops it, a click keeps it.
+            self._click(pg, top)
+            pg.mouse.move(top["x"] + 5, top["y"] + 5)
+            pg.keyboard.press("Control+e")
+            pg.mouse.move(up["x"], up["y"], steps=6)
+            pg.wait_for_timeout(50)
+            modal = pg.evaluate("() => window.__panel._modelView().meshToolLive()")
+            pg.keyboard.press("Escape")
+            pg.wait_for_timeout(150)
+            dropped = pg.evaluate(STATS, box)
+            pg.keyboard.press("Control+e")
+            pg.mouse.move(up["x"], up["y"] - 20, steps=6)
+            pg.mouse.down()
+            pg.mouse.up()
+            pg.wait_for_timeout(250)
+            clicked = pg.evaluate(STATS, box)
+            pg.evaluate("() => window.__panel.previzUndo()")
+            pg.wait_for_timeout(200)
+            # Inset: dragged away from the face's middle, the border grows.
+            self._click(pg, top)
+            pg.click(".model-mesh-tool[data-tool=mesh-inset]")
+            side = pg.evaluate(SCREEN, [0.3, 1, 0.3])
+            self._drag(pg, top, {"x": top["x"] + 40, "y": top["y"]})
+            inset_live = pg.evaluate("() => window.__panel._modelView().meshToolLive()")
+            pg.mouse.up()
+            pg.wait_for_timeout(250)
+            inset = pg.evaluate(STATS, box)
+            pg.evaluate("() => window.__panel.previzUndo()")
+            pg.wait_for_timeout(200)
+            # Loop cut: pointing at an edge shows the cut, a click makes it.
+            pg.click(".model-mesh-tool[data-tool=mesh-loopcut]")
+            e = pg.evaluate(SCREEN, [0.5, 0.2, 0.5])
+            pg.mouse.move(e["x"] + 2, e["y"])
+            pg.wait_for_timeout(80)
+            preview = pg.evaluate("() => window.__panel._modelView().stage.querySelectorAll('.model-mesh-handle .mh-cut').length")
+            self._shot(pg, "mesh_tool_loopcut_hover.png")
+            pg.mouse.down()
+            pg.mouse.up()
+            pg.wait_for_timeout(250)
+            cut = pg.evaluate(STATS, box)
+            cut_adjust = pg.evaluate("() => window.__panel._modelView().meshAdjustState()")
+            # W puts the tool down: the gizmo is back.
+            pg.click(".model-toolcol [data-tool=translate]")
+            back = pg.evaluate("() => window.__panel._modelView().meshTool()")
+        finally:
+            pg.close()
+        self.assertEqual(self.errors, [])
+        self.assertEqual(tools, ["mesh-extrude", "mesh-inset", "mesh-bevel", "mesh-loopcut", "mesh-soft"])
+        self.assertEqual(picked, {"tool": "extrude", "gizmo": False, "arrow": True})
+        self.assertEqual(live["name"], "extrude")
+        self.assertGreater(live["params"]["amount"], 0.2)
+        self.assertEqual(mid["drawn"], 12)                 # the preview has the new vertices ...
+        self.assertAlmostEqual(mid["top"], 0.5, places=4)  # ... the scene does not, yet
+        self.assertIn("Extrude", mid["hud"])
+        self.assertEqual((kept["verts"], kept["faces"]), (12, 10))
+        self.assertAlmostEqual(kept_top, 0.5 + live["params"]["amount"], delta=0.05)
+        self.assertEqual(adjust["name"], "extrude")
+        self.assertAlmostEqual(adjusted_top, 1.5, places=3)
+        self.assertEqual((adjusted["verts"], adjusted["faces"]), (12, 10))
+        self.assertEqual((undone["verts"], undone["faces"]), (8, 6))     # one step for the drag and its adjusting
+        self.assertTrue(box_gone)
+        self.assertEqual(modal["name"], "extrude")
+        self.assertEqual(dropped["verts"], 8)
+        self.assertEqual(clicked["verts"], 12)
+        self.assertGreater(inset_live["params"]["amount"], 0.01)
+        self.assertEqual((inset["verts"], inset["faces"]), (12, 10))
+        self.assertGreaterEqual(preview, 4)
+        self.assertEqual(cut["verts"], 12)
+        self.assertEqual(cut_adjust["name"], "loopcut")
+        self.assertIsNone(back)
 
 
 if __name__ == "__main__":

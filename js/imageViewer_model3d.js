@@ -44,6 +44,7 @@ import { constrainedLocals } from "./imageViewer_constraints.js";
 import { View3DSnapMixin } from "./imageViewer_view3dSnap.js";
 import { View3DMeasureMixin } from "./imageViewer_view3dMeasure.js";
 import { View3DMeshEditMixin } from "./imageViewer_view3dMeshEdit.js";
+import { View3DMeshToolsMixin } from "./imageViewer_view3dMeshTools.js";
 
 let _libsPromise = null;
 
@@ -357,8 +358,9 @@ export class Model3DView {
             b.classList.toggle("active", !single);
         }
         for (const [mode, btn] of Object.entries(this.ui.toolBtns || {})) {
-            btn.classList.toggle("active", mode === this.gizmoMode && !this._msOn);
+            btn.classList.toggle("active", mode === this.gizmoMode && !this._msOn && !(this._me && this._me.tool));
         }
+        if (this._mtToolsSync) this._mtToolsSync();
         if (this.ui.measureBtn) {
             const on = !!this._msOn;
             this.ui.measureBtn.classList.toggle("active", on);
@@ -2472,6 +2474,8 @@ export class Model3DView {
 
     setGizmoMode(mode) {
         if (this._msOn) this.setMeasure(false);
+        // A gizmo tool puts a modeling tool down (imageViewer_view3dMeshTools.js).
+        if (this._me && this._me.tool) this._me.tool = null;
         this.gizmoMode = ["select", "translate", "rotate", "scale"].includes(mode) ? mode : "translate";
         if (this.gizmo && this.gizmoMode !== "select") this.gizmo.setMode(this.gizmoMode);
         this._syncSelection();
@@ -3070,3 +3074,4 @@ Object.assign(Model3DView.prototype, TerrainErode3DMixin);
 Object.assign(Model3DView.prototype, View3DSnapMixin);
 Object.assign(Model3DView.prototype, View3DMeasureMixin);
 Object.assign(Model3DView.prototype, View3DMeshEditMixin);
+Object.assign(Model3DView.prototype, View3DMeshToolsMixin);
