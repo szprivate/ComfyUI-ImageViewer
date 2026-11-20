@@ -588,6 +588,8 @@ export const UIMixin = {
         // ...and the space entered brings its own layout up, before it shows its panels.
         if (this.dockSpaceEnter) this.dockSpaceEnter(k);
         if (this.dockViewTitleSync) this.dockViewTitleSync();
+        // A tab picked while the main view is behind a panel's tab: the main view comes up to show it.
+        if (prevTab !== k && this.isViewBehind && this.isViewBehind()) this.dockViewFront();
         // The panels' title bars take a slight accent of the space that is up (imageViewer.css).
         try {
             const tint = this._tabSpaceKind ? spaceColor(this._tabSpaceKind(k)) : "";

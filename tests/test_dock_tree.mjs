@@ -102,3 +102,38 @@ test("a clean copy keeps only what a layout is made of", () => {
     assert.ok(T.isTreeLayout({ v: 2, root: copy }));
     assert.ok(T.isRailLayout(RAILS));
 });
+
+test("a panel dropped on the main view becomes a tab of it, and leaves it again", () => {
+    let root = T.tidy(T.fromRails(RAILS).root);
+    const p = T.detach(root, "params");
+    root = T.tidy(root);
+    root = T.tidy(T.insertAsTab(root, "view", p));
+    const v = T.findView(root);
+    assert.equal(shape(root), "col(row(col(history),V,params,col(browser)),row(curves,dopeSheet))");
+    assert.ok(v.node.tab && v.node.tab === T.locate(root, "params").node.tab);
+    assert.equal(v.node.behind, true);
+    assert.equal(T.locate(root, "params").node.behind, false);
+    assert.equal(T.locate(root, "params").node.px, undefined);      // it takes the view's room
+    assert.deepEqual(T.shownChildren(v.parent).map(shape), ["col(history)", "params"]);
+    // Kept in a saved copy.
+    const copy = T.tidy(T.cleanCopy(root));
+    assert.equal(T.findView(copy).node.behind, true);
+    // The panel moved away: the view is alone again, in front, no tab left.
+    const back = T.detach(root, "params");
+    root = T.tidy(root);
+    const v2 = T.findView(root).node;
+    assert.equal(v2.tab, undefined);
+    assert.equal(!!v2.behind, false);
+    root = T.tidy(T.insertBeside(root, T.findView(root).node, "left", back, 300));
+    assert.equal(T.locate(root, "params").node.px, 300);
+});
+
+test("a panel hidden in front of the main view gives the place back to the view", () => {
+    let root = T.tidy(T.fromRails(RAILS).root);
+    const p = T.detach(root, "params");
+    root = T.tidy(T.insertAsTab(T.tidy(root), "view", p));
+    T.locate(root, "params").node.hidden = true;
+    root = T.tidy(root);
+    const v = T.findView(root).node;
+    assert.equal(v.behind, false);
+});
