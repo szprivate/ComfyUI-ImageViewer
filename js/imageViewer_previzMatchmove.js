@@ -1110,6 +1110,7 @@ export const PrevizMatchmoveMixin = {
         this._mmDepthSection(ctx);
         const nm = (mm.constraints || []).length;
         this._mmMeasurements(this._mmFold(ctx, "solve-measure", "Measurements", nm ? `${nm} set` : "none"));
+        if (this._mmGeometrySection) this._mmGeometrySection(ctx);
         if (!sv) return;
         const dctx = this._mmFold(ctx, "solve-details", "Details", `${Object.keys(sv.frames).length} frames · ${(sv.points || []).length} points`);
         const facts = el(ctx.doc, "div", "mm-facts");
@@ -1240,11 +1241,16 @@ export const PrevizMatchmoveMixin = {
             mode: mm.settings.mode, refine, pixel_aspect: D.pixelAspect(mm),
             constraints: (mm.constraints || []).filter((c) => c.on !== false),
             ...(depth ? { depth } : {}),
+            ...(D.surveyRequest(mm) || {}),
         }));
         const res = d.result || {};
         if (d.state === "error" || res.error) throw new Error(res.error || d.error || "the solve failed");
         if (d.state === "stopped") return;
-        this._mmEdit("solve", (m) => { m.solve = res; m.objectSolves = {}; });
+        this._mmEdit("solve", (m) => {
+            m.solve = res; m.objectSolves = {};
+            // placed on the geometry: the solve is already in the 3D space's axes and units
+            if (res.surveyed) m.orient = { R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0], s: 1 };
+        });
         notice(res.rms < 1 ? "success" : "warn", "Solved", `Error ${Number(res.rms).toFixed(3)} px (${D.solveVerdict(res.rms)}).`);
     },
 
@@ -1322,6 +1328,7 @@ export const PrevizMatchmoveMixin = {
     _mmStepScene(ctx) {
         const { mm, st } = ctx;
         if (!mm.solve) { this._mmNote(ctx, "Solve the camera first.", "warn"); return; }
+        if (this._mmGeometrySceneNote) this._mmGeometrySceneNote(ctx);
         const built = mm.scene && mm.scene.group && S.itemById(this.previzScene(), mm.scene.group);
         const bp = st.backplate !== false;
         const cb = el(ctx.doc, "input");
@@ -1948,6 +1955,7 @@ export const PrevizMatchmoveMixin = {
                 g.fillText(`${Number(c.value.toFixed(3))} m`, (at[0][0] + at[1][0]) / 2 + 4, (at[0][1] + at[1][1]) / 2 - 4);
             }
         }
+        if (this._mmDrawPins) this._mmDrawPins(g, st, f, (x, y) => this._mmToScreen(st, x, y));
         if (st.lasso && st.lasso.length > 1) {
             g.strokeStyle = "#fff";
             g.setLineDash([4, 3]);
