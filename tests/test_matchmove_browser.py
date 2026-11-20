@@ -684,6 +684,58 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.close()
 
 
+    def test_the_agent_sees_a_plate_loaded_by_hand(self):
+        """Sebastian 2026-11-20: "the agent can't see the loaded plate in Matchmove". A plate set in the guide by hand
+        (and put in the main view) is in the viewer's state the agent gets with each message - path, frames, the
+        frame shown - and matchmove_frame answers the tracks on a frame for the agent to look at."""
+        pg = self._page()
+        try:
+            pg.evaluate("""() => {
+                const real = window.fetch.bind(window); window.__answers = {};
+                window.fetch = (url, init) => { if (String(url).includes('/rig/agent_done')) { const b = JSON.parse(init.body);
+                    if (b.state !== 'running') window.__answers[b.id] = b; return Promise.resolve(new Response('{}')); } return real(url, init); };
+                let n = 0; window.__agent = async (action, args) => { const id = `a${++n}`;
+                    await window.__panel.previzRigAgentRun({ id, action, args }); return window.__answers[id]; }; }""")
+            self.assertNotIn("matchmove", pg.evaluate("() => window.__panel.agentViewerState()"))
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            pg.evaluate("() => { window.__panel.matchmovePlateMain(true); window.__panel.setFrame(5); }")
+            pg.wait_for_timeout(300)
+            vs = pg.evaluate("() => window.__panel.agentViewerState()")
+            mm = vs.get("matchmove")
+            self.assertIsNotNone(mm, vs)
+            self.assertTrue(mm["plate"]["path"].endswith("plate.####.png"), mm)
+            self.assertEqual((mm["plate"]["frames"], mm["plate"]["width"], mm["plate"]["frame_range"]), (N, W, [0, N - 1]))
+            self.assertEqual(mm["current_frame"], 5)
+            self.assertTrue(mm.get("plate_in_main_view"))
+            self.assertEqual(mm["tracks"], {"total": 0})
+            # on another tab the plate is still named, with the 3D tab it is on
+            key3d = pg.evaluate("() => window.__panel.activeTab")
+            pg.evaluate("""() => { const P = window.__panel; P.updateData({ unique_id: '21', tabs: { tab1: [
+                { path: 'D:/out/p1.png', filename: 'p1.png', type: 'output' }] } }, null);
+                const other = Object.keys(P.allTabs).find((k) => k !== P.activeTab); if (other) P.switchTab(other); }""")
+            pg.wait_for_timeout(300)
+            away = pg.evaluate("() => window.__panel.agentViewerState()").get("matchmove")
+            self.assertEqual((away["tab"], away["on_this_tab"]), (key3d, False), away)
+            # the agent's info reads the same plate (its 3D tab brought up), with the frame shown
+            r = pg.evaluate("() => window.__agent('matchmove_info', {})")
+            self.assertEqual(r["state"], "done", r)
+            self.assertEqual(r["result"]["matchmove"]["plate"]["frames"], N)
+            self.assertIn("current_frame", r["result"]["matchmove"])
+            r = pg.evaluate("() => window.__agent('matchmove_track', {features: 80})")
+            self.assertEqual(r["state"], "done", r)
+            r = pg.evaluate("() => window.__agent('matchmove_frame', {frames: [0, 12, 99]})")
+            self.assertEqual(r["state"], "done", r)
+            fr = r["result"]["frames"]
+            self.assertEqual([f["frame"] for f in fr], [0, 12, N - 1])
+            self.assertGreater(len(fr[0]["tracks"]), 20)
+            t = fr[0]["tracks"][0]
+            self.assertTrue(0 <= t["x"] <= W and 0 <= t["y"] <= H, t)
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_the_plate_in_the_main_view_and_back(self):
         """Sebastian 2026-11-19: the Plate panel as a main panel, switched with the 3D view: from the plate's own
         button, the main view's switch menu and the Matchmove menu; it goes with the 3D tab."""

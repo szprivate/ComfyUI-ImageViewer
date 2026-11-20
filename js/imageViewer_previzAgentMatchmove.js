@@ -16,7 +16,7 @@ export const MATCHMOVE_AGENT_ACTIONS = [
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
-    "matchmove_measure", "matchmove_phone_export",
+    "matchmove_measure", "matchmove_phone_export", "matchmove_frame",
 ];
 
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
@@ -39,7 +39,10 @@ function runsWhere(values, bad) {
 export function matchmoveSummary(mm, st = {}) {
     const out = { file: st.file || null, step: mm.step };
     const p = mm.plate;
-    out.plate = p ? { path: p.path, frames: p.frames, width: p.width, height: p.height, fps: p.fps, kind: p.kind } : null;
+    out.plate = p ? { path: p.path, frames: p.frames, width: p.width, height: p.height, fps: p.fps, kind: p.kind,
+                      frame_range: [0, Math.max(0, p.frames - 1)], ...(p.first ? { first_file_frame: p.first } : {}) } : null;
+    // The frame shown (the 3D space's playhead is the plate's frame): what "this frame" means.
+    if (p && isNum(st.current)) out.current_frame = Math.max(0, Math.min(p.frames - 1, Math.round(Number(st.current))));
     const c = mm.camera;
     out.camera = { focal_mm: c.focalMm, sensor_mm: c.sensor, focal_known: !!c.focalKnown, model: c.model || "", lens: c.lens || "",
                    pixel_aspect: D.pixelAspect(mm), preset: c.preset || "" };
@@ -123,7 +126,7 @@ export const PrevizAgentMatchmoveMixin = {
     },
 
     _ammAnswer(st, extra = {}) {
-        return { ...extra, matchmove: matchmoveSummary(st.mm, st) };
+        return { ...extra, matchmove: matchmoveSummary(st.mm, { ...st, current: this.currentFrame || 0 }) };
     },
 
     _ammTrackIds(st, list) {
@@ -151,6 +154,40 @@ export const PrevizAgentMatchmoveMixin = {
     async _asa_matchmove_info() {
         const st = await this._amm({ plate: false, open: false });
         return this._ammAnswer(st);
+    },
+
+    /**
+     * {frames: [n, ...] | frame (default the frame shown), tracks (default true), undistort}: what the agent needs
+     * to LOOK at plate frames - the plate, the lens and, per frame, the tracks on it in plate pixels (id, x, y,
+     * on, object, the solve's error). agentY-core's matchmove "frame" fetches the pictures from mm_frame itself
+     * and draws these on them. Changes nothing.
+     */
+    async _asa_matchmove_frame(scene, a) {
+        const st = await this._amm({ open: false });
+        const mm = st.mm, last = mm.plate.frames - 1;
+        const clamp = (f) => Math.max(0, Math.min(last, Math.round(Number(f))));
+        let frames = Array.isArray(a.frames) ? a.frames.filter(isNum).map(clamp) : isNum(a.frame) ? [clamp(a.frame)] : [];
+        if (!frames.length) frames = [clamp(this.currentFrame || 0)];
+        frames = [...new Set(frames)].slice(0, 16);
+        const err = new Map(((mm.solve && mm.solve.points) || []).map((q) => [q.id, q.error]));
+        const objName = (g) => { const o = mm.objects.find((x) => x.id === g); return o ? o.name : null; };
+        const out = frames.map((f) => {
+            const on = [];
+            if (a.tracks !== false) {
+                for (const t of mm.tracks) {
+                    const k = D.keyAt(t, f);
+                    if (!k) continue;
+                    on.push({ id: t.id, x: round(k[1], 1), y: round(k[2], 1), ...(t.on ? {} : { on: false }),
+                              ...(t.group ? { object: objName(t.group) } : {}),
+                              ...(err.has(t.id) ? { error_px: round(err.get(t.id), 2) } : {}) });
+                    if (on.length >= 600) break;
+                }
+            }
+            return { frame: f, tracks: on };
+        });
+        const L = mm.lens;
+        return this._ammAnswer(st, { frames: out,
+            lens: (L.k1 || L.k2) ? { k1: L.k1, k2: L.k2, center: L.center } : null, undistort: !!a.undistort });
     },
 
     /** {plate} a film or a frame of a sequence: a new matchmove of it; {file} a .mm.json to go on with. */
