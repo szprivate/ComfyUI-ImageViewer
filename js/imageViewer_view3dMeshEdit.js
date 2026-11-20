@@ -229,6 +229,7 @@ export const View3DMeshEditMixin = {
         this._meOpts = cleanMeshEditOptions({ ...this.meshEditOptions(), ...(patch || {}) });
         try { this.win.localStorage.setItem(STORE, JSON.stringify(this._meOpts)); } catch (_) { /* storage off */ }
         this._meBarSync();
+        if (this._mtToolsSync) this._mtToolsSync();
         if (this._me && ("soft" in (patch || {}) || "softRadius" in (patch || {}))) this._meRedrawOverlay();
         return this.meshEditOptions();
     },
@@ -263,6 +264,7 @@ export const View3DMeshEditMixin = {
         this.selected = id;
         this.root.classList.add("mesh-editing");
         this._meBarBuild();
+        if (this._mtToolsBuild) this._mtToolsBuild();
         this._meshRefresh(entry);
         this._meAfterBuild(entry);
         this._syncSelection();
@@ -275,6 +277,7 @@ export const View3DMeshEditMixin = {
         const me = this._me;
         if (!me) return;
         if (me.drag) this._meDragEnd(false);
+        if (this._mtToolsRemove) this._mtToolsRemove();
         for (const m of me.offsetMats) { m.polygonOffset = false; m.needsUpdate = true; }
         this._meClearOverlay();
         if (me.group.parent) me.group.parent.remove(me.group);
@@ -342,6 +345,8 @@ export const View3DMeshEditMixin = {
         if (!me || !entry || !entry.item) return;
         me.work = MD.unpack(entry.item.mesh);
         me.sel = new Set(MD.pruneSel(me.work, me.mode, [...me.sel]));
+        // The adjust box belongs to the mesh the last operation made: another change (undo, a drag) puts it away.
+        if (this._meAdjust && !this._meAdjust.busy && entry.item.mesh !== this._meAdjust.packed) this.meshAdjustHide();
         this._meRedrawOverlay();
         if (this.gizmo) this._syncSelection();
     },
@@ -463,6 +468,7 @@ export const View3DMeshEditMixin = {
             mat.needsUpdate = true;
             me.offsetMats.add(mat);
         }
+        if (this._mtTick) this._mtTick();
     },
 
     // ── Picking components ──────────────────────────────────────────────────
@@ -603,6 +609,9 @@ export const View3DMeshEditMixin = {
         if (!me || e.button !== 0 || e.altKey || this._walk) return false;
         // The gizmo's handles have the press while one is under the pointer.
         if (this.gizmo && this.gizmo.object === me.handle && this.gizmo.axis) return false;
+        // A drag tool picked in the tool column: a drag sizes it, a click still picks.
+        if (this._mt) return true;
+        if (me.tool && this._mtDown && this._mtDown(e)) return true;
         const rect = this.canvas.getBoundingClientRect();
         const how = e.ctrlKey || e.metaKey ? (e.shiftKey ? "add" : "remove") : e.shiftKey ? "toggle" : "replace";
         // A pointerdown's own click count is not reliable across browsers: count the second press here.
@@ -670,7 +679,7 @@ export const View3DMeshEditMixin = {
         this.gizmo.camera = this.activeCameraObject();
         const host = this._meHost();
         const c = me.work && me.sel.size ? MD.selCentroid(me.work, me.mode, [...me.sel]) : null;
-        if (!host || !c || this.gizmoMode === "select") {
+        if (!host || !c || this.gizmoMode === "select" || me.tool || this._mt) {
             if (this.gizmo.object) this.gizmo.detach();
             return true;
         }
@@ -823,23 +832,6 @@ export const View3DMeshEditMixin = {
         btn("Edge", "Edges (2)", () => this.meshEditSetMode("edge"), "edge");
         btn("Face", "Faces (3)", () => this.meshEditSetMode("face"), "face");
         sep();
-        btn("Extrude", "Extrude the selected faces by the distance beside it (Ctrl+E)", () => this._meOp("extrude"));
-        num("extrude", "How far Extrude lifts the faces (scene units)", 0.05);
-        btn("Inset", "Inset the selected faces by the distance beside it (I)", () => this._meOp("inset"));
-        num("inset", "How far Inset draws the border in (scene units)", 0.01);
-        const ind = doc.createElement("label");
-        ind.className = "model-mesh-check";
-        ind.title = "Extrude and inset each face on its own, not touching faces as one region";
-        const cb = Object.assign(doc.createElement("input"), { type: "checkbox" });
-        cb.dataset.opt = "individual";
-        cb.addEventListener("change", () => this.setMeshEditOptions({ individual: cb.checked }));
-        ind.append(cb, doc.createTextNode(" Each face"));
-        bar.append(ind);
-        sep();
-        btn("Bevel", "Chamfer the selected edges by the width beside it (Ctrl+B)", () => this._meOp("bevel"));
-        num("bevel", "How wide Bevel cuts (scene units)", 0.01);
-        btn("Loop cut", "Cut a new loop across the ring of the selected edge (Ctrl+R)", () => this._meOp("loopcut"));
-        num("cut", "Where along the ring the cut lies (0..1)", 0.05);
         btn("Bridge", "Join two holes, or two groups of faces, with a band of faces", () => this._meOp("bridge"));
         btn("Fill", "Close the holes the selection touches (all of them with nothing selected)", () => this._meOp("fill"));
         btn("Connect", "Split a face between the selected vertices, or the middles of the selected edges", () => this._meOp("connect"));
@@ -856,7 +848,6 @@ export const View3DMeshEditMixin = {
         sep();
         btn("Merge", "Weld the selected vertices into one at their middle", () => this._meOp("merge"));
         btn("Weld", "Merge vertices closer than the distance beside it (the selected ones, or all)", () => this._meOp("weld"));
-        num("weld", "How close vertices must be to be welded (scene units)", 0.001);
         btn("Flip", "Turn the selected faces round (flip their normals)", () => this._meOp("flip"));
         btn("Delete", "Delete the selection (Del)", () => this._meOp("delete"));
         sep();
