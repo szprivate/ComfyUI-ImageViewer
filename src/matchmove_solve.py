@@ -904,7 +904,8 @@ def constraint_report(cons, P, metres_per_unit=None):
 
 def _key_ba(obs, poses, pts, f, c, fix, refine_f, priors=None, iters=25):
     """Bundle-adjust the frames in ``poses`` and the points in ``pts`` (in place); ``priors`` {point id (index in
-    obs.tracks): (target, weight)}. -> (f, rms)."""
+    obs.tracks): (target, weight)}. ``fix`` None: no camera held (the priors hold the solve in place - three or
+    more pinned points). -> (f, rms)."""
     regs = sorted(poses)
     idx = {fr: k for k, fr in enumerate(regs)}
     pid = sorted(pts)
@@ -926,8 +927,8 @@ def _key_ba(obs, poses, pts, f, c, fix, refine_f, priors=None, iters=25):
         keep = [ti for ti in priors if ti in pix]
         pr = ([pix[ti] for ti in keep], [priors[ti][0] for ti in keep], [priors[ti][1] for ti in keep])
     Rs, ts, X, f2, rms = bundle_adjust(Rs, ts, X, (np.asarray(ci), np.asarray(pi), np.asarray(uv)), f, c,
-                                       fixed=(idx[fix],), refine_f=refine_f and len(regs) >= 4, iters=iters,
-                                       priors=pr)
+                                       fixed=(idx[fix],) if fix is not None else (),
+                                       refine_f=refine_f and len(regs) >= 4, iters=iters, priors=pr)
     for fr in regs:
         poses[fr] = (Rs[idx[fr]], ts[idx[fr]])
     for ti in pid:
@@ -964,6 +965,142 @@ def _constrain(obs, res, c, cons, refine_f, cancel=None):
     return rms
 
 
+# ── geometry: tracks pinned to known points (survey) ─────────────────────────
+
+SURVEY_MODES = ("align", "hold")
+MAX_SURVEY = 500
+MIN_SURVEY = 3
+SURVEY_ROUNDS = (1.0, 3.0, 8.0, 20.0)   # the pins' pull each round in "hold" (pixels a unit away)
+SURVEY_OK = 0.02                        # a pin within this share of the pins' spread holds
+FLIP = np.diag([1.0, -1.0, -1.0])       # the scene's axes (y up, looking down -z) <-> the solve's (y down, +z)
+
+
+def clean_survey(raw):
+    """[{id: track id, X: [x, y, z] in the 3D space's own axes and units, on?}] as the solve reads them: one pin a
+    track, finite numbers; switched-off pins are left out."""
+    out, seen = [], set()
+    for p in (raw or [])[:MAX_SURVEY]:
+        if not isinstance(p, dict) or p.get("on") is False or not isinstance(p.get("id"), (str, int)):
+            continue
+        i = str(p["id"])
+        try:
+            X = [float(v) for v in p.get("X")]
+        except (TypeError, ValueError):
+            continue
+        if i in seen or len(X) != 3 or not all(math.isfinite(v) for v in X):
+            continue
+        seen.add(i)
+        out.append({"id": i, "X": X})
+    return out
+
+
+def similarity(A, B):
+    """The scale, turn and move that put points A onto points B (least squares): -> (s, R, t), B ~ s R A + t."""
+    A, B = np.asarray(A, float), np.asarray(B, float)
+    ma, mb = A.mean(0), B.mean(0)
+    a, b = A - ma, B - mb
+    va = float((a ** 2).sum()) / len(A)
+    U, D, Vt = np.linalg.svd(b.T @ a / len(A))
+    E = np.eye(3)
+    if np.linalg.det(U) * np.linalg.det(Vt) < 0:
+        E[2, 2] = -1.0
+    R = U @ E @ Vt
+    s = float(np.trace(np.diag(D) @ E) / va) if va > 1e-18 else 1.0
+    return s, R, mb - s * R @ ma
+
+
+def spread_of(P):
+    """How the points lie: (size = rms distance from their middle, flatness = 2nd / 1st spread; ~0 = on one line)."""
+    P = np.asarray(P, float)
+    sv = np.linalg.svd(P - P.mean(0), compute_uv=False)
+    return float(np.sqrt((sv ** 2).sum() / len(P))), float(sv[1] / sv[0]) if sv[0] > 1e-12 else 0.0
+
+
+def robust_similarity(A, B):
+    """similarity() with the pins that disagree left out one at a time (over 3x the median miss and 2 % of the
+    spread), never below MIN_SURVEY. -> (s, R, t, kept indices, misses)."""
+    A, B = np.asarray(A, float), np.asarray(B, float)
+    keep = list(range(len(A)))
+    size = spread_of(B)[0] or 1.0
+    while True:
+        s, R, t = similarity(A[keep], B[keep])
+        miss = np.linalg.norm((s * (R @ A.T)).T + t - B, axis=1)
+        if len(keep) <= MIN_SURVEY:
+            break
+        med = float(np.median(miss[keep]))
+        worst = max(keep, key=lambda k: miss[k])
+        if miss[worst] <= max(3 * med, SURVEY_OK * size):
+            break
+        keep.remove(worst)
+    return s, R, t, keep, miss
+
+
+def _apply_similarity(res, s, R, t):
+    """Move a solve (res poses / pts, in place) by X -> s R X + t; the pictures stay the same."""
+    for ti, X in list(res["pts"].items()):
+        res["pts"][ti] = s * R @ X + t
+    for fr, (Rc, tc) in list(res["poses"].items()):
+        Rn = Rc @ R.T
+        res["poses"][fr] = (Rn, s * tc - Rn @ t)
+
+
+def survey_fit(obs, res, c, survey, mode, refine_f, cancel=None):
+    """Put the solve (``res``, in place) into the geometry's world: the pins' points moved, turned and scaled
+    onto the pins (``align``), then with ``hold`` the key frames adjusted again with each pin pulling its point to
+    its place, harder each round - the cameras and a refined focal length follow, so a squashed solve is mended.
+    ``survey`` from clean_survey (the 3D space's axes). -> {mode, used, left_out, error, size} or {error}."""
+    id_of = {t["id"]: ti for ti, t in enumerate(obs.tracks)}
+    pins = [(p["id"], id_of[p["id"]], FLIP @ np.asarray(p["X"], float)) for p in survey
+            if p["id"] in id_of and id_of[p["id"]] in res["pts"]]
+    if len(pins) < MIN_SURVEY:
+        return {"error": f"{len(pins)} pinned track(s) were solved; the geometry needs {MIN_SURVEY} or more"}
+    A = np.stack([res["pts"][ti] for _, ti, _ in pins])
+    B = np.stack([X for _, _, X in pins])
+    size, flat = spread_of(B)
+    if flat < 0.02:
+        return {"error": "the pins lie on one line: pin a track off that line too"}
+    if spread_of(A)[1] < 0.02:
+        return {"error": "the pinned tracks' solved points lie on one line"}
+    s, R, t, keep, _ = robust_similarity(A, B)
+    _apply_similarity(res, s, R, t)
+    kept = [pins[k] for k in keep]
+    if mode == "hold":
+        poses, pts = res["poses"], res["pts"]
+        f = res["f"]
+        for strength in SURVEY_ROUNDS:
+            if cancel and cancel():
+                break
+            priors = {}
+            for _, ti, X in kept:
+                zs = [float((Rc @ pts[ti] + tc)[2]) for Rc, tc in poses.values()]
+                zs = [z for z in zs if z > 1e-9]
+                priors[ti] = (X, strength * f / (float(np.median(zs)) if zs else size))
+            f, rms = _key_ba(obs, poses, pts, f, c, None, refine_f, priors=priors, iters=15)
+            res["f"], res["rms"] = f, rms
+        # what the pull left over: one last move onto the pins
+        A2 = np.stack([pts[ti] for _, ti, _ in kept])
+        _apply_similarity(res, *similarity(A2, np.stack([X for _, _, X in kept])))
+    return {"mode": mode, "used": [p[0] for p in kept], "left_out": [pins[k][0] for k in range(len(pins)) if k not in keep],
+            "size": size}
+
+
+def survey_report(survey, P, size):
+    """How well each pin holds in the answer: [{id, ok, error (scene units), share (of the pins' spread), text,
+    used}]. ``P`` maps a track id to its point in the solve's axes."""
+    out = []
+    for p in survey:
+        row = {"id": p["id"]}
+        if p["id"] not in P:
+            row.update(ok=False, error=None, share=None, text="not solved: left out")
+        else:
+            e = float(np.linalg.norm(FLIP @ np.asarray(P[p["id"]], float) - np.asarray(p["X"], float)))
+            sh = e / (size or 1.0)
+            row.update(ok=sh < SURVEY_OK, error=round(e, 6), share=round(sh * 100, 2),
+                       text=f"{e:.4g} off ({sh * 100:.1f} % of the pins' spread)")
+        out.append(row)
+    return out
+
+
 def focal_check(obs, res, c, mode="free"):
     """How firmly the plate pins its focal length down: the key frames solved again with the focal length held
     10 % shorter and 10 % longer. When the error hardly grows, any focal length near it fits as well, and with it
@@ -992,7 +1129,7 @@ def focal_check(obs, res, c, mode="free"):
 
 
 def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None, frames=None,
-          progress=None, cancel=None, constraints=None, pixel_aspect=1.0, depth=None):
+          progress=None, cancel=None, constraints=None, pixel_aspect=1.0, depth=None, survey=None, survey_mode="hold"):
     """The camera of a plate from its tracks.
 
     ``tracks`` as matchmove.clean_tracks gives them (the camera's: group "camera"); ``lens`` the Comp
@@ -1009,7 +1146,12 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     ones an AI depth run has), strength (default 1), reading (disparity: bright = near, a phone's | depth: larger =
     farther, an AI model's), source (phone | ai: the notes' wording)}: after the free solve, the points are pulled
     towards the depths the pictures saw them at, in proportion (``matchmove_depth.depth_pull``); the answer's ``depth`` reports
-    how well the two agree before and after."""
+    how well the two agree before and after.
+
+    ``survey`` [{id, X}] (``clean_survey``): tracks pinned to points of known geometry, in the 3D space's own axes
+    and units. With MIN_SURVEY or more the answer is IN that space (``units: "scene"``, ``survey`` reports each
+    pin): ``survey_mode`` align only moves, turns and scales the solve onto them, hold also bends it to them
+    (``survey_fit``)."""
     notes = []
     pa = float(pixel_aspect or 1.0)
     if not (0.2 <= pa <= 5):
@@ -1038,7 +1180,8 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
         if progress:
             progress("keys", done, total)
 
-    measured = {i for q in cons for i in q["ids"]}
+    survey = clean_survey(survey)
+    measured = {i for q in cons for i in q["ids"]} | {p["id"] for p in survey}
     keep = {ti for ti, t in enumerate(obs.tracks) if t["id"] in measured}
 
     def attempt(fpx, m, kk, ref):
@@ -1122,6 +1265,22 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
         if progress:
             progress("measurements", 0, 1)
         _constrain(obs, res, c, cons, refine, cancel=cancel)
+    survey_info = None
+    if survey and want == "tripod":
+        notes.append("The camera only turns, so the points have no distance: the geometry pins were left out.")
+    elif survey:
+        if progress:
+            progress("geometry", 0, 1)
+        survey_info = survey_fit(obs, res, c, survey, survey_mode if survey_mode in SURVEY_MODES else "hold",
+                                 refine, cancel=cancel)
+        if survey_info.get("error"):
+            notes.append(f"Solved without the geometry: {survey_info['error']}.")
+            survey_info = {"error": survey_info["error"]}
+        elif survey_info["left_out"]:
+            notes.append(f"{len(survey_info['left_out'])} pin(s) disagree with the rest and were left out "
+                         f"({', '.join(survey_info['left_out'][:5])}): a track pinned to the wrong spot, or one on a "
+                         "moving thing.")
+    surveyed = bool(survey_info and not survey_info.get("error"))
     if known and refine and abs(res["f"] / float(focal_px) - 1) > 0.1:
         notes.append(f"The solve moved the focal length {res['f'] / float(focal_px) * 100 - 100:+.0f} % from the "
                      f"one given ({float(focal_px):.0f} px to {res['f']:.0f} px): check the camera and the lens.")
@@ -1162,13 +1321,16 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     if missing:
         notes.append(f"{len(missing)} frame(s) could not be solved (first: {missing[0]}).")
     # the world: the first solved frame's camera at the origin; scale = the points' median distance from it is 10
+    # (pinned to geometry: the geometry's world as it is)
     f0 = min(all_poses)
     R0, t0 = all_poses[f0]
     id_of = {t["id"]: ti for ti, t in enumerate(obs.tracks)}
     upm = None
-    if want != "tripod" and cons:
+    if want != "tripod" and cons and not surveyed:
         upm = units_per_metre(cons, {i: pts[ti] for i, ti in id_of.items() if ti in pts})
-    if want == "tripod":
+    if surveyed:
+        R0, t0, s = np.eye(3), np.zeros(3), 1.0
+    elif want == "tripod":
         s = 10.0
     elif upm:
         s = 1.0 / upm          # 1 unit = 1 metre, from the measurements
@@ -1199,6 +1361,17 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
     if rms > 1.5:
         notes.append(f"The solve's error is {rms:.2f} px: delete the worst tracks (the list is sorted) and solve again.")
     report = []
+    if surveyed:
+        rows = survey_report(survey, {p["id"]: np.asarray(p["X"]) for p in points}, survey_info["size"])
+        left = set(survey_info["left_out"])
+        for r in rows:
+            r["used"] = r["id"] not in left
+        survey_info = {"mode": survey_info["mode"], "pins": rows, "used": len(survey_info["used"]),
+                       "error": None, "rms": round(float(np.sqrt(np.mean([r["error"] ** 2 for r in rows
+                                                                          if r["used"] and r["error"] is not None]))), 6)}
+        notes.append(f"Placed on the geometry ({survey_info['used']} pins, "
+                     f"{'held to them' if survey_info['mode'] == 'hold' else 'moved onto them'}): the solve is in the "
+                     f"3D space's own units, the pins off by {survey_info['rms']:.4g} on average.")
     if cons and want != "tripod":
         P = {p["id"]: np.asarray(p["X"]) for p in points}
         report = constraint_report(cons, P, 1.0 if upm else None)
@@ -1212,7 +1385,8 @@ def solve(tracks, w, h, lens=None, focal_px=None, mode="free", refine_focal=None
             "center": (c / [pa, 1.0]).round(4).tolist(), "pixel_aspect": pa,
             "points": points, "rms": round(rms, 4), "per_frame": per, "mode": want,
             "key_frames": len(kposes), "notes": notes, "used_tracks": len(pts),
-            "constraints": report, "focal_check": fcheck, "units": "m" if upm else "", "depth": depth_report,
+            "constraints": report, "focal_check": fcheck, "units": "scene" if surveyed else "m" if upm else "",
+            "depth": depth_report, "survey": survey_info, "surveyed": surveyed,
             "worst": sorted(points, key=lambda p: -p["error"])[:20] if allerr else []}
 
 

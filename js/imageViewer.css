@@ -2823,6 +2823,7 @@ audio.src-media { width: 90%; }
 }
 /* The measure tool (imageViewer_view3dMeasure.js): labels at the stretches and corners, the readout top right. */
 .model-view.measuring .model-stage canvas { cursor: crosshair; }
+.model-view.picking-point .model-stage canvas { cursor: crosshair; }
 .model-measure { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
 .model-measure-label {
     position: absolute; transform: translate(-50%, -130%); padding: 1px 5px; border-radius: 3px; white-space: nowrap;

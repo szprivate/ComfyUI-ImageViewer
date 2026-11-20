@@ -9,6 +9,7 @@
 // Every action answers `info`'s summary (or the parts that changed), so the agent can read how good the track is
 // after each step: the tracks a frame, the solve's error, its worst tracks and frames.
 import * as D from "./imageViewer_matchmoveData.js";
+import * as S from "./imageViewer_scene3d.js";
 import { canvasContext } from "./imageViewer_exportUI.js";
 
 export const MATCHMOVE_AGENT_ACTIONS = [
@@ -16,7 +17,7 @@ export const MATCHMOVE_AGENT_ACTIONS = [
     "matchmove_mask", "matchmove_mask_remove", "matchmove_track", "matchmove_track_add", "matchmove_track_delete",
     "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track", "matchmove_object_solve",
     "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save", "matchmove_ground", "matchmove_ai_mask",
-    "matchmove_measure", "matchmove_phone_export", "matchmove_frame",
+    "matchmove_measure", "matchmove_phone_export", "matchmove_frame", "matchmove_pin",
 ];
 
 const isNum = (v) => v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
@@ -51,6 +52,12 @@ export function matchmoveSummary(mm, st = {}) {
         return { id: q.id, kind: q.kind, ids: q.ids, ...(q.kind === "distance" ? { metres: q.value } : {}), on: q.on !== false,
                  ...(r ? { holds: r.ok, result: r.text } : {}) };
     });
+    out.pins = (mm.survey || []).map((q) => {
+        const r = D.pinResult(mm.solve, q.id);
+        return { track: q.id, point: q.X.map((v) => round(v, 4)), on: q.on !== false,
+                 ...(q.from && q.from.kind ? { on_geometry: { kind: q.from.kind, item: q.from.item || "", name: q.from.name || "" } } : {}),
+                 ...(r ? { used: r.used !== false, result: r.text, holds: !!r.ok } : {}) };
+    });
     const L = mm.lens;
     out.lens = { source: L.source, k1: round(L.k1, 6), k2: round(L.k2, 6), center: L.center, fit_error_px: round(L.error),
                  coverage: round(L.coverage, 2), lines: L.lines.length, notes: L.notes || [],
@@ -63,7 +70,7 @@ export function matchmoveSummary(mm, st = {}) {
     });
     const s = mm.settings;
     out.settings = { features: s.n, min_ncc: s.minNcc, min_dist: s.minDist, from: s.from, to: s.to, mode: s.mode, refine: s.refine,
-                     depth: s.depth || "off", depth_strength: s.depthStrength || 1 };
+                     depth: s.depth || "off", depth_strength: s.depthStrength || 1, geometry: s.geometry || "hold" };
     if (mm.depthRun) out.ai_depth = { frames: Object.keys(mm.depthRun.images).map(Number).sort((a, b) => a - b), workflow: mm.depthRun.workflow };
     if (mm.tracks.length) {
         const ts = D.trackStats(mm);
@@ -86,6 +93,8 @@ export function matchmoveSummary(mm, st = {}) {
             units: sv.units || "",
             ...(sv.focal_check ? { focal_check: sv.focal_check } : {}),
             ...(sv.depth ? { depth: sv.depth } : {}),
+            surveyed: !!sv.surveyed,
+            ...(sv.survey ? { geometry: sv.survey } : {}),
         };
     } else out.solve = null;
     // An iPhone film or photo (src/iphone_io.py): which camera, how it was turned, and whether it carries depth.
@@ -489,7 +498,47 @@ export const PrevizAgentMatchmoveMixin = {
 
     // ── the solve ────────────────────────────────────────────────────────────
 
-    /** {mode: auto | free | tripod, refine: auto | on | off (the focal length), depth: off | phone | ai (pull the
+    /**
+     * Tracks pinned to known spots of geometry in the 3D space (survey points). {add: {track, point: [x, y, z]} (the
+     * 3D space's axes and units) | {track, item, vertex?} (an item's origin, or that vertex of its first mesh) - or
+     * a list of those}, {remove: [tracks]}, {clear: true}, {mode: off | align | hold}. 3 or more pins not on one line
+     * put the next solve into the geometry's space.
+     */
+    async _asa_matchmove_pin(scene, a) {
+        const st = await this._amm();
+        if (a.clear) this.matchmoveUnpin(null);
+        if (a.remove !== undefined) {
+            const ids = (Array.isArray(a.remove) ? a.remove : [a.remove]).map(String);
+            const have = new Set((st.mm.survey || []).map((q) => q.id));
+            const missing = ids.filter((id) => !have.has(id));
+            if (missing.length) throw new Error(`no pin on ${missing.slice(0, 5).join(", ")}`);
+            this.matchmoveUnpin(ids);
+        }
+        const added = [];
+        for (const p of a.add ? (Array.isArray(a.add) ? a.add : [a.add]) : []) {
+            const [id] = this._ammTrackIds(st, [p.track ?? p.id]);
+            let X = Array.isArray(p.point) ? p.point.map(Number) : null, from = { item: "", name: "", kind: "typed" };
+            if (!X && p.item) {
+                const it = S.itemById(scene, String(p.item)) || (scene.items || []).find((q) => q.name === p.item);
+                if (!it) throw new Error(`no item ${p.item}`);
+                const view = this._model3d;
+                X = view && view.itemPointWorld ? view.itemPointWorld(it.id, isNum(p.vertex) ? Number(p.vertex) : null) : null;
+                if (!X) throw new Error(isNum(p.vertex) ? `${it.name || it.id} has no vertex ${p.vertex}` : `${it.name || it.id} is not in the 3D view`);
+                from = { item: it.id, name: String(it.name || ""), kind: isNum(p.vertex) ? "point" : "pivot" };
+            }
+            if (!X || X.length !== 3 || !X.every(Number.isFinite)) throw new Error("a pin needs point [x, y, z] or item (and vertex)");
+            this.matchmovePin(id, X, from);
+            added.push(id);
+        }
+        if (a.mode !== undefined) {
+            if (!D.GEOMETRY_MODES.includes(a.mode)) throw new Error("mode is off, align or hold");
+            this._mmEdit("geometry", (m) => { m.settings.geometry = a.mode; });
+        }
+        this._ammStep(st, "solve");
+        return this._ammAnswer(st, added.length ? { pinned: added } : {});
+    },
+
+    /** {mode: auto | free | tripod, refine: auto | on | off (the focal length), geometry: off | align | hold (the pins), depth: off | phone | ai (pull the
      * solve into the depth the plate was seen at; ai runs a depth workflow on a dozen frames first, kept for the
      * next solves), depth_strength (0.1..10, 1), depth_workflow, depth_scale (0.1..1), depth_again} */
     async _asa_matchmove_solve(scene, a) {
@@ -499,6 +548,7 @@ export const PrevizAgentMatchmoveMixin = {
             if (["auto", "free", "tripod"].includes(a.mode)) m.settings.mode = a.mode;
             if (["auto", "on", "off"].includes(a.refine)) m.settings.refine = a.refine;
             if (D.DEPTH_SOURCES.includes(a.depth)) m.settings.depth = a.depth;
+            if (D.GEOMETRY_MODES.includes(a.geometry)) m.settings.geometry = a.geometry;
             if (isNum(a.depth_strength)) m.settings.depthStrength = Math.max(0.1, Math.min(10, Number(a.depth_strength)));
         });
         if (st.mm.settings.depth === "phone") {

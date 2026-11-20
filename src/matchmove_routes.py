@@ -473,7 +473,8 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                                mode=spec["mode"], refine_focal=spec["refine"], frames=spec["range"],
                                progress=progress, cancel=lambda: job.get("cancel"),
                                constraints=spec["constraints"], pixel_aspect=spec["pixel_aspect"],
-                               depth=spec.get("depth"))
+                               depth=spec.get("depth"), survey=spec.get("survey"),
+                               survey_mode=spec.get("survey_mode") or "hold")
             job["result"] = res
             job.update(state="stopped" if job.get("cancel") else ("error" if res.get("error") else "done"),
                        error=res.get("error"))
@@ -542,8 +543,10 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
     async def solve_route(request):
         """POST {width, height, tracks, lens?, focal_px?, mode: free | tripod | auto, refine?, range?: [a, b],
         constraints?: [{kind, ids, value?}], pixel_aspect?, object?: id, camera?: (the camera solve, for an
-        object), scale?, depth?: {source: phone, plate} | {source: ai, images}, strength?, reading?}} starts a solve
-        job. With depth the points are pulled to the depths seen there (``matchmove_depth.depth_pull``)."""
+        object), scale?, depth?: {source: phone, plate} | {source: ai, images}, strength?, reading?}, survey?: [{id,
+        X}], survey_mode?: align | hold} starts a solve job. With depth the points are pulled to the depths seen
+        there (``matchmove_depth.depth_pull``); with survey (tracks pinned to geometry, in the 3D space's axes) the
+        answer is in that space (``matchmove_solve.survey_fit``)."""
         body = await body_of(request)
         try:
             w, h = int(body["width"]), int(body["height"])
@@ -567,7 +570,9 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                 "mode": body.get("mode") if body.get("mode") in ("free", "tripod", "auto") else "auto",
                 "refine": None if body.get("refine") is None else bool(body.get("refine")), "range": rng,
                 "object": obj, "camera": cam, "scale": scale, "pixel_aspect": pa,
-                "constraints": MS.clean_constraints(body.get("constraints") if isinstance(body.get("constraints"), list) else [])}
+                "constraints": MS.clean_constraints(body.get("constraints") if isinstance(body.get("constraints"), list) else []),
+                "survey": MS.clean_survey(body.get("survey") if isinstance(body.get("survey"), list) else []),
+                "survey_mode": body.get("survey_mode") if body.get("survey_mode") in MS.SURVEY_MODES else "hold"}
         if body.get("depth") and not obj:
             try:
                 spec["depth"] = await off(depth_source, body["depth"])

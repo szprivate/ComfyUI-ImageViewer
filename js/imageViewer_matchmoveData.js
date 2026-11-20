@@ -98,8 +98,9 @@ export function newMatchmove(plate = null) {
         tracks: [],
         objects: [],
         constraints: [],
+        survey: [],
         settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, direction: "both", start: null, mode: "auto", refine: "auto",
-                    depth: "off", depthStrength: 1 },
+                    depth: "off", depthStrength: 1, geometry: "hold" },
         depthRun: null,
         solve: null,
         objectSolves: {},
@@ -209,6 +210,7 @@ export function cleanMatchmove(raw) {
     mm.tracks = (raw.tracks || []).map(cleanTrack).filter(Boolean);
     mm.objects = (raw.objects || []).filter((o) => o && o.id).map((o) => ({ id: String(o.id), name: String(o.name || o.id) }));
     mm.constraints = (Array.isArray(raw.constraints) ? raw.constraints : []).map(cleanConstraint).filter(Boolean);
+    mm.survey = cleanSurveyList(raw.survey, mm.tracks);
     const s = raw.settings || {};
     mm.settings = { n: Math.round(num(s.n, 200, 8, 1000)), minDist: Math.round(num(s.minDist, 0, 0, 500)),
                     minNcc: num(s.minNcc, 0.75, 0.3, 0.99), from: Math.round(num(s.from, 0, 0)),
@@ -218,7 +220,8 @@ export function cleanMatchmove(raw) {
                     mode: ["auto", "free", "tripod"].includes(s.mode) ? s.mode : "auto",
                     refine: ["auto", "on", "off"].includes(s.refine) ? s.refine : "auto",
                     depth: DEPTH_SOURCES.includes(s.depth) ? s.depth : "off",
-                    depthStrength: num(s.depthStrength, 1, 0.1, 10) };
+                    depthStrength: num(s.depthStrength, 1, 0.1, 10),
+                    geometry: GEOMETRY_MODES.includes(s.geometry) ? s.geometry : "hold" };
     mm.depthRun = cleanDepthRun(raw.depthRun);
     mm.solve = raw.solve && raw.solve.frames ? raw.solve : null;
     mm.objectSolves = raw.objectSolves && typeof raw.objectSolves === "object" ? raw.objectSolves : {};
@@ -346,6 +349,70 @@ export function constraintResult(solve, id) {
     return ((solve && solve.constraints) || []).find((r) => r.id === id) || null;
 }
 
+// ── geometry: tracks pinned to points of the 3D space (survey) ──────────────
+
+/** off: not used; align: the solve moved, turned and scaled onto the pins; hold: also bent to them. */
+export const GEOMETRY_MODES = ["off", "align", "hold"];
+export const MIN_PINS = 3;
+
+/** A pin: {id (a track's), X [x, y, z] in the 3D space, from {item, name, kind} | null, on}; null when unfit. */
+export function cleanPin(p) {
+    if (!p || typeof p !== "object" || p.id === undefined || p.id === null) return null;
+    const X = Array.isArray(p.X) ? p.X.map(Number) : [];
+    if (X.length !== 3 || !X.every(Number.isFinite)) return null;
+    const out = { id: String(p.id), X, on: p.on !== false, from: null };
+    const f = p.from;
+    if (f && typeof f === "object") {
+        out.from = { item: f.item ? String(f.item) : "", name: String(f.name || "").slice(0, 80),
+                     kind: ["point", "edge", "surface", "locator", "pivot", "typed"].includes(f.kind) ? f.kind : "surface" };
+    }
+    return out;
+}
+
+/** The pins of a matchmove: one a track, only tracks it has. */
+function cleanSurveyList(raw, tracks) {
+    const have = new Set((tracks || []).map((t) => t.id));
+    const seen = new Set();
+    const out = [];
+    for (const p of Array.isArray(raw) ? raw : []) {
+        const c = cleanPin(p);
+        if (!c || seen.has(c.id) || !have.has(c.id)) continue;
+        seen.add(c.id);
+        out.push(c);
+    }
+    return out;
+}
+
+/** Pin track `id` at X (the 3D space's axes and units), replacing a pin it had. {pin} or {error}. */
+export function setPin(mm, id, X, from = null) {
+    const t = mm.tracks.find((q) => q.id === String(id));
+    if (!t) return { error: `There is no track ${id}.` };
+    const pin = cleanPin({ id: t.id, X, from });
+    if (!pin) return { error: "The point needs three numbers (X, Y, Z)." };
+    mm.survey = (mm.survey || []).filter((p) => p.id !== pin.id);
+    mm.survey.push(pin);
+    return { pin };
+}
+
+export function removePins(mm, ids = null) {
+    const gone = ids ? new Set(ids.map(String)) : null;
+    mm.survey = gone ? (mm.survey || []).filter((p) => !gone.has(p.id)) : [];
+    return mm;
+}
+
+/** The pins the solve is sent ([{id, X}]; the ones switched on) and its mode, or null when not used. */
+export function surveyRequest(mm) {
+    const mode = mm.settings.geometry || "hold";
+    const pins = (mm.survey || []).filter((p) => p.on !== false).map((p) => ({ id: p.id, X: p.X.slice() }));
+    if (mode === "off" || pins.length < MIN_PINS) return null;
+    return { survey: pins, survey_mode: mode };
+}
+
+/** How a pin held in the last solve: its row of solve.survey.pins, by track id. */
+export function pinResult(solve, id) {
+    return ((solve && solve.survey && solve.survey.pins) || []).find((r) => r.id === id) || null;
+}
+
 /** The focal length in pixels of the plate, from millimetres and the sensor's width; null when not known. */
 export function focalPx(mm) {
     const c = mm && mm.camera, p = mm && mm.plate;
@@ -453,14 +520,15 @@ export function worstTracks(solve, { share = 0, px = Infinity } = {}) {
 export function removeTracks(mm, ids) {
     const gone = new Set(ids);
     mm.tracks = mm.tracks.filter((t) => !gone.has(t.id));
+    mm.survey = (mm.survey || []).filter((p) => !gone.has(p.id));
     // a measurement keeps the tracks it still has, and goes when too few are left
     mm.constraints = (mm.constraints || []).map((c) => cleanConstraint({ ...c, ids: c.ids.filter((i) => !gone.has(i)) })).filter(Boolean);
     return mm;
 }
 
-/** `ids` less the tracks a measurement uses (the clean-up buttons leave those alone). */
+/** `ids` less the tracks a measurement uses or a pin holds (the clean-up buttons leave those alone). */
 export function withoutMeasured(mm, ids) {
-    const used = new Set((mm.constraints || []).flatMap((c) => c.ids));
+    const used = new Set([...(mm.constraints || []).flatMap((c) => c.ids), ...(mm.survey || []).map((p) => p.id)]);
     return ids.filter((i) => !used.has(i));
 }
 

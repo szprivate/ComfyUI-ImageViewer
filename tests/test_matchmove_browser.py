@@ -962,5 +962,153 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_tracks_pinned_to_geometry_put_the_solve_into_its_space(self):
+        """Survey points: a track pinned by a click on a box's corner in the 3D view (it snaps), one by typed numbers
+        in the guide, the rest through the agent (a point, a locator's origin): the solve lands in the geometry's
+        space - the scene's units, turned and moved - and Build puts the camera where the geometry says."""
+        pg = self._page()
+        try:
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
+                                 timeout=20000)
+            pg.evaluate("async () => { await window.__panel.matchmoveAutoTrack(); window.__panel.setFrame(0); }")
+            pg.wait_for_timeout(300)
+            # The true spot of each long track, from the plate's known cameras.
+            _, cams = plate_scene()
+            keys = pg.evaluate("() => window.__panel._mmCur().mm.tracks.filter((t) => t.on && t.keys.length >= 20).map((t) => [t.id, t.keys])")
+            truth = {}
+            for tid, ks in keys:
+                A = []
+                for k in ks:
+                    R, C = cams[int(k[0])]
+                    P = np.c_[R, -R @ C]
+                    x, y = (k[1] - W / 2) / F, (k[2] - H / 2) / F
+                    A += [x * P[2] - P[0], y * P[2] - P[1]]
+                Xh = np.linalg.svd(np.array(A))[2][-1]
+                truth[tid] = Xh[:3] / Xh[3]
+            self.assertGreater(len(truth), 12)
+            # The geometry's world: the plate's turned, scaled, moved and in scene axes (y up).
+            K, D0 = 0.37, np.array([2.0, -1.5, 4.0])
+            ang = 0.7
+            Q = np.array([[math.cos(ang), 0, math.sin(ang)], [0, 1, 0], [-math.sin(ang), 0, math.cos(ang)]])
+            FLIP = np.diag([1.0, -1.0, -1.0])
+            geo = lambda X: FLIP @ (K * Q @ np.asarray(X)) + D0  # noqa: E731
+            ids = list(truth)
+            P_ = np.array([truth[i] for i in ids])
+            pick = []
+            for ax in range(3):
+                pick += [ids[int(np.argmin(P_[:, ax]))], ids[int(np.argmax(P_[:, ax]))]]
+            pick = list(dict.fromkeys(pick))[:5]
+            self.assertGreaterEqual(len(pick), 4)
+
+            # 1. A click on the geometry: a box's top corner, snapped, pins the picked track there.
+            pg.evaluate("""async () => {
+                const P = window.__panel, v = P._modelView();
+                const box = await P.previzAddPrimitive('box');
+                await P.previzChanged({ reload: true });
+                v.setPaneLayout('single');
+                const cam = v.activeCameraObject();
+                cam.position.set(3, 4, 5); v.controls.target.set(0, 0.5, 0); cam.lookAt(0, 0.5, 0); v.controls.update();
+                v.requestRender();
+                window.__box = box.id;
+            }""")
+            pg.wait_for_timeout(300)
+            first = keys[0][0] if keys[0][0] not in pick else [k for k, _ in keys if k not in pick][0]
+            pg.evaluate("(id) => { const P = window.__panel, st = P._mmCur(); st.sel = new Set([id]); st.mm.step = 'solve'; P._mmRender();"
+                        " window.__picked = P.matchmovePinPick(); }", first)
+            self.assertTrue(pg.evaluate("() => window.__panel._modelView().pickPointActive()"))
+            self.assertIn("Click the spot", pg.evaluate("() => window.__panel.mmGuidePanel.textContent"))
+            corner = pg.evaluate("""(p) => { const v = window.__panel._modelView(), T = v.libs.THREE, r = v.canvas.getBoundingClientRect();
+                const q = new T.Vector3(...p).project(v.activeCameraObject());
+                return { x: r.left + (q.x + 1) / 2 * r.width + 3, y: r.top + (1 - q.y) / 2 * r.height + 2 }; }""", [0.5, 1, 0.5])
+            pg.mouse.move(corner["x"] - 20, corner["y"] - 20)
+            pg.mouse.move(corner["x"], corner["y"], steps=4)
+            pg.mouse.down(); pg.mouse.up()
+            pin = pg.evaluate("async () => await window.__picked")
+            self.assertIsNotNone(pin)
+            self.assertEqual(pin["id"], first)
+            self.assertEqual((pin["from"]["kind"], pin["from"]["item"]), ("point", pg.evaluate("() => window.__box")), pin)
+            for a, b in zip(pin["X"], [0.5, 1, 0.5]):
+                self.assertAlmostEqual(a, b, places=3)
+            self.assertFalse(pg.evaluate("() => window.__panel._modelView().pickPointActive()"))
+            # Esc stops waiting and pins nothing
+            pg.evaluate("() => { window.__picked = window.__panel.matchmovePinPick(); }")
+            pg.keyboard.press("Escape")
+            self.assertIsNone(pg.evaluate("async () => await window.__picked"))
+            # that pin was a test of the click: off it goes (the × in the guide's list)
+            pg.evaluate("() => { const d = window.__panel.mmGuidePanel.querySelector('details[data-fold=solve-geometry]'); d.open = true; }")
+            pg.evaluate("(id) => [...window.__panel.mmGuidePanel.querySelectorAll('.mm-pin')].find((li) => li.dataset.id === id).querySelector('button').click()", first)
+            self.assertEqual(pg.evaluate("() => window.__panel._mmCur().mm.survey.length"), 0)
+
+            # 2. Typed numbers in the guide.
+            X0 = geo(truth[pick[0]]).tolist()
+            pg.evaluate("""([id, X]) => { const P = window.__panel, st = P._mmCur(); st.sel = new Set([id]); P._mmRender();
+                const d = P.mmGuidePanel.querySelector('details[data-fold=solve-geometry]'); d.open = true;
+                const row = [...d.querySelectorAll('.mm-row')].find((r) => r.textContent.includes('At X Y Z'));
+                const ins = row.querySelectorAll('input[type=number]');
+                X.forEach((v, k) => { ins[k].value = String(v); ins[k].dispatchEvent(new Event('change')); });
+                [...row.querySelectorAll('button')].find((b) => b.textContent === 'Pin').click(); }""", [pick[0], X0])
+            got = pg.evaluate("() => window.__panel._mmCur().mm.survey")
+            self.assertEqual([(p["id"], p["from"]["kind"]) for p in got], [(pick[0], "typed")])
+
+            # 3. The agent: a point, and a locator's origin.
+            pg.evaluate("""() => {
+                const real = window.fetch.bind(window);
+                window.__answers = {};
+                window.fetch = (url, init) => {
+                    if (String(url).includes('/rig/agent_done')) {
+                        const b = JSON.parse(init.body);
+                        if (b.state !== 'running') window.__answers[b.id] = b;
+                        return Promise.resolve(new Response('{}'));
+                    }
+                    return real(url, init);
+                };
+                let n = 0;
+                window.__agent = async (action, args) => { const id = `g${++n}`; await window.__panel.previzRigAgentRun({ id, action, args }); return window.__answers[id]; };
+            }""")
+            ask = lambda action, args=None: pg.evaluate("([a, b]) => window.__agent(a, b)", [action, args or {}])  # noqa: E731
+            r = ask("matchmove_pin", {"add": [{"track": t, "point": geo(truth[t]).tolist()} for t in pick[1:-1]]})
+            self.assertEqual(r["state"], "done", r)
+            loc = pg.evaluate("""async (X) => { const P = window.__panel; const l = P.previzAddLocator(); l.position = X; l.name = 'Survey nail';
+                await P.previzChanged({ reload: true }); return l.id; }""", geo(truth[pick[-1]]).tolist())
+            r = ask("matchmove_pin", {"add": {"track": pick[-1], "item": "Survey nail"}, "mode": "hold"})
+            self.assertEqual(r["state"], "done", r)
+            pins = r["result"]["matchmove"]["pins"]
+            self.assertEqual(len(pins), len(pick))
+            self.assertEqual(pins[-1]["on_geometry"]["item"], loc)
+            r = ask("matchmove_pin", {"add": {"track": "nope", "point": [0, 0, 0]}})
+            self.assertEqual(r["state"], "error")
+
+            # 4. The solve lands in the geometry's space.
+            r = ask("matchmove_solve", {"mode": "auto", "geometry": "hold"})
+            self.assertEqual(r["state"], "done", r)
+            sv = r["result"]["matchmove"]["solve"]
+            self.assertTrue(sv["surveyed"], sv)
+            self.assertEqual(sv["units"], "scene")
+            self.assertLess(sv["rms_px"], 1.0)
+            self.assertAlmostEqual(sv["focal_px"], F, delta=F * 0.05)
+            self.assertTrue(all(p["used"] for p in r["result"]["matchmove"]["pins"]), r["result"]["matchmove"]["pins"])
+            self.assertIn("placed", pg.evaluate("() => window.__panel.mmGuidePanel.querySelector('details[data-fold=solve-geometry] summary').textContent"))
+            # 5. Build: the camera stands where the geometry puts it, the Matchmove group not turned.
+            r = ask("matchmove_build")
+            self.assertEqual(r["state"], "done", r)
+            pg.evaluate("() => window.__panel.setFrame(0)")
+            pg.wait_for_timeout(200)
+            at = pg.evaluate("""() => { const P = window.__panel, v = P._modelView(), st = P._mmCur();
+                const e = v._entries.get(st.mm.scene.camera); e.root.updateWorldMatrix(true, false);
+                return new v.libs.THREE.Vector3().setFromMatrixPosition(e.root.matrixWorld).toArray(); }""")
+            want = geo(cams[0][1])
+            self.assertLess(float(np.linalg.norm(np.array(at) - want)), 0.05, (at, want.tolist()))
+            pg.evaluate("() => { const P = window.__panel; P._mmCur().mm.step = 'scene'; P._mmRender(); }")
+            self.assertIn("Placed on the geometry", pg.evaluate("() => window.__panel.mmGuidePanel.textContent"))
+            pg.evaluate("() => { const P = window.__panel; P._mmCur().mm.step = 'solve'; P._mmRender(); }")
+            self._shot(pg, "mm_geometry")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
+
 if __name__ == "__main__":
     unittest.main()

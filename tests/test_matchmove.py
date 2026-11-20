@@ -538,6 +538,86 @@ class Measurements(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class Geometry(unittest.TestCase):
+    """Tracks pinned to points of known geometry in the 3D space (matchmove_solve.clean_survey / survey_fit): the
+    solve comes out in that space, its own axes and units, and a held pin mends a focal length that was off."""
+
+    K, D = 0.37, np.array([2.0, -1.5, 4.0])
+    Q = S.rodrigues(np.array([0.2, -0.7, 0.1]))
+
+    def to_scene(self, X):
+        """The geometry's world: the true points scaled, turned and moved, in the 3D space's axes (y up)."""
+        return np.asarray([S.FLIP @ (self.K * self.Q @ x) + self.D for x in np.atleast_2d(X)])
+
+    def pins(self, tracks, ids):
+        X = _true_points()
+        return [{"id": i, "X": self.to_scene(X[int(i[1:])])[0].tolist()} for i in ids]
+
+    def spread_ids(self, tracks, n=6):
+        X = _true_points()
+        most = max(len(t["keys"]) for t in tracks)
+        ids = [t["id"] for t in tracks if len(t["keys"]) >= min(25, most - 2)]
+        # far apart in the picture and in depth: the extremes on each axis
+        P = np.array([X[int(i[1:])] for i in ids])
+        pick = {ids[int(np.argmin(P[:, k]))] for k in range(3)} | {ids[int(np.argmax(P[:, k]))] for k in range(3)}
+        return sorted(pick)[:n]
+
+    def check_world(self, r, tol):
+        X = _true_points()
+        got = {q["id"]: S.FLIP @ np.asarray(q["X"]) for q in r["points"]}          # back to the scene's axes
+        miss = [np.linalg.norm(got[i] - self.to_scene(X[int(i[1:])])[0]) for i in got]
+        self.assertLess(float(np.median(miss)), tol, np.median(miss))
+
+    def test_held_pins_put_the_solve_in_the_geometry_and_mend_the_focal_length(self):
+        tracks, poses = scene(n_frames=30)
+        survey = self.pins(tracks, self.spread_ids(tracks))
+        r = S.solve(tracks, W, H, focal_px=F * 0.8, refine_focal=True, survey=survey, survey_mode="hold")
+        self.assertTrue(r["surveyed"], r["notes"])
+        self.assertEqual(r["units"], "scene")
+        self.assertEqual(r["survey"]["mode"], "hold")
+        self.assertTrue(all(p["ok"] for p in r["survey"]["pins"]), r["survey"])
+        self.assertAlmostEqual(r["focal_px"], F, delta=F * 0.02)
+        self.check_world(r, 0.02)
+        # the cameras too: frame 0's centre where the geometry's world puts it
+        c0 = S.FLIP @ centres(r["frames"])[0]
+        self.assertLess(np.linalg.norm(c0 - self.to_scene(-poses[0][0].T @ poses[0][1])[0]), 0.03)
+        self.assertTrue(any("Placed on the geometry" in n for n in r["notes"]), r["notes"])
+
+    def test_align_only_moves_the_solve_and_a_wrong_pin_is_left_out(self):
+        tracks, _ = scene(n_frames=30)
+        ids = self.spread_ids(tracks)
+        survey = self.pins(tracks, ids)
+        survey[0]["X"] = (np.asarray(survey[0]["X"]) + [3.0, 0, 0]).tolist()        # pinned to the wrong spot
+        r = S.solve(tracks, W, H, focal_px=F, refine_focal=False, survey=survey, survey_mode="align")
+        self.assertTrue(r["surveyed"], r["notes"])
+        self.assertEqual(r["survey"]["mode"], "align")
+        bad = [p for p in r["survey"]["pins"] if not p["used"]]
+        self.assertEqual([p["id"] for p in bad], [ids[0]])
+        self.assertTrue(any("left out" in n for n in r["notes"]), r["notes"])
+        self.check_world(r, 0.02)
+
+    def test_too_few_pins_or_pins_on_a_line_or_a_tripod_are_said(self):
+        tracks, _ = scene(n_frames=30)
+        ids = self.spread_ids(tracks)
+        r = S.solve(tracks, W, H, focal_px=F, survey=self.pins(tracks, ids[:2]))
+        self.assertFalse(r["surveyed"])
+        self.assertIn("needs 3", r["survey"]["error"])
+        line = [{"id": i, "X": [k * 1.0, 0, 0]} for k, i in enumerate(ids[:4])]
+        r = S.solve(tracks, W, H, focal_px=F, survey=line)
+        self.assertIn("one line", r["survey"]["error"])
+        self.assertTrue(any("Solved without the geometry" in n for n in r["notes"]), r["notes"])
+        tt, _ = scene(n_frames=20, tripod=True)
+        r = S.solve(tt, W, H, focal_px=F, mode="tripod", survey=self.pins(tt, self.spread_ids(tt)))
+        self.assertFalse(r["surveyed"])
+        self.assertTrue(any("geometry pins were left out" in n for n in r["notes"]), r["notes"])
+
+    def test_clean_survey(self):
+        got = S.clean_survey([{"id": "a", "X": [1, 2, 3]}, {"id": "a", "X": [0, 0, 0]}, {"id": "b", "X": [1, "x", 3]},
+                              {"id": "c", "X": [1, 2]}, {"id": "d", "X": [1, 2, 3], "on": False}, "e",
+                              {"id": 7, "X": [0, 0, float("inf")]}, {"id": 8, "X": [0.5, 0, 0]}])
+        self.assertEqual(got, [{"id": "a", "X": [1.0, 2.0, 3.0]}, {"id": "8", "X": [0.5, 0.0, 0.0]}])
+
+
 class LensChart(unittest.TestCase):
     """The checkerboard the viewer shows full screen (js/imageViewer_lensChart.js), filmed through a lens: the lens
     step reads it."""

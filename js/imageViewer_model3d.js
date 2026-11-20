@@ -43,6 +43,7 @@ import { displayStates, isPickable } from "./imageViewer_sceneLayers.js";
 import { constrainedLocals } from "./imageViewer_constraints.js";
 import { View3DSnapMixin } from "./imageViewer_view3dSnap.js";
 import { View3DMeasureMixin } from "./imageViewer_view3dMeasure.js";
+import { View3DPickPointMixin } from "./imageViewer_view3dPickPoint.js";
 import { View3DMeshEditMixin } from "./imageViewer_view3dMeshEdit.js";
 import { View3DMeshToolsMixin } from "./imageViewer_view3dMeshTools.js";
 
@@ -578,6 +579,13 @@ export class Model3DView {
     // click only counts as a pick when the pointer stayed put.
     _onPointerDown(e) {
         this._applyNavButtons(e.altKey);
+        // A point asked for on the geometry (Matchmove's pins) has the left button first (Alt still navigates).
+        if (this._pp && this._ppDown(e)) {
+            this._downAt = null;
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return;
+        }
         // The measure tool has the left button while it is on (Alt still navigates).
         if (this._msOn && this._msDown(e)) {
             this._downAt = null;
@@ -3073,5 +3081,6 @@ Object.assign(Model3DView.prototype, TerrainBrush3DMixin);
 Object.assign(Model3DView.prototype, TerrainErode3DMixin);
 Object.assign(Model3DView.prototype, View3DSnapMixin);
 Object.assign(Model3DView.prototype, View3DMeasureMixin);
+Object.assign(Model3DView.prototype, View3DPickPointMixin);
 Object.assign(Model3DView.prototype, View3DMeshEditMixin);
 Object.assign(Model3DView.prototype, View3DMeshToolsMixin);
