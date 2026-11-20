@@ -309,6 +309,14 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
                                          cancel=lambda: job.get("cancel"),
                                          progress=lambda i, got: job.update(done=i + 1))
                 job["keys"] = keys
+            elif spec["mode"] == "shot":
+                got = MM.track_shot(get, spec["lo"], spec["hi"], spec["seeds"], n=spec["n"], direction=spec["direction"],
+                                    existing=spec["existing"], groups=spec["groups"], extend=spec["extend"],
+                                    masks=spec["masks"], min_ncc=spec["min_ncc"], min_dist=spec["min_dist"],
+                                    prefix=spec["prefix"], start_id=spec["start_id"], follow_new=spec["follow_new"],
+                                    cancel=lambda: job.get("cancel"), progress=progress)
+                job["tracks"] = got["tracks"]
+                job["extended"] = got["extended"]
             else:
                 job["tracks"] = MM.auto_track(get, spec["frames"], n=spec["n"], min_dist=spec["min_dist"],
                                               masks=spec["masks"], min_ncc=spec["min_ncc"],
@@ -337,7 +345,10 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
 
     async def track_route(request):
         """POST {path, from, to, mode: auto | points, n?, min_dist?, masks?, points?: [{id, x, y, pattern?,
-        search?}]} starts a job; GET /imageviewer/mm_job?job= reads it."""
+        search?}]} starts a job; GET /imageviewer/mm_job?job= reads it. With ``direction`` (forward | backward |
+        both) an auto job is a hard shot's: new features at the frames in ``seeds`` (default: where the direction
+        starts), kept clear of ``tracks`` (the shot's own), followed that way, ``extend`` = ids of those tracks to
+        carry on past their ends; the job then answers ``tracks`` (new) and ``extended`` {id: new keys}."""
         body = await body_of(request)
         p, why = await off(plate_of, body.get("path"))
         if why:
@@ -372,7 +383,23 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
             if not pts:
                 return err("no points to track")
             spec["points"] = pts
-        jid, job = new_job("track", len(spec["frames"]))
+        if mode == "auto" and (body.get("direction") or body.get("seeds") or body.get("extend")):
+            direction = body.get("direction") if body.get("direction") in MM.DIRECTIONS else "both"
+            lo, hi = min(f0, f1), max(f0, f1)
+            try:
+                seeds = sorted({max(lo, min(hi, int(f))) for f in (body.get("seeds") or [])[:64]})
+            except (TypeError, ValueError):
+                return err("seeds are frame numbers")
+            existing, groups = MM.existing_tracks(body.get("tracks") if isinstance(body.get("tracks"), list) else [])
+            extend = [str(i) for i in (body.get("extend") or [])[:MM.MAX_TRACKS] if str(i) in existing]
+            if not seeds and not extend:
+                seeds = [lo if direction == "forward" else hi if direction == "backward" else lo]
+            spec.update(mode="shot", lo=lo, hi=hi, seeds=seeds, direction=direction, existing=existing,
+                        groups=groups, extend=extend, follow_new=body.get("follow_new") is not False)
+            total = MM.track_cost(lo, hi, seeds, direction, extend)
+        else:
+            total = len(spec["frames"])
+        jid, job = new_job("track", total)
         threading.Thread(target=run_track, args=(job, p, spec), daemon=True, name=f"mm-track-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 

@@ -814,9 +814,22 @@ export const PrevizMatchmoveMixin = {
         this._mmRow(ctx, "Frames", this._mmNum(ctx, s.from, (v) => this._mmEdit("from", (m) => { m.settings.from = Math.max(0, Math.round(v || 0)); }), { step: 1, min: 0, max: last }),
                     el(ctx.doc, "span", "", "to"),
                     this._mmNum(ctx, s.to === null ? last : s.to, (v) => this._mmEdit("to", (m) => { m.settings.to = v === null ? null : Math.round(v); }), { step: 1, min: 0, max: last }));
+        const rg = D.trackRange(mm);
+        this._mmRow(ctx, "Direction", this._mmSelect(ctx, [["both", "Both ways"], ["forward", "Forwards"], ["backward", "Backwards"]], rg.direction,
+                                                     (v) => this._mmEdit("direction", (m) => { m.settings.direction = v; })));
+        this._mmRow(ctx, "Start at", this._mmNum(ctx, rg.start, (v) => this._mmEdit("start", (m) => { m.settings.start = v === null ? null : Math.max(0, Math.round(v)); }), { step: 1, min: 0, max: last }),
+                    this._mmBtn(ctx, "This frame", () => this._mmEdit("start", (m) => { m.settings.start = Math.round(this.currentFrame || 0); }), { title: "Start tracking from the frame shown" }));
         this._mmRow(ctx, "", this._mmBtn(ctx, mm.tracks.length ? "Track more" : "Track the plate", () => this.matchmoveAutoTrack(), { primary: true }),
                     this._mmBtn(ctx, "Add a track by hand", () => this.matchmoveTool("add")));
-        if (!mm.tracks.length) return;
+        if (!mm.tracks.length) {
+            this._mmNote(ctx, "Hard shot? Start on the frame where the picture is clearest and track both ways.");
+            return;
+        }
+        this._mmRow(ctx, "Hard shots",
+                    this._mmBtn(ctx, "New points on this frame", () => this.matchmoveTrackFrom([Math.round(this.currentFrame || 0)]),
+                                { title: "Find new features on the frame shown, clear of the tracks there, and follow them the way set above" }),
+                    this._mmBtn(ctx, st.sel.size ? `Carry on picked (${st.sel.size})` : "Carry tracks on", () => this.matchmoveExtendTracks(),
+                                { title: "Follow tracks on past where they stopped (the way set above)" }));
         const stats = D.trackStats(mm);
         const facts = el(ctx.doc, "div", "mm-facts");
         facts.append(el(ctx.doc, "div", "", `${stats.camera} camera tracks (${stats.on} on), half of them ${stats.medianLength}+ frames long`),
@@ -825,7 +838,11 @@ export const PrevizMatchmoveMixin = {
         const g = el(ctx.doc, "canvas", "mm-graph");
         ctx.box.append(g);
         requestAnimationFrame(() => this._mmBars(g, stats.counts, 8, "tracks a frame (red: under 8)"));
-        if (stats.thin.length) this._mmNote(ctx, `Too few tracks on frames ${stats.thin.slice(0, 4).map(([a, b]) => (a === b ? a : `${a}-${b}`)).join(", ")}${stats.thin.length > 4 ? " …" : ""}: add tracks there, or the camera will jump.`, "warn");
+        if (stats.thin.length) {
+            this._mmNote(ctx, `Too few tracks on frames ${stats.thin.slice(0, 4).map(([a, b]) => (a === b ? a : `${a}-${b}`)).join(", ")}${stats.thin.length > 4 ? " …" : ""}: add tracks there, or the camera will jump.`, "warn");
+            this._mmRow(ctx, "", this._mmBtn(ctx, "Find new points on the thin frames", () => this.matchmoveFillThin(), { primary: true,
+                title: "New features in the middle of every thin stretch, followed both ways" }));
+        }
         const minLen = st.minLen || 10;
         this._mmRow(ctx, "Clean up", this._mmBtn(ctx, `Delete tracks under`, () => this._mmEdit("delete short", (m) => D.removeTracks(m, D.shortTracks(m, minLen)))),
                     this._mmNum(ctx, minLen, (v) => { st.minLen = Math.max(2, Math.round(v || 10)); }, { step: 1, min: 2, width: "48px" }), el(ctx.doc, "span", "", "frames"));
@@ -858,20 +875,52 @@ export const PrevizMatchmoveMixin = {
         g.fillRect((f / n) * w, 0, 1, h);
     },
 
+    /** Find features from the start frame and follow them the way set (forwards, backwards or both). */
     async matchmoveAutoTrack() {
+        const rg = D.trackRange(this._mmCur().mm);
+        return this.matchmoveTrackFrom([rg.start]);
+    },
+
+    /** One track job of a hard shot: new features on the `seeds` frames (clear of the tracks there) and / or the
+     *  tracks `extend` carried on past their ends, the way the settings say; the answer merged into the shot. */
+    async matchmoveTrackFrom(seeds, { extend = [], direction = null, label = "Tracking" } = {}) {
         const st = this._mmCur();
         const mm = st.mm;
         const s = mm.settings;
-        const last = mm.plate.frames - 1;
-        const start = mm.nextId;
-        const d = await this._mmJob(st, "Tracking", this._mmPost("/imageviewer/mm_track", {
-            path: mm.plate.path, from: s.from, to: s.to === null ? last : s.to, mode: "auto", n: s.n, min_ncc: s.minNcc,
-            min_dist: s.minDist || undefined, masks: mm.masks.filter((m) => m.on), start_id: start, prefix: "t",
+        const rg = D.trackRange(mm);
+        const d = await this._mmJob(st, label, this._mmPost("/imageviewer/mm_track", {
+            path: mm.plate.path, from: rg.from, to: rg.to, mode: "auto", n: s.n, min_ncc: s.minNcc,
+            min_dist: s.minDist || undefined, masks: mm.masks.filter((m) => m.on), start_id: mm.nextId, prefix: "t",
+            direction: direction || rg.direction, seeds, extend, tracks: D.tracksForServer(mm),
         }));
         if (d.state === "error") throw new Error(d.error || "the tracking failed");
         const got = d.tracks || [];
-        this._mmEdit("track", (m) => { D.addTracks(m, got); m.solve = null; });
-        notice("info", "Tracked", `${got.length} tracks found${d.state === "stopped" ? " (stopped)" : ""}.`);
+        let more = 0;
+        this._mmEdit(extend.length ? "carry tracks on" : "track", (m) => {
+            D.addTracks(m, got);
+            more = D.addExtended(m, d.extended);
+            m.solve = null;
+        });
+        const said = [got.length ? `${got.length} new tracks` : "", more ? `${more} more keys on ${Object.keys(d.extended || {}).length} tracks` : ""].filter(Boolean);
+        notice("info", "Tracked", `${said.join(", ") || "Nothing new found"}${d.state === "stopped" ? " (stopped)" : ""}.`);
+        return { added: got.length, keys: more };
+    },
+
+    /** New features in the middle of each stretch of thin frames, followed both ways. */
+    async matchmoveFillThin() {
+        const mm = this._mmCur().mm;
+        const rg = D.trackRange(mm);
+        const seeds = D.thinSeeds(mm, 8, rg.from, rg.to);
+        if (!seeds.length) { notice("info", "Tracked", "No thin frames in the range."); return { added: 0, keys: 0 }; }
+        return this.matchmoveTrackFrom(seeds, { direction: "both", label: "Finding new points" });
+    },
+
+    /** The picked tracks (or all) carried on past where they stopped. */
+    async matchmoveExtendTracks(ids = null) {
+        const st = this._mmCur();
+        const pick = ids || (st.sel.size ? [...st.sel] : st.mm.tracks.filter((t) => t.on).map((t) => t.id));
+        if (!pick.length) return { added: 0, keys: 0 };
+        return this.matchmoveTrackFrom([], { extend: pick, label: "Carrying tracks on" });
     },
 
     /** A track by hand at the frame shown, followed forwards and backwards through the shot. */
@@ -1325,6 +1374,9 @@ export const PrevizMatchmoveMixin = {
                                         run: () => { this.matchmoveOpen(); this._mmCur().mm.step = s.id; this._mmRender(); } })),
             "-",
             { label: "Track the plate", disabled: !(mm && mm.plate), run: () => this.matchmoveAutoTrack().catch((e) => notice("error", "Tracking", e.message)) },
+            { label: "New points on this frame", disabled: !(mm && mm.plate), run: () => this.matchmoveTrackFrom([Math.round(this.currentFrame || 0)]).catch((e) => notice("error", "Tracking", e.message)) },
+            { label: "New points on the thin frames", disabled: !(mm && mm.tracks.length), run: () => this.matchmoveFillThin().catch((e) => notice("error", "Tracking", e.message)) },
+            { label: "Carry tracks on", disabled: !(mm && mm.tracks.length), run: () => this.matchmoveExtendTracks().catch((e) => notice("error", "Tracking", e.message)) },
             { label: "Solve the camera", disabled: !(mm && mm.tracks.length >= 8), run: () => this.matchmoveSolve().catch((e) => notice("error", "Solve", e.message)) },
             { label: "Build in the scene", disabled: !(mm && mm.solve), run: () => this.matchmoveBuild().catch((e) => notice("error", "Build", e.message)) },
             { label: "Lens into Comp", disabled: !(mm && mm.plate), run: () => this.matchmoveLensToComp("undistort").catch((e) => notice("error", "Comp", e.message)) },

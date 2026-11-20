@@ -71,7 +71,7 @@ export function newMatchmove(plate = null) {
         tracks: [],
         objects: [],
         constraints: [],
-        settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, mode: "auto", refine: "auto" },
+        settings: { n: 200, minDist: 0, minNcc: 0.75, from: 0, to: null, direction: "both", start: null, mode: "auto", refine: "auto" },
         solve: null,
         objectSolves: {},
         orient: { R: [1, 0, 0, 0, 1, 0, 0, 0, 1], t: [0, 0, 0], s: 1 },
@@ -184,6 +184,8 @@ export function cleanMatchmove(raw) {
     mm.settings = { n: Math.round(num(s.n, 200, 8, 1000)), minDist: Math.round(num(s.minDist, 0, 0, 500)),
                     minNcc: num(s.minNcc, 0.75, 0.3, 0.99), from: Math.round(num(s.from, 0, 0)),
                     to: s.to === null || s.to === undefined ? null : Math.round(num(s.to, 0, 0)),
+                    direction: TRACK_DIRECTIONS.includes(s.direction) ? s.direction : "both",
+                    start: s.start === null || s.start === undefined ? null : Math.round(num(s.start, 0, 0)),
                     mode: ["auto", "free", "tripod"].includes(s.mode) ? s.mode : "auto",
                     refine: ["auto", "on", "off"].includes(s.refine) ? s.refine : "auto" };
     mm.solve = raw.solve && raw.solve.frames ? raw.solve : null;
@@ -428,6 +430,53 @@ export function removeTracks(mm, ids) {
 export function withoutMeasured(mm, ids) {
     const used = new Set((mm.constraints || []).flatMap((c) => c.ids));
     return ids.filter((i) => !used.has(i));
+}
+
+// ── tracking a hard shot ─────────────────────────────────────────────────────
+
+/** Which way the tracker follows features from its start frame. */
+export const TRACK_DIRECTIONS = ["forward", "backward", "both"];
+
+/** The frames a track job covers and where it starts: {from, to, start} (start held inside the range). */
+export function trackRange(mm) {
+    const last = Math.max(0, ((mm.plate && mm.plate.frames) || 1) - 1);
+    const s = mm.settings || {};
+    const a = Math.max(0, Math.min(last, s.from || 0));
+    const b = Math.max(0, Math.min(last, s.to === null || s.to === undefined ? last : s.to));
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    const dir = TRACK_DIRECTIONS.includes(s.direction) ? s.direction : "both";
+    const start = s.start === null || s.start === undefined ? (dir === "backward" ? hi : lo) : Math.max(lo, Math.min(hi, s.start));
+    return { from: lo, to: hi, start, direction: dir };
+}
+
+/** The middle frame of each run of thin frames inside lo..hi: where to look for new features. */
+export function thinSeeds(mm, least = 8, lo = 0, hi = Infinity) {
+    const out = [];
+    for (const [a, b] of thinRuns(frameCounts(mm), least)) {
+        const x = Math.max(a, lo), y = Math.min(b, hi);
+        if (x <= y) out.push(Math.round((x + y) / 2));
+    }
+    return out.slice(0, 64);
+}
+
+/** The shot's tracks as the tracker reads them (to keep clear of, and to carry on): id, group, keys. */
+export function tracksForServer(mm) {
+    return mm.tracks.map((t) => ({ id: t.id, group: t.group, keys: t.keys.map((k) => [k[0], k[1], k[2]]) }));
+}
+
+/** The keys a job found past the ends of the shot's tracks ({id: [[f, x, y, score]]}) put on those tracks. */
+export function addExtended(mm, extended) {
+    let n = 0;
+    for (const [id, keys] of Object.entries(extended || {})) {
+        const t = mm.tracks.find((q) => q.id === id);
+        if (!t || !Array.isArray(keys)) continue;
+        for (const k of keys) {
+            if (!Array.isArray(k) || !(Number.isFinite(k[1]) && Number.isFinite(k[2])) || keyAt(t, k[0])) continue;
+            setKey(t, k[0], k[1], k[2], Number.isFinite(k[3]) ? k[3] : 1);
+            n++;
+        }
+    }
+    return n;
 }
 
 /** Tracks from the server added in, with ids that do not clash (the server numbers from start_id). */
