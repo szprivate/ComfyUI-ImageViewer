@@ -399,7 +399,7 @@ export const PrevizModelingMixin = {
             op("Bevel", "bevel", "MeshBevel"),
             op("Loop cut", "loopcut", "MeshLoopCut"),
             op("Bridge", "bridge", "MeshBridge"),
-            op("Fill holes", "fill", "MeshFill"),
+            op("Fill hole", "fill", "MeshFill"),
             op("Connect", "connect", "MeshConnect"),
             op("Merge vertices", "merge"),
             op("Merge by distance", "weld", "MeshWeld"),

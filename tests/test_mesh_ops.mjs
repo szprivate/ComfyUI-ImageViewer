@@ -71,7 +71,9 @@ test("bevelling one edge cuts its corner off; all of them chamfer the whole box"
     const b = box();
     const k = edgeAtPoints(b, [0.5, 0.5, -0.5], [0.5, 0.5, 0.5]);
     const one = O.bevelEdges(b, [k], 0.1);
-    assert.equal(M.meshStats(one.mesh).faces, 9);      // the edge's face and two corner triangles
+    // The edge's face; the end faces take the cut corner into their own outline (no triangles left over).
+    assert.equal(M.meshStats(one.mesh).faces, 7);
+    assert.deepEqual(one.mesh.f.map((f) => f.length).sort(), [4, 4, 4, 4, 4, 5, 5]);
     close(volume(one.mesh), 1 - 0.1 * 0.1 / 2);
     assert.equal(O.boundaryLoops(one.mesh).length, 0);
     const all = O.bevelEdges(b, keys(b), 0.1);

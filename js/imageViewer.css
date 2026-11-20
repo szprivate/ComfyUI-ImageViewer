@@ -1297,8 +1297,7 @@ textarea.param-input {
 .previz-item:hover .previz-look, .previz-look.active { opacity: 1; }
 .previz-eye:hover, .previz-look:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
 .previz-look.active { color: #f60; }
-/* Animated: a small key diamond. */
-.previz-anim { color: #f60; }
+/* Animated: a small key diamond (the Outliner's .ol-keys; .previz-anim is the Animate menu's button). */
 .ol-keys { width: 6px; height: 6px; margin: 0 4px; background: #f60; transform: rotate(45deg); border-radius: 1px; flex: 0 0 auto; }
 /* The scene as USD (imageViewer_previzUsd.js): a payload's mark, an unloaded model, a variant picker. */
 .ol-arc { font: 600 9px/14px sans-serif; min-width: 14px; height: 14px; padding: 0 2px; margin: 0 3px; border-radius: 3px;

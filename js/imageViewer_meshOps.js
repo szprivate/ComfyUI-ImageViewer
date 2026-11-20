@@ -250,12 +250,19 @@ export function bevelEdges(mesh, keys, width = 0.1) {
         }
     });
     const cornerOf = (fi, v) => (corner.has(cornerKey(fi, v)) ? corner.get(cornerKey(fi, v)) : v);
+    // A vertex every other face around it has moved away from (a box's corner at the end of one
+    // bevelled edge): the one face still holding it takes the drawn-back points instead, so the
+    // bevel ends in that face's own outline - no triangle is left over there.
+    const vf = vertexFaces(mesh);
+    const gone = (fi, v) => touched.has(v) && !corner.has(cornerKey(fi, v))
+        && vf[v].every((g) => g === fi || corner.has(cornerKey(g, v)))
+        && vf[v].filter((g) => g === fi).length === 1;
     // The old faces with their corners moved; on an unbevelled edge another face drew back, the point goes in.
     mesh.f.forEach((face, fi) => {
         const n = face.length, res = [];
         for (let k = 0; k < n; k++) {
             const v = face[k], w = face[(k + 1) % n];
-            res.push(cornerOf(fi, v));
+            if (!gone(fi, v)) res.push(cornerOf(fi, v));
             const ins = onEdge.get(edgeKey(v, w));
             if (!ins || sel.has(edgeKey(v, w))) continue;
             // The points other faces put on this edge, unless this face's own corners already are them.
