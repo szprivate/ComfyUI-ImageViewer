@@ -8,6 +8,7 @@
 
 import * as S from "./imageViewer_scene3d.js";
 import * as MD from "./imageViewer_meshData.js";
+import * as MO from "./imageViewer_meshOps.js";
 import { notice } from "./imageViewer_exportUI.js";
 
 const SHAPES = [
@@ -155,7 +156,7 @@ export const PrevizModelingMixin = {
         const o = { ...view.meshEditOptions(), ...(opts || {}) };
         const sel = view.meshEditSelection();
         const work = MD.unpack(item.mesh);
-        if (!sel.ids.length) {
+        if (!sel.ids.length && name !== "fill" && name !== "weld") {
             notice("info", "Nothing selected", "Pick vertices, edges or faces first.");
             return false;
         }
@@ -172,6 +173,30 @@ export const PrevizModelingMixin = {
             res = MD.deleteSel(work, sel.mode, sel.ids);
         } else if (name === "merge") {
             res = MD.mergeVertices(work, sel.mode, sel.ids);
+            mode = "vertex";
+        } else if (name === "bevel" || name === "loopcut") {
+            const edges = MD.convertSel(work, sel.mode, "edge", sel.ids);
+            if (!edges.length) { notice("info", "No edges selected", "Select an edge (or the faces whose edges to use) first."); return false; }
+            res = name === "bevel"
+                ? MO.bevelEdges(work, edges, view.meshEditLocalLength(o.bevel))
+                : MO.loopCut(work, edges[edges.length - 1], o.cut);
+            mode = name === "bevel" ? "face" : "edge";
+        } else if (name === "bridge" || name === "fill" || name === "connect") {
+            res = name === "bridge" ? MO.bridge(work, sel.mode, sel.ids)
+                : name === "fill" ? MO.fillHoles(work, sel.mode, sel.ids)
+                : MO.connect(work, sel.mode, sel.ids);
+            if (res.error) { notice("info", `Cannot ${name}`, res.error); return false; }
+            if (!res.ids || !res.ids.length) {
+                const why = { bridge: "Nothing to join.", fill: "The mesh has no holes there.",
+                              connect: "Select two corners of one face, or two edges of one face." }[name];
+                notice("info", `Nothing to ${name}`, why);
+                return false;
+            }
+            mode = name === "connect" ? "edge" : "face";
+        } else if (name === "weld") {
+            res = MO.mergeByDistance(work, view.meshEditLocalLength(o.weld), sel.mode, sel.ids);
+            if (!res.merged) { notice("info", "Nothing welded", "No vertices lie that close together."); return false; }
+            notice("info", "Welded", `${res.merged} vertices merged.`);
             mode = "vertex";
         } else if (name === "flip") {
             const faces = MD.selFaces(work, sel.mode, sel.ids);
@@ -206,8 +231,18 @@ export const PrevizModelingMixin = {
         const ids = how === "all" ? MD.allOf(work, sel.mode)
             : how === "invert" ? MD.invertSel(work, sel.mode, sel.ids)
             : how === "grow" ? MD.growSel(work, sel.mode, sel.ids)
+            : how === "loop" || how === "ring" ? MO.selectLoops(work, MD.convertSel(work, sel.mode, "edge", sel.ids), how === "ring")
             : [];
-        view.meshEditSetSelection(ids, "replace");
+        view.meshEditSetSelection(ids, "replace", how === "loop" || how === "ring" ? "edge" : sel.mode);
+    },
+
+    /** Soft selection on / off. */
+    previzMeshToggleSoft() {
+        const view = this._modelView();
+        if (!view || !view.setMeshEditOptions) return;
+        const on = !view.meshEditOptions().soft;
+        view.setMeshEditOptions({ soft: on });
+        notice("info", on ? "Soft selection on" : "Soft selection off", on ? "Moves now carry what lies near the selection along." : "");
     },
 
     /** Smooth or flat shading on the selected meshes. */
@@ -246,15 +281,25 @@ export const PrevizModelingMixin = {
             { label: "Select all", cmd: "MeshSelectAll", disabled: !editing, title: why, run: () => this.previzMeshSelect("all") },
             { label: "Invert selection", cmd: "MeshInvert", disabled: !editing, title: why, run: () => this.previzMeshSelect("invert") },
             { label: "Grow selection", cmd: "MeshGrow", disabled: !editing, title: why, run: () => this.previzMeshSelect("grow") },
+            { label: "Select loop", cmd: "MeshSelectLoop", disabled: !editing, title: why || "Or double-click an edge", run: () => this.previzMeshSelect("loop") },
+            { label: "Select ring", cmd: "MeshSelectRing", disabled: !editing, title: why || "Or Ctrl+double-click an edge", run: () => this.previzMeshSelect("ring") },
             "-",
             op("Extrude", "extrude", "MeshExtrude"),
             op("Inset", "inset", "MeshInset"),
+            op("Bevel", "bevel", "MeshBevel"),
+            op("Loop cut", "loopcut", "MeshLoopCut"),
+            op("Bridge", "bridge", "MeshBridge"),
+            op("Fill holes", "fill", "MeshFill"),
+            op("Connect", "connect", "MeshConnect"),
             op("Merge vertices", "merge"),
+            op("Merge by distance", "weld", "MeshWeld"),
             op("Flip normals", "flip"),
             op("Delete", "delete", "MeshDelete"),
             "-",
             { label: tick(o.individual, "Each face on its own"), disabled: !view,
               run: () => view.setMeshEditOptions({ individual: !o.individual }) },
+            { label: tick(o.soft, "Soft selection"), cmd: "MeshSoft", disabled: !view,
+              run: () => this.previzMeshToggleSoft() },
             { label: tick(o.xray, "X-ray selection"), disabled: !view,
               run: () => view.setMeshEditOptions({ xray: !o.xray }) },
             { label: tick(kind === "mesh" && item.smooth, "Smooth shading"), disabled: kind !== "mesh",

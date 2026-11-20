@@ -21,6 +21,7 @@
 //
 // Clean-room: written from how polygon editing behaves, no code of any program.
 import * as MD from "./imageViewer_meshData.js";
+import * as MO from "./imageViewer_meshOps.js";
 
 const STORE = "imageviewer.viewer.meshEdit";
 const PICK_PX = 14;             // a vertex within this many pixels of a click is taken
@@ -40,6 +41,11 @@ export function cleanMeshEditOptions(raw) {
         inset: num(o.inset, 0.1, 0, 1000),
         individual: o.individual === true,
         xray: o.xray === true,
+        bevel: num(o.bevel, 0.05, 0, 1000),
+        cut: num(o.cut, 0.5, 0.01, 0.99),
+        weld: num(o.weld, 0.001, 0, 1000),
+        soft: o.soft === true,
+        softRadius: num(o.softRadius, 0.5, 0, 1000),
     };
 }
 
@@ -157,6 +163,7 @@ export const View3DMeshEditMixin = {
         this._meOpts = cleanMeshEditOptions({ ...this.meshEditOptions(), ...(patch || {}) });
         try { this.win.localStorage.setItem(STORE, JSON.stringify(this._meOpts)); } catch (_) { /* storage off */ }
         this._meBarSync();
+        if (this._me && ("soft" in (patch || {}) || "softRadius" in (patch || {}))) this._meRedrawOverlay();
         return this.meshEditOptions();
     },
 
@@ -302,6 +309,15 @@ export const View3DMeshEditMixin = {
         const vsel = me.mode === "vertex" ? me.sel : new Set();
         const vcol = new Float32Array(work.v.length * 3);
         for (let i = 0; i < work.v.length; i++) vcol.set(vsel.has(i) ? COLORS.vertSel : COLORS.vert, i * 3);
+        // Soft selection: the vertices that follow, warm to cool by how much.
+        const soft = this._meSoftWeights();
+        if (soft) {
+            for (const [i, w] of soft) {
+                if (vsel.has(i)) continue;
+                vcol.set([COLORS.vert[0] + (1 - COLORS.vert[0]) * w, COLORS.vert[1] + (0.6 - COLORS.vert[1]) * w,
+                          COLORS.vert[2] * (1 - w)], i * 3);
+            }
+        }
         const pg = new THREE.BufferGeometry();
         pg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
         pg.setAttribute("color", new THREE.BufferAttribute(vcol, 3));
@@ -351,6 +367,15 @@ export const View3DMeshEditMixin = {
         }
         this._meTick();
         this.requestRender();
+    },
+
+    /** Soft selection's weights in the mesh's own units (null when it is off or nothing is selected). */
+    _meSoftWeights() {
+        const me = this._me;
+        const o = this.meshEditOptions();
+        if (!me || !me.work || !o.soft || !me.sel.size) return null;
+        const verts = MD.selVertices(me.work, me.mode, [...me.sel]);
+        return MO.softWeights(me.work, verts, this.meshEditLocalLength(o.softRadius));
     },
 
     /** Every frame while editing: the overlay follows the mesh, the mesh draws a little behind its lines. */
@@ -512,7 +537,12 @@ export const View3DMeshEditMixin = {
         if (this.gizmo && this.gizmo.object === me.handle && this.gizmo.axis) return false;
         const rect = this.canvas.getBoundingClientRect();
         const how = e.ctrlKey || e.metaKey ? (e.shiftKey ? "add" : "remove") : e.shiftKey ? "toggle" : "replace";
-        const st = { x: e.clientX, y: e.clientY, rect, how, box: null,
+        // A pointerdown's own click count is not reliable across browsers: count the second press here.
+        const now = (this.win.performance || performance).now();
+        const last = me.lastDown;
+        const dbl = e.detail >= 2 || !!(last && now - last.t < 450 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 6);
+        me.lastDown = dbl ? null : { t: now, x: e.clientX, y: e.clientY };
+        const st = { x: e.clientX, y: e.clientY, rect, how, box: null, loop: dbl, ring: dbl && e.ctrlKey && !e.shiftKey,
                      lasso: this.selectShape && this.selectShape() === "lasso" ? [[e.clientX, e.clientY]] : null };
         const win = this.win;
         const move = (ev) => {
@@ -541,6 +571,14 @@ export const View3DMeshEditMixin = {
                 };
                 const poly = st.lasso && st.lasso.length > 2 ? st.lasso.map(([x, y]) => [x - rect.left, y - rect.top]) : null;
                 this.meshEditSetSelection(this.meshEditIdsInBox(r, poly), st.how);
+            } else if (st.loop && this._me.mode === "edge") {
+                // A double-click on an edge takes its whole loop (Ctrl: its ring).
+                const id = this.meshEditPickAt(ev.clientX - rect.left, ev.clientY - rect.top);
+                if (id !== null && this._me.work) {
+                    const ids = st.ring ? MO.edgeRing(this._me.work, id) : MO.edgeLoop(this._me.work, id);
+                    // Ctrl (remove) on its own is how the ring is asked for, so the ring replaces.
+                    this.meshEditSetSelection(ids, st.ring && st.how === "remove" ? "replace" : st.how);
+                }
             } else {
                 const id = this.meshEditPickAt(ev.clientX - rect.left, ev.clientY - rect.top);
                 this.meshEditSetSelection(id === null ? [] : [id], id === null && st.how !== "replace" ? "add" : st.how);
@@ -598,8 +636,10 @@ export const View3DMeshEditMixin = {
         const { THREE } = this.libs;
         host.updateMatrixWorld(true);
         me.handle.updateMatrixWorld(true);
-        const verts = [...MD.selVertices(me.work, me.mode, [...me.sel])];
+        const soft = this._meSoftWeights();
+        const verts = soft ? [...soft.keys()] : [...MD.selVertices(me.work, me.mode, [...me.sel])];
         me.drag = {
+            weights: soft,
             from: me.handle.matrixWorld.clone().invert(),
             hostInv: host.matrixWorld.clone().invert(),
             base: verts.map((i) => [i, new THREE.Vector3(...me.work.v[i]).applyMatrix4(host.matrixWorld)]),
@@ -618,7 +658,11 @@ export const View3DMeshEditMixin = {
         const M = me.handle.matrixWorld.clone().multiply(d.from);
         const p = new this.libs.THREE.Vector3();
         for (const [i, w] of d.base) {
-            p.copy(w).applyMatrix4(M).applyMatrix4(d.hostInv);
+            p.copy(w).applyMatrix4(M);
+            // A soft-selected vertex goes part of the way.
+            const k = d.weights ? d.weights.get(i) : 1;
+            if (k < 1) p.lerp(w, 1 - k);
+            p.applyMatrix4(d.hostInv);
             me.work.v[i] = [p.x, p.y, p.z];
         }
         d.moved = true;
@@ -724,10 +768,29 @@ export const View3DMeshEditMixin = {
         ind.append(cb, doc.createTextNode(" Each face"));
         bar.append(ind);
         sep();
+        btn("Bevel", "Chamfer the selected edges by the width beside it (Ctrl+B)", () => this._meOp("bevel"));
+        num("bevel", "How wide Bevel cuts (scene units)", 0.01);
+        btn("Loop cut", "Cut a new loop across the ring of the selected edge (Ctrl+R)", () => this._meOp("loopcut"));
+        num("cut", "Where along the ring the cut lies (0..1)", 0.05);
+        btn("Bridge", "Join two holes, or two groups of faces, with a band of faces", () => this._meOp("bridge"));
+        btn("Fill", "Close the holes the selection touches (all of them with nothing selected)", () => this._meOp("fill"));
+        btn("Connect", "Split a face between the selected vertices, or the middles of the selected edges", () => this._meOp("connect"));
+        sep();
         btn("Merge", "Weld the selected vertices into one at their middle", () => this._meOp("merge"));
+        btn("Weld", "Merge vertices closer than the distance beside it (the selected ones, or all)", () => this._meOp("weld"));
+        num("weld", "How close vertices must be to be welded (scene units)", 0.001);
         btn("Flip", "Turn the selected faces round (flip their normals)", () => this._meOp("flip"));
         btn("Delete", "Delete the selection (Del)", () => this._meOp("delete"));
         sep();
+        const so = doc.createElement("label");
+        so.className = "model-mesh-check";
+        so.title = "Soft selection: a move carries what lies near the selection along, less the further away (B)";
+        const scb = Object.assign(doc.createElement("input"), { type: "checkbox" });
+        scb.dataset.opt = "soft";
+        scb.addEventListener("change", () => this.setMeshEditOptions({ soft: scb.checked }));
+        so.append(scb, doc.createTextNode(" Soft"));
+        bar.append(so);
+        num("softRadius", "How far soft selection reaches (scene units)", 0.05);
         const xr = doc.createElement("label");
         xr.className = "model-mesh-check";
         xr.title = "Pick through the mesh: what is behind is selected too";
