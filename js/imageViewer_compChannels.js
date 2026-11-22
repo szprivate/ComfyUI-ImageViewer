@@ -255,6 +255,19 @@ export function layerPicture(img, ex, layer) {
     return out;
 }
 
+/**
+ * The channels `layerPicture` puts in the r g b a slots, by name and in that order (null where the layer has
+ * none) - a layer's channels as the viewer can look at them one by one. rgba is its own four; a one-channel
+ * layer is shown grey, so its one name stands in all three of r g b.
+ */
+export function viewChannels(names, layer) {
+    if (!layer || layer === "rgba") return RGBA.slice();
+    const have = (names || []).filter((n) => layerOf(n) === layer);
+    if (have.length === 1) return [have[0], have[0], have[0], null];
+    const others = have.filter((nm) => !RGBA.includes(nm.slice(layer.length + 1)));
+    return RGBA.map((c, k) => (have.includes(`${layer}.${c}`) ? `${layer}.${c}` : k < 3 ? others[k] || null : null));
+}
+
 /** The layers among extra channels' names, each once, in order. */
 export function layersOf(names) {
     const out = [];

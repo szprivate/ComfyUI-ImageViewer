@@ -10,7 +10,7 @@ A node-based compositor for stills, films and image sequences. It works in linea
 
 - **Open Comp…** or **New comp** in the lower bar's Comp menu. With a shot context on the canvas, a new comp is created in that shot's `comps` folder.
 - Double-click a `*.comp.json` in the file browser.
-- The bar above the picture has New, Open and Save; Save's menu holds Save as…, the renders, the farm, the script export, and Relink / Localise footage.
+- The bar above the picture has New, Open and Save; Save's menu holds Save as…, the renders, the farm, the script export, and Relink / Localise footage. On the right, together, is everything that only changes how the picture is *looked at* — proxy, GPU, the OCIO display, the channel menu, exposure, Views and the Viewer tools — and none of it is part of the comp or the render.
 - Unsaved changes are kept aside every 30 seconds. If the viewer closes before you save (a crash, a closed tab), opening the comp again offers them back.
 
 ## The node graph
@@ -214,6 +214,13 @@ The **Viewer** menu in the bar holds the tools for looking at the picture. None 
 
 The sampler and the scopes read the preview at its proxy size.
 
+Beside **Viewer** are the two controls that say what the picture is looked at in:
+
+- The **channel menu**, named after what is on show (`rgba`, `depth`, `rgba.red`). It lists every layer of the node on show, and under each the channels that are in it. A layer shows as a colour, one channel of it as grey; a layer of one channel is grey either way. <kbd>R</kbd> <kbd>G</kbd> <kbd>B</kbd> <kbd>A</kbd> on the picture pick rgba's channels, and the same key again is back to the colour.
+- **Exposure**, in stops, brighter or darker — also <kbd>E</kbd> + a drag sideways on the picture. A click on it is back to 0.
+
+Both are the viewer's, not the comp's: they are shared with the picture viewer, and the render never sees them.
+
 ## Tracking and warps
 
 - **Tracker**: **+ Point**, then click the picture. Each point has a pattern box (what is followed) and a search box (how far it may move in a frame), sized in its panel; dragging a point on the picture keys it there at the current frame. The arrows in its panel track one frame or to the end, either way; tracking runs on the server at full resolution and the keys appear as they come. A point whose match falls below a threshold stops there. The node itself can stabilise or match-move (translate, rotate, scale or perspective, from the points it has), or hand that over to a new node: **Make** builds a keyed Transform or CornerPin beside it.
@@ -239,7 +246,7 @@ A deep image holds any number of samples per pixel, each a premultiplied colour 
 
 ## Views
 
-The view menu in the bar turns a comp into a stereo pair (left, right) or any list of views; the picture shows the view picked there. Then:
+The **Views** menu in the bar turns a comp into a stereo pair (left, right) or any list of views; the picture shows the view picked there. Then:
 
 - `%V` in a Read's file name stands for the view's name and `%v` for its first letter, so one Read reads a file per view.
 - **Split** in a node's parameters gives it different settings in the view on show; **Join** takes them away.
@@ -249,7 +256,7 @@ The view menu in the bar turns a comp into a stereo pair (left, right) or any li
 
 ## Colour
 
-The working space is the scene-linear role of the OCIO config. The display menu in the bar views the image through any display / view of the config; the viewer's exposure and channel controls also sit in the bar and only affect the display.
+The working space is the scene-linear role of the OCIO config. The display menu in the bar views the image through any display / view of the config, or as plain sRGB.
 
 ## Output
 
