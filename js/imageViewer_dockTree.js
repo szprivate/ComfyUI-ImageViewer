@@ -385,8 +385,9 @@ export function cleanCopy(n) {
 export function minSize(n, axis, minOf, gap = 5, view = { w: 160, h: 120 }) {
     if (isView(n)) return view[axis];
     if (isPanel(n)) {
-        if (n.collapsed) return axis === "h" ? 26 : 140;
         const m = minOf(n.id) || { w: 60, h: 60 };
+        // Folded: its title bar's height; across, no wider than a folded bar needs (140), never more than open.
+        if (n.collapsed) return axis === "h" ? 26 : Math.min(140, m.w || 140);
         return m[axis] || 0;
     }
     if (!isSplit(n)) return 0;
@@ -405,6 +406,15 @@ export function allFolded(n) {
 }
 
 /**
+ * Does a child of a split shrink to its title bars along that split? A folded panel gives up its HEIGHT only, so in a
+ * column it takes no more room than its bar; across a row (a pane beside the picture whose panels are all folded) it
+ * keeps its width, as an open pane does - it was squeezed to a few pixels before (Sebastian 2026-11-20).
+ */
+export function foldedAlong(split, k) {
+    return split.split !== "row" && allFolded(k);
+}
+
+/**
  * How each shown child of a split takes its room: [{node, grow, basis}] for CSS flex (grow 0 + basis px = fixed;
  * basis "auto" = as small as it is). Shares that add up to less than 1 are scaled up (CSS hands out only that part of
  * the free room); with no child left to grow, the fixed ones grow by their sizes.
@@ -412,11 +422,12 @@ export function allFolded(n) {
 export function flexOf(split) {
     const kids = shownChildren(split);
     const fixed = (k) => k.px > 0 && !containsView(k);
-    const growers = kids.filter((k) => !fixed(k) && !allFolded(k));
+    const folded = (k) => foldedAlong(split, k);
+    const growers = kids.filter((k) => !fixed(k) && !folded(k));
     const sum = growers.reduce((s, k) => s + (k.size > 0 ? k.size : 1), 0);
     const scale = sum > 0 && sum < 1 ? 1 / sum : 1;
     return kids.map((k) => {
-        if (allFolded(k)) return { node: k, grow: 0, basis: "auto" };
+        if (folded(k)) return { node: k, grow: 0, basis: "auto" };
         if (fixed(k)) return growers.length ? { node: k, grow: 0, basis: k.px } : { node: k, grow: k.px, basis: 0 };
         return { node: k, grow: (k.size > 0 ? k.size : 1) * scale, basis: 0 };
     });
