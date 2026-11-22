@@ -172,12 +172,13 @@ class OutlinerTests(unittest.TestCase):
         finally:
             pg.close()
         names0 = [r["name"] for r in rows0]
-        # The scene's hidden default camera is the first top-level row.
-        self.assertEqual(names0[:7], ["Perspective", "Set dressing", "Crate", "Boulder", "Props", "Table", "shotCam"])
-        self.assertEqual([r["depth"] for r in rows0[:5]], [0, 0, 1, 1, 1])
-        self.assertTrue(rows0[1]["open"])
-        self.assertEqual(rows0[2]["kind"], "primitive")
-        self.assertTrue(rows0[2]["selected"])
+        # The scene's hidden default view cameras are the first top-level rows.
+        defaults = ["Perspective", "Top", "Bottom", "Front", "Back", "Right", "Left"]
+        self.assertEqual(names0[:13], defaults + ["Set dressing", "Crate", "Boulder", "Props", "Table", "shotCam"])
+        self.assertEqual([r["depth"] for r in rows0[:5]], [0, 0, 0, 0, 0])
+        self.assertTrue(rows0[7]["open"])
+        self.assertEqual(rows0[8]["kind"], "primitive")
+        self.assertTrue(rows0[8]["selected"])
         self.assertEqual([r["name"] for r in rows_search], ["Set dressing", "Props", "Table"])
         self.assertEqual([r["context"] for r in rows_search], [True, True, False])
         self.assertEqual(hit, ["Tab"])
@@ -191,8 +192,9 @@ class OutlinerTests(unittest.TestCase):
         self.assertTrue(lit)
         self.assertEqual(sorted(kept["hidden"]), ["camera", "group"])
         self.assertTrue(menu_gone)
-        self.assertEqual([r["name"] for r in rows_folded][:3], ["Perspective", "Set dressing", "shotCam"])
-        self.assertEqual([r["name"] for r in rows_one][:6], ["Perspective", "Set dressing", "Crate", "Boulder", "Props", "shotCam"])
+        self.assertEqual([r["name"] for r in rows_folded], defaults + ["Set dressing", "shotCam", "Lamp"])
+        self.assertEqual([r["name"] for r in rows_one],
+                         defaults + ["Set dressing", "Crate", "Boulder", "Props", "shotCam", "Lamp"])
         self.assertFalse([r for r in rows_one if r["name"] == "Props"][0]["open"])
         self.assertIn("Table", [r["name"] for r in rows_all])
         self.assertEqual(self.errors, [])

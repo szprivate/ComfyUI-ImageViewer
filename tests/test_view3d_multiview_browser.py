@@ -149,8 +149,8 @@ class MultiViewTests(unittest.TestCase):
         # The main view's label names the scene camera it looks through; the extra
         # views keep cameras of their own and their old names.
         self.assertEqual(st["labels"], ["Persp 2 ▾", "Perspective ▾", "Persp 3 ▾", "Persp 4 ▾"])
-        # The default camera is hidden: furniture, not content.
-        self.assertEqual(st["hidden"], [True])
+        # The default cameras are hidden: furniture, not content.
+        self.assertEqual(st["hidden"], [True] * 7)
         self.assertEqual(moved["active"], "persp2")
         self.assertTrue(moved["rotate"])
         # Navigating pane 0 moved its own viewer camera, kept in the viewer's
@@ -189,8 +189,50 @@ class MultiViewTests(unittest.TestCase):
         # Made where the view looked, and the view looks through it at once.
         self.assertTrue(st["id"])
         self.assertEqual(st["active"], st["id"])
-        self.assertEqual(st["cams"], [["Perspective", True, False], ["Camera", False, True]])
+        defaults = [[n, True, False] for n in
+                    ("Perspective", "Top", "Bottom", "Front", "Back", "Right", "Left")]
+        self.assertEqual(st["cams"], defaults + [["Camera", False, True]])
         self.assertEqual(labels[1], "Camera ▾")
+        self.assertEqual(self.errors, [])
+
+    def test_a_flat_view_is_an_orthographic_scene_camera(self):
+        pg = self._page()
+        try:
+            pg.evaluate(f"() => {V}.setPaneLayout('2h')")
+            pg.evaluate(f"() => {V}.setPaneView(0, 'top')")
+            pg.wait_for_timeout(250)
+            st = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                const id = v.paneThroughId('top'); const item = s.items.find((i) => i.id === id);
+                const cam = v._paneCamera('top');
+                return {{ name: item && item.name, proj: item && item.projection, ortho: item && item.ortho,
+                          isOrtho: !!cam.isOrthographicCamera, visible: item && item.visible,
+                          label: v._paneEls[0].label.textContent }}; }}""")
+            # Zoom writes the picture's width, pan the camera's place - into the item.
+            boxes = self._boxes(pg)
+            x, y, w, h = boxes["0"]
+            pg.mouse.move(x + w / 2, y + h / 2)
+            pg.mouse.wheel(0, -240)
+            pg.wait_for_timeout(250)
+            zoomed = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                const item = s.items.find((i) => i.id === v.paneThroughId('top'));
+                return {{ ortho: item.ortho, pos: item.position.map((n) => +n.toFixed(3)) }}; }}""")
+            pg.mouse.move(x + w / 2, y + h / 2)
+            pg.keyboard.down("Alt")
+            pg.mouse.down(); pg.mouse.move(x + w / 2 + 60, y + h / 2 + 30); pg.mouse.up()
+            pg.keyboard.up("Alt")
+            pg.wait_for_timeout(250)
+            panned = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                return s.items.find((i) => i.id === v.paneThroughId('top')).position.map((n) => +n.toFixed(3)); }}""")
+            self._shot(pg, "flat-ortho-camera.png")
+        finally:
+            pg.close()
+        self.assertEqual(st["name"], "Top")
+        self.assertEqual(st["proj"], "orthographic")
+        self.assertTrue(st["isOrtho"])
+        self.assertEqual(st["visible"], False)
+        self.assertEqual(st["label"], "Top ▾")
+        self.assertNotEqual(zoomed["ortho"], st["ortho"])
+        self.assertNotEqual(panned, zoomed["pos"])
         self.assertEqual(self.errors, [])
 
     def test_a_camera_dragged_onto_a_pane_is_looked_through_there(self):

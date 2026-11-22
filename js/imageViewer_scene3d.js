@@ -173,11 +173,11 @@ export function setNewSceneDefaults({ fps, length, resolution } = {}) {
     NEW_SCENE.resolution = Array.isArray(resolution) && resolution.length === 2 && resolution.every((v) => v > 0)
         ? resolution.map((v) => Math.round(v)) : DEFAULT_RESOLUTION.slice();
 }
-export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ikfk", "space"];
+export const TRACKS = ["position", "rotation", "scale", "pivot", "fov", "ortho", "ikfk", "space"];
 // Channels that hold one number rather than [x, y, z]: a camera's field of
-// view, an IK control's IK/FK blend and a control's space (imageViewer_rigData.js,
-// imageViewer_rigExtras.js).
-export const SCALAR_TRACKS = ["fov", "ikfk", "space"];
+// view, an orthographic camera's width, an IK control's IK/FK blend and a
+// control's space (imageViewer_rigData.js, imageViewer_rigExtras.js).
+export const SCALAR_TRACKS = ["fov", "ortho", "ikfk", "space"];
 const _isScalar = (prop) => SCALAR_TRACKS.includes(prop) || isExtraProp(prop);
 
 // EXTRA TRACKS
@@ -522,6 +522,15 @@ export function makeCameraItem(name, patch = {}) {
 // the viewer until one is chosen for them (imageViewer_view3dPanes.js).
 export const DEFAULT_VIEW_CAMERAS = [
     { view: "persp", name: "Perspective", from: [1, 0.55, 1] },
+    // The flat views, as the panes have always laid them out (dir: where the
+    // view stands, up: which way is up in it). Orthographic scene cameras like
+    // any other (Sebastian 2026-11-22).
+    { view: "top", name: "Top", from: [0, 1, 0], up: [0, 0, -1] },
+    { view: "bottom", name: "Bottom", from: [0, -1, 0], up: [0, 0, 1] },
+    { view: "front", name: "Front", from: [0, 0, 1], up: [0, 1, 0] },
+    { view: "back", name: "Back", from: [0, 0, -1], up: [0, 1, 0] },
+    { view: "right", name: "Right", from: [1, 0, 0], up: [0, 1, 0] },
+    { view: "left", name: "Left", from: [-1, 0, 0], up: [0, 1, 0] },
 ];
 
 /** The item that is the default camera of view `view`, or null. */
@@ -554,13 +563,19 @@ export function lookRotation(pos, target, up = [0, 1, 0]) {
 
 /** A default view camera, framed on an empty scene from its own side. Hidden:
  *  it is the view's furniture, not content - the Outliner's eye shows it off
- *  until somebody wants it in the shot. */
+ *  until somebody wants it in the shot. A flat view's camera is orthographic
+ *  and stands far off, since its distance does not scale what it sees. */
 export function makeDefaultViewCamera(spec) {
-    const center = [0, 1, 0], reach = 2 * 2.4;      // the empty scene's box, as the panes frame it
+    const center = [0, 1, 0];
     const dir = _norm3(spec.from);
+    const ortho = !!spec.up;
+    const reach = ortho ? 100 : 2 * 2.4;      // the empty scene's box, as the panes frame it
     const position = [center[0] + dir[0] * reach, center[1] + dir[1] * reach, center[2] + dir[2] * reach];
-    return makeCameraItem(spec.name, { position, rotation: lookRotation(position, center),
-                                       view: spec.view, visible: false });
+    return makeCameraItem(spec.name, {
+        position, rotation: lookRotation(position, center, spec.up || [0, 1, 0]),
+        view: spec.view, visible: false,
+        ...(ortho ? { projection: "orthographic", ortho: 4 } : {}),
+    });
 }
 
 /** Whether `item` still stands exactly where its default view camera was seeded. */
@@ -569,7 +584,8 @@ export function untouchedDefaultViewCamera(item) {
     if (!spec) return false;
     const seeded = makeDefaultViewCamera(spec);
     const close = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
-    return close(item.position || [], seeded.position) && close(item.rotation || [], seeded.rotation);
+    return close(item.position || [], seeded.position) && close(item.rotation || [], seeded.rotation)
+        && Math.abs(Number(item.ortho || 0) - Number(seeded.ortho || 0)) < 1e-6;
 }
 
 /**
@@ -1150,6 +1166,7 @@ export function evaluate(item, frame) {
         scale: valueAt(item, "scale", frame),
         pivot: valueAt(item, "pivot", frame),
         fov: item.kind === "camera" ? valueAt(item, "fov", frame) : undefined,
+        ortho: item.kind === "camera" ? valueAt(item, "ortho", frame) : undefined,
         ikfk: item.kind === "control" && item.control && item.control.type === "ik"
             ? valueAt(item, "ikfk", frame) : undefined,
     };
@@ -1436,6 +1453,14 @@ export function parseScene(raw) {
         if (isCam) {
             item.fov = num(raw.fov, 35);
             item.resolution = cameraResolution(raw);
+            // An orthographic camera (the flat views' defaults, or one the user
+            // switched): `ortho` is the width of its view in world units, the
+            // height following the picture's shape, as the fov follows it for a
+            // perspective lens. Absent means perspective.
+            if (raw.projection === "orthographic") {
+                item.projection = "orthographic";
+                item.ortho = Number(raw.ortho) > 0 ? Number(raw.ortho) : 4;
+            }
             // Which view this is the default camera of; where two claim one,
             // the first in the list keeps the flag and the other is a camera.
             if (DEFAULT_VIEW_CAMERAS.some((s) => s.view === raw.view)

@@ -200,6 +200,42 @@ class UsdSceneTests(unittest.TestCase):
         hero = UsdGeom.Xformable(stage.GetPrimAtPath("/previz/Set/Hero"))
         self.assertTrue(len(hero.GetTimeSamples()) >= 10)
 
+    def test_an_orthographic_camera_keeps_its_projection_and_width(self):
+        scene = {"fps": 24, "length": 10, "items": [
+            {"id": "oc", "kind": "camera", "name": "Top cam", "projection": "orthographic", "ortho": 12,
+             "position": [0, 100, 0], "rotation": [-90, 0, 0], "scale": [1, 1, 1],
+             "resolution": [1920, 1080], "tracks": {}}]}
+        path = os.path.join(self.dirs["output"], "scenes", "ortho_v001.usda")
+        self.us.save(scene, path)
+        stage = Usd.Stage.Open(path, load=Usd.Stage.LoadNone)
+        cam = next((UsdGeom.Camera(p) for p in stage.Traverse() if p.IsA(UsdGeom.Camera)), None)
+        self.assertIsNotNone(cam)
+        # The width is the horizontal aperture in world units, the vertical follows
+        # the picture's shape, and the focal length is 1 (an orthographic stage).
+        self.assertEqual(str(cam.GetProjectionAttr().Get()), "orthographic")
+        self.assertAlmostEqual(cam.GetHorizontalApertureAttr().Get(), 12, places=4)
+        self.assertAlmostEqual(cam.GetVerticalApertureAttr().Get(), 12 * 1080 / 1920, places=4)
+        self.assertAlmostEqual(cam.GetFocalLengthAttr().Get(), 1.0, places=4)
+        back = self.us.load(path)
+        oc = next(it for it in back["items"] if it["id"] == "oc")
+        self.assertEqual(oc["projection"], "orthographic")
+        self.assertEqual(oc["ortho"], 12)
+        # A foreign stage's orthographic camera comes in as one.
+        foreign = os.path.join(self.tmp, "foreign_ortho.usda")
+        st = Usd.Stage.CreateNew(foreign)
+        UsdGeom.Xform.Define(st, "/World")
+        fc = UsdGeom.Camera.Define(st, "/World/TopCam")
+        fc.CreateProjectionAttr(UsdGeom.Tokens.orthographic)
+        fc.CreateHorizontalApertureAttr(7.5)
+        fc.CreateVerticalApertureAttr(5.0)
+        fc.CreateFocalLengthAttr(1.0)
+        st.GetRootLayer().Save()
+        got = self.us.load(foreign)
+        item = next((it for it in got["items"] if it["kind"] == "camera"), None)
+        self.assertIsNotNone(item)
+        self.assertEqual(item["projection"], "orthographic")
+        self.assertAlmostEqual(item["ortho"], 7.5, places=4)
+
     def test_opening_gives_the_scene_back_exactly(self):
         path, _ = self.save("back_v001.usda")
         scene = self.us.load(path)

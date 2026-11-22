@@ -827,6 +827,14 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             # With a film back of its own (the Channel Box's Aperture W / H and Film Fit) the apertures are
             # the picture's part of it, so the focal length is the camera's.
             ap_w, ap_h = _picture_on_film(item)
+            if item.get("projection") == "orthographic":
+                # An orthographic camera's aperture IS its picture in world units
+                # (with a focal length of 1): its `ortho` width rides in the
+                # horizontal aperture, the vertical follows the picture's shape.
+                rw, rh = _resolution(item)
+                ap_w = float(item.get("ortho") or 4)
+                ap_h = ap_w * (rh / rw if rw else 1.0)
+                cam.CreateProjectionAttr(UsdGeom.Tokens.orthographic)
             cam.CreateHorizontalApertureAttr(ap_w)
             cam.CreateVerticalApertureAttr(ap_h)
             # The lens shift (shares of the picture's width / height, y up) as aperture offsets in mm.
@@ -904,9 +912,12 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
             _set_xform(UsdGeom.Xformable(prim), pos,
                        item.get("rotation") or [0, 0, 0], item.get("scale") or [1, 1, 1])
             if kind == "camera":
-                UsdGeom.Camera(prim).CreateFocalLengthAttr(_fov_to_focal(item.get("fov", 35), _picture_on_film(item)[1]))
+                UsdGeom.Camera(prim).CreateFocalLengthAttr(
+                    1.0 if item.get("projection") == "orthographic"
+                    else _fov_to_focal(item.get("fov", 35), _picture_on_film(item)[1]))
         else:
             first, last = span
+            ortho = kind == "camera" and item.get("projection") == "orthographic"
             focal_attr = UsdGeom.Camera(prim).CreateFocalLengthAttr() if kind == "camera" else None
             for frame in range(int(first), int(last) + 1):
                 rot = value_at(item, "rotation", frame)
@@ -916,8 +927,15 @@ def export_scene(scene, path, bake=True, payloads=None, geometry=None, item_json
                                        value_at(item, "pivot", frame)),
                            rot, scl,
                            time=Usd.TimeCode(frame))
-                if focal_attr is not None:
+                # An orthographic camera's width is its aperture: a keyed `ortho`
+                # rides in it, a keyed fov has nothing to say on one.
+                if focal_attr is not None and not ortho:
                     focal_attr.Set(_fov_to_focal(value_at(item, "fov", frame), _picture_on_film(item)[1]), Usd.TimeCode(frame))
+                if ortho:
+                    rw, rh = _resolution(item)
+                    w = float(value_at(item, "ortho", frame) or 4)
+                    UsdGeom.Camera(prim).GetHorizontalApertureAttr().Set(w, Usd.TimeCode(frame))
+                    UsdGeom.Camera(prim).GetVerticalApertureAttr().Set(w * (rh / rw if rw else 1.0), Usd.TimeCode(frame))
         if offset is not None:
             # Frozen transformations: a matrix under translate / rotate / scale,
             # which is exactly where scene3d's `offset` sits.
@@ -1306,6 +1324,11 @@ def _item_from_prim(prim, xformable, is_camera, shape, asset, stage):
         # lines at the film back's aspect.
         h_ap = cam.GetHorizontalApertureAttr().Get() or APERTURE_H
         v_ap = aperture or APERTURE_V
+        # An orthographic stage camera: its horizontal aperture is the picture's
+        # width in world units (the writer puts a focal length of 1 beside it).
+        if str(cam.GetProjectionAttr().Get()) == "orthographic":
+            item["projection"] = "orthographic"
+            item["ortho"] = round(float(h_ap), 4)
         item["resolution"] = [max(1, int(round(1080 * float(h_ap) / float(v_ap)))), 1080]
         # Its film back is the stage's apertures (the picture fills it), and its clipping range comes along.
         item["filmback"] = [round(float(h_ap), 4), round(float(v_ap), 4)]

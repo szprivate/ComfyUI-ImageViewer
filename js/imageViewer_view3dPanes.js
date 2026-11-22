@@ -33,7 +33,8 @@
 // onto the pane, or its "New camera…").
 // Clean-room: written from how the layouts behave, no code from any program.
 
-import { cameraResolution, defaultViewCamera } from "./imageViewer_scene3d.js";
+import { cameraResolution, currentValue, defaultViewCamera, lookRotation,
+         DEFAULT_VIEW_CAMERAS } from "./imageViewer_scene3d.js";
 
 const KEY = "imageviewer.viewer.view3dPanes";
 
@@ -51,14 +52,11 @@ export const PANE_VIEWS = [
 ];
 
 // Where a flat view's camera stands (from the target) and which way is up on screen.
-const ORTHO = {
-    top:    { dir: [0, 1, 0],  up: [0, 0, -1] },
-    bottom: { dir: [0, -1, 0], up: [0, 0, 1] },
-    front:  { dir: [0, 0, 1],  up: [0, 1, 0] },
-    back:   { dir: [0, 0, -1], up: [0, 1, 0] },
-    right:  { dir: [1, 0, 0],  up: [0, 1, 0] },
-    left:   { dir: [-1, 0, 0], up: [0, 1, 0] },
-};
+// Where a flat view stands and which way is up in it: the scene's default
+// orthographic cameras carry the same specs (imageViewer_scene3d.js); this is
+// the fallback for a pane whose default camera was deleted.
+const ORTHO = Object.fromEntries(DEFAULT_VIEW_CAMERAS.filter((s) => s.up)
+    .map((s) => [s.view, { dir: s.from, up: s.up }]));
 
 export const PANE_LAYOUTS = [
     ["single", "One view"],
@@ -253,10 +251,10 @@ export const View3DPanesMixin = {
 
     /**
      * The scene camera the pane showing `kind` looks through (the active pane's by
-     * default), or null: a flat view, a camera that is gone, or an extra perspective
-     * view with none chosen (it draws through a camera of its own then). The main
-     * perspective view with nothing chosen looks through the scene's default
-     * camera (imageViewer_scene3d.js).
+     * default), or null: a camera that is gone, or an extra perspective view with
+     * none chosen (it draws through a camera of its own then). The main perspective
+     * view with nothing chosen looks through the scene's default camera, and a flat
+     * view through its default orthographic one (imageViewer_scene3d.js).
      */
     paneThroughId(kind = this.paneActiveKind()) {
         if (this._walk) return null;
@@ -265,10 +263,14 @@ export const View3DPanesMixin = {
             return (this._throughCam && this._throughCam())
                 || ((this.scene3d && this.scene3d.activeCamera) || (def && def.id) || null);
         }
-        if (!EXTRA_PERSP.includes(kind)) return null;
-        const id = this._paneState().through[kind];
-        const entry = id && this._entries && this._entries.get(id);
-        return entry && entry.camera ? id : null;
+        if (EXTRA_PERSP.includes(kind)) {
+            const id = this._paneState().through[kind];
+            const entry = id && this._entries && this._entries.get(id);
+            return entry && entry.camera ? id : null;
+        }
+        const def = this.scene3d ? defaultViewCamera(this.scene3d, kind) : null;
+        const entry = def && this._entries && this._entries.get(def.id);
+        return entry && entry.camera ? def.id : null;
     },
 
     /** The shading of pane `slot`. */
@@ -447,27 +449,26 @@ export const View3DPanesMixin = {
             const id = this.paneThroughId(kind);
             return id ? this._entries.get(id).camera : this._panePersp(kind).cam;
         }
-        return this._paneOrtho(kind).cam;
+        const id = this.paneThroughId(kind);
+        return id ? this._entries.get(id).camera : this._paneOrtho(kind).cam;
     },
 
     /** Where the orbit controls circle in the pane showing `kind`. */
     _paneTarget(kind) {
         if (kind === "persp") return this._perspTarget || this.controls.target;
-        if (EXTRA_PERSP.includes(kind)) {
-            const id = this.paneThroughId(kind);
-            if (id) {
-                // Looking through a scene camera: in front of it, as Look through puts it.
-                const { THREE } = this.libs;
-                const entry = this._entries.get(id);
-                if (entry.aimTarget) return entry.aimTarget.clone();
-                const cam = entry.camera;
-                const pos = cam.getWorldPosition(new THREE.Vector3());
-                const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
-                const d = Math.max(1, this.controls.target.distanceTo(pos));
-                return pos.addScaledVector(fwd, d);
-            }
-            return this._panePersp(kind).target;
+        const id = this.paneThroughId(kind);
+        if (id) {
+            // Looking through a scene camera: in front of it, as Look through puts it.
+            const { THREE } = this.libs;
+            const entry = this._entries.get(id);
+            if (entry.aimTarget) return entry.aimTarget.clone();
+            const cam = entry.camera;
+            const pos = cam.getWorldPosition(new THREE.Vector3());
+            const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.getWorldQuaternion(new THREE.Quaternion()));
+            const d = Math.max(1, this.controls.target.distanceTo(pos));
+            return pos.addScaledVector(fwd, d);
         }
+        if (EXTRA_PERSP.includes(kind)) return this._panePersp(kind).target;
         return this._paneOrtho(kind).target;
     },
 
@@ -492,19 +493,36 @@ export const View3DPanesMixin = {
     /** Fit a flat view onto `box` (keeps its direction). */
     _paneFrameOrtho(box, kind = this.paneActiveKind(), aspect = null) {
         const { THREE } = this.libs;
-        const c = this._paneOrtho(kind);
         const center = box.getCenter(new THREE.Vector3());
         const size = box.getSize(new THREE.Vector3());
-        const up = c.cam.up.clone();
-        const right = new THREE.Vector3().crossVectors(up, c.dir).normalize();
+        const spec = ORTHO[kind] || { dir: [0, 1, 0], up: [0, 0, -1] };
+        const up = new THREE.Vector3(...spec.up);
+        const dir = new THREE.Vector3(...spec.dir);
+        const right = new THREE.Vector3().crossVectors(up, dir).normalize();
         const absDot = (a, b) => Math.abs(a.x) * b.x + Math.abs(a.y) * b.y + Math.abs(a.z) * b.z;
         const hu = absDot(up, size) / 2, hr = absDot(right, size) / 2;
         if (aspect === null) {
             const r = this._paneRects().find((p) => p.kind === kind);
             aspect = r && r.h ? r.w / r.h : 16 / 9;
         }
-        c.half = Math.max(0.05, Math.max(hu, hr / aspect) * 1.15);
         const reach = Math.max(size.x, size.y, size.z, 1);
+        // A flat view with its scene camera frames the camera: its width is the
+        // picture's width, its place the view's own direction off the subject.
+        const id = this.paneThroughId(kind);
+        const item = id && this.scene3d ? (this.scene3d.items || []).find((i) => i.id === id) : null;
+        if (item && this.hooks && this.hooks.onCameraMoved) {
+            const position = center.clone().addScaledVector(dir, reach * 20).toArray();
+            this.hooks.onCameraMoved(item.id, {
+                position,
+                rotation: lookRotation(position, center.toArray(), spec.up),
+                ortho: Math.max(0.1, Math.max(hr, hu * aspect) * 2 * 1.15),
+            }, false);
+            if (this.controls && this.paneActiveKind() === kind) this.controls.target.copy(center);
+            this.requestRender();
+            return true;
+        }
+        const c = this._paneOrtho(kind);
+        c.half = Math.max(0.05, Math.max(hu, hr / aspect) * 1.15);
         c.target.copy(center);
         c.cam.position.copy(center).addScaledVector(c.dir, reach * 20);
         c.cam.near = 0.01;
@@ -524,6 +542,22 @@ export const View3DPanesMixin = {
     _paneFitCam(cam, kind, w, h) {
         const aspect = h > 0 ? w / h : 1;
         if (cam.isOrthographicCamera) {
+            const id = this.paneThroughId(kind);
+            const entry = id && this._entries ? this._entries.get(id) : null;
+            if (entry && entry.camera === cam) {
+                // A scene orthographic camera: its `ortho` width is its picture's,
+                // the pane shows the overscan around it, as for a lens.
+                const g = this._paneGateRect(entry.item, w, h);
+                const ortho = Number(currentValue(this.scene3d, entry.item, "ortho",
+                                    Math.round(this.sceneFrame || 0))) || 4;
+                const halfW = (ortho / 2) * (w / g.w);
+                cam.left = -halfW; cam.right = halfW;
+                cam.top = halfW / aspect; cam.bottom = -halfW / aspect;
+                cam.userData.orthoItem = ortho;
+                cam.zoom = 1;
+                cam.updateProjectionMatrix();
+                return;
+            }
             const half = this._paneOrtho(kind).half;
             cam.left = -half * aspect; cam.right = half * aspect;
             cam.top = half; cam.bottom = -half;
@@ -1170,13 +1204,14 @@ export const View3DPanesMixin = {
         const kind = s.views[slot];
         const tick = (on, label) => (on ? "✓ " : "") + label;
         const through = this.paneThroughId(kind);
-        // The pane's camera selector (Sebastian 2026-11-22): the scene's cameras -
-        // the hidden default first, then the user's - and "New camera…". A
-        // perspective view IS the camera it looks through, so the views' own
-        // names are not listed: a new scene shows exactly one perspective camera.
+        // The pane's camera selector (Sebastian 2026-11-22): the scene's default
+        // perspective camera, then the cameras somebody made - not the flat views'
+        // defaults, which the flat view rows below already stand for - and
+        // "New camera…". A perspective view IS the camera it looks through, so the
+        // views' own names are not listed: a new scene shows one perspective camera.
         const def = this.scene3d ? defaultViewCamera(this.scene3d, "persp") : null;
         const cams = [def, ...((this.scene3d && this.scene3d.items) || [])
-            .filter((it) => it.kind === "camera" && it.view !== "persp" && this._entries.get(it.id))]
+            .filter((it) => it.kind === "camera" && !it.view && this._entries.get(it.id))]
             .filter((it) => it);
         const entries = cams.map((it) => ({ label: tick(through === it.id, it.name),
                                             run: () => this.paneLookThrough(slot, it.id) }));

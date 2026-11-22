@@ -114,8 +114,8 @@ class LayoutStageTests(unittest.TestCase):
         try:
             pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
             pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
-            # The group, the models - and the scene's hidden default view camera.
-            self.assertEqual(pg.evaluate(OPEN, N), N + 2)
+            # The group, the models - and the scene's seven hidden default view cameras.
+            self.assertEqual(pg.evaluate(OPEN, N), N + 8)
             pg.wait_for_timeout(1500)
             # Redraws of the whole Outliner meanwhile: none of them asked for a tree.
             for _ in range(3):

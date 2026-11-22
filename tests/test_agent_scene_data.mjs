@@ -111,8 +111,9 @@ test("describeScene names cameras, models and clips, and counts controls", () =>
     assert.equal(d.fps, 25);
     assert.equal(d.active_camera, "Shot cam");
     assert.equal(d.controls, 1);
-    // The default view camera is a scene camera, so the agent is told about it too.
-    assert.deepEqual(d.items.map((i) => i.name), ["Perspective", "Hero", "Shot cam"]);
+    // The default view cameras are scene cameras, so the agent is told about them too.
+    assert.deepEqual(d.items.map((i) => i.name),
+                     ["Perspective", "Top", "Bottom", "Front", "Back", "Right", "Left", "Hero", "Shot cam"]);
     assert.deepEqual(d.items.find((i) => i.name === "Shot cam").keys, { count: 2, first: 0, last: 10 });
     assert.equal(d.clips.tracks[0].clips[1].name, "Hero walk");
     assert.deepEqual(d.anim_layers, [{ id: "L1", name: "Fix", mode: "additive", weight: 0.5, mute: false, solo: false, lock: false }]);

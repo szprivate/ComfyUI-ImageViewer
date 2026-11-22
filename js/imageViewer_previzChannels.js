@@ -309,6 +309,12 @@ export const PrevizChannelsMixin = {
             numberRow("focal", "focal", null, "Focal Length (mm)", 0.5, t);
             numberRow(FOV[0], FOV[1], FOV[2], "Vertical FOV", FOV[4], t);
             numberRow("hfov", "hfov", null, "Horizontal FOV", 1, t);
+            // An orthographic camera has no lens: its picture is a width in world
+            // units, and the lens rows below give way to it (previzSetProjection).
+            selectRow("projection", "Projection", [["perspective", "Perspective"], ["orthographic", "Orthographic"]],
+                      (v) => this.previzSetProjection(v),
+                      "How the camera projects: a lens with a field of view, or parallel rays over a width");
+            numberRow("ortho", "ortho", null, "Ortho Scale", 0.01, t);
             selectRow("filmPreset", "Film Back", [["", "—"], ...L.FILMBACK_PRESETS.map(([n, w, h]) => [`${w}x${h}`, `${n}  ${w} × ${h}`])],
                       (v) => { const [w, h] = v.split("x").map(Number); if (w && h) this.previzSetFilmback([w, h]); });
             numberRow("fb.0", "filmback", 0, "Aperture W (mm)", 0.1, t);
@@ -582,6 +588,15 @@ export const PrevizChannelsMixin = {
         if (ui.name && focused !== ui.name) ui.name.value = item.name;
         for (const [id, r] of ui.rows) {
             r.row.classList.toggle("selected", !!(this._cbSel && this._cbSel.has(id)));
+            // A lens belongs to a perspective camera, the ortho scale to an
+            // orthographic one; each hides with the projection it is not.
+            if (item.kind === "camera") {
+                const orthoCam = item.projection === "orthographic";
+                if (["focal", "fov", "hfov", "filmPreset", "fb.0", "fb.1", "filmFit", "shift.0", "shift.1"].includes(id)) {
+                    r.row.style.display = orthoCam ? "none" : "";
+                }
+                if (id === "ortho") r.row.style.display = orthoCam ? "" : "none";
+            }
             if (r.kind === "number") {
                 if (focused !== r.input) r.input.value = fmt(this._cbValue(item, r.prop, r.comp));
                 const keyable = !STATIC_PROPS.has(r.prop);
@@ -598,6 +613,8 @@ export const PrevizChannelsMixin = {
                 const [w, h] = L.filmbackOf(item);
                 const match = L.FILMBACK_PRESETS.find(([, pw, ph]) => pw === w && ph === h);
                 if (focused !== r.input) r.input.value = match ? `${w}x${h}` : "";
+            } else if (r.kind === "projection") {
+                if (focused !== r.input) r.input.value = item.projection === "orthographic" ? "orthographic" : "perspective";
             } else if (r.kind === "filmFit") {
                 if (focused !== r.input) r.input.value = L.filmFitOf(item);
             } else if (r.kind === "frameMask") {
@@ -927,6 +944,28 @@ export const PrevizChannelsMixin = {
             if (!keyed) cam.fov = Math.min(170, Math.max(1, L.fovFromFocal(cam, focal, a)));
         }
         this.previzChanged();
+    },
+
+    /**
+     * A camera's projection, switched in the Channel Box. The view's camera object
+     * is a perspective or an orthographic one, so the entry is rebuilt (the reload
+     * in previzChanged carries it). An orthographic camera starts with a width of
+     * four metres; its lens fields give way to the ortho scale.
+     */
+    previzSetProjection(projection) {
+        if (projection !== "perspective" && projection !== "orthographic") return;
+        const cams = this._cbItems().filter((it) => it.kind === "camera");
+        if (!cams.length) return;
+        this.previzSnapshot("set projection");
+        for (const cam of cams) {
+            if (projection === "orthographic") {
+                cam.projection = "orthographic";
+                if (!(Number(cam.ortho) > 0)) cam.ortho = 4;
+            } else {
+                delete cam.projection;
+            }
+        }
+        this.previzChanged({ reload: true });
     },
 
     /**
