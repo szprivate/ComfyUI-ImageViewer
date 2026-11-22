@@ -1631,6 +1631,24 @@ export const DockMixin = {
         return space;
     },
 
+    /**
+     * The Viewer space's own layout (Sebastian 2026-11-22): the picture in the middle, the History on the left,
+     * the File browser and the Parameters panel on the right — what every other space has as its preset, and the
+     * one thing the Viewer space had no way to ask for. A panel already on the side the preset wants keeps the
+     * place the user gave it; every other panel is left as it is.
+     */
+    dockViewerPreset() {
+        if (!this.dockPanelTo || !this.setPanelDocked) return false;
+        // The picture in the middle, even where the user dropped it as a tab behind a panel.
+        if (this.isViewBehind && this.isViewBehind()) this.dockViewFront();
+        for (const [id, side] of [["history", "left"], ["browser", "right"], ["params", "right"]]) {
+            if (this._dockSideOf(id) !== side) this.dockPanelTo(id, side);
+            if (!this.isPanelDocked(id)) this.setPanelDocked(id, true);
+        }
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        return true;
+    },
+
     // ── Persistence ──────────────────────────────────────────────────────────
 
     serializeDock() {

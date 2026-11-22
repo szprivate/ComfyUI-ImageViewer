@@ -6,6 +6,8 @@ The **🖼 Viewer** tab displays stills, image sequences, video and audio. Anyth
 
 ![The Viewer with the History panel](../images/viewer.jpg)
 
+**Open Viewer…** at the top of the lower bar's **ComfyUI** menu brings up this tab — an empty one when there is none — and puts the space's panels back where they belong: the picture in the middle, the [History](history.md) on the left, the [file browser](workspace.md#file-browser) and the [Parameters](workspace.md#parameters) panel on the right. Those three are moved back to their side wherever you had put them; every other panel is left as it is.
+
 ## Loading media
 
 - **Send To Image Viewer** node: each run adds its output to the [History](history.md), in the group named by the node's `group` input.

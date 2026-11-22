@@ -7,7 +7,9 @@ The REAL viewer js against stubbed ComfyUI scripts (tests/harness/tabs.html):
   at an older one, or at another tab, it waits in the History;
 - a Roto / SAM3 node's picture is a group of the Viewer tab too, and its tool coming up from the canvas
   selection shows that node's newest picture there;
-- "Open 3D…" / "Open Edit…" bring up the tab of that kind that is open, else make an empty one.
+- "Open 3D…" / "Open Edit…" bring up the tab of that kind that is open, else make an empty one;
+- "Open Viewer…" brings up the Viewer tab (made empty when there is none) and the Viewer space's own panel
+  layout: the picture in the middle, the History on the left, the File browser and Parameters on the right.
 
 Needs Playwright with an installed Edge or Chrome and node; skipped without them.
 Run: python -m unittest tests.test_viewer_spaces_browser
@@ -96,6 +98,12 @@ class ViewerSpacesTests(unittest.TestCase):
 
     def shown(self, pg):
         return pg.evaluate("() => window.__shown()")
+
+    def shownRails(self, pg):
+        """The panels that are up, by the side of the picture they are on, in order."""
+        return pg.evaluate("""() => { const r = window.__panel.dockRailsView(), o = {};
+            for (const s of ['left', 'right', 'bottom', 'top']) o[s] = r[s].panels.filter((p) => !p.hidden).map((p) => p.id);
+            return o; }""")
 
     def test_sends_are_groups_of_the_viewer_tab_and_the_newest_is_followed(self):
         pg = self.page()
@@ -187,6 +195,50 @@ class ViewerSpacesTests(unittest.TestCase):
         pg.wait_for_timeout(200)
         st2 = pg.evaluate("() => ({ active: window.__panel.activeTab, cuts: window.__panel.tabOrder.filter((k) => k.startsWith('edit:')) })")
         self.assertEqual(st2, st, "the open cut comes back, no second one")
+        self.assertEqual(self.errors, [])
+
+    def test_open_viewer_puts_its_panels_back_where_its_preset_has_them(self):
+        pg = self.page()
+        pg.evaluate("() => __send('a', 'agentY')")
+        # The Viewer space's panels put away and moved somewhere else by hand.
+        pg.evaluate("""async () => { const P = window.__panel;
+            await P.spaceOpen('3d'); P.switchTab('folder_history');
+            P.dockPanelTo('history', 'bottom'); P.setPanelDocked('browser', false); P.setPanelDocked('params', false); }""")
+        self.assertEqual(self.shownRails(pg)["left"], [], "the precondition: nothing on the left")
+        pg.evaluate("async () => { await window.__panel.spaceOpen('viewer'); }")
+        self.assertEqual(pg.evaluate("() => window.__panel.activeTab"), "folder_history")
+        rails = self.shownRails(pg)
+        self.assertEqual(rails["left"], ["history"], "the History on the left")
+        self.assertEqual(sorted(rails["right"]), ["browser", "params"], "the File browser and Parameters on the right")
+        self.assertEqual(rails["bottom"], [], "the picture keeps the middle to itself")
+        self.assertEqual(self.errors, [])
+
+    def test_open_viewer_makes_an_empty_viewer_tab_when_there_is_none(self):
+        pg = self.page()
+        pg.evaluate("async () => { await window.__panel.spaceOpen('3d'); }")
+        self.assertNotIn("folder_history", pg.evaluate("() => window.__panel.tabOrder"), "the precondition")
+        pg.evaluate("async () => { await window.__panel.spaceOpen('viewer'); }")
+        st = pg.evaluate("""() => { const P = window.__panel;
+            return { tab: P.activeTab, frames: P.allTabs.folder_history, label: P.tabLabels.folder_history,
+                     bar: [...P.container.querySelectorAll('.tab')].map((t) => t.dataset.tab) }; }""")
+        self.assertEqual(st["tab"], "folder_history")
+        self.assertEqual(st["frames"], [], "an empty tab, as 'Open 3D…' makes an empty scene")
+        self.assertEqual(st["label"], "\U0001F5BC Viewer")
+        self.assertIn("folder_history", st["bar"])
+        self.assertEqual(self.shownRails(pg)["left"], ["history"])
+        self.assertEqual(self.errors, [])
+
+    def test_the_comfyui_menu_starts_with_open_viewer(self):
+        pg = self.page()
+        pg.evaluate("() => __send('a', 'agentY')")
+        raw = pg.evaluate("""() => { const P = window.__panel;
+            P._barGroupMenu(P._barGroups.find((g) => g.group.id === 'comfy').group,
+                            P.container.querySelector('#bar-group-comfy'));
+            return [...P.container.querySelectorAll('.bar-menu > .previz-menu-item')].map((b) => b.textContent); }""")
+        labels = [t.replace("\u2713", "").strip() for t in raw]
+        self.assertEqual(labels[0], "Open Viewer\u2026", labels)
+        self.assertEqual(labels[1:3], ["History", "Parameters"], labels)
+        self.assertTrue(raw[0].startswith("\u2713"), "the Viewer space is up, so its item is ticked")
         self.assertEqual(self.errors, [])
 
     def test_each_space_tab_shows_its_icon_and_the_bar_the_same(self):

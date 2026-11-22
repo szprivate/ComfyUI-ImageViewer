@@ -5,7 +5,7 @@
 // longer. The panels now sit in three groups, each one button that opens a
 // short menu upwards:
 //
-//   ComfyUI    History · Parameters
+//   ComfyUI    Open Viewer… · History · Parameters
 //   3D         Open 3D… · Outliner · Channel Box · Curve Editor   (on a 3D tab)
 //   Motion     Open Motion… · Properties · Timeline
 //   Comp       Open Comp… · Node Graph · Properties · Layers
@@ -27,6 +27,7 @@ import { api } from "../../scripts/api.js";
 import { recentDocs } from "./imageViewer_recentDocs.js";
 import { makeScene } from "./imageViewer_scene3d.js";
 import { spaceIconSvg, spaceColor } from "./imageViewer_spaceIcons.js";
+import { HISTORY_VIEW_TAB, VIEWER_TAB_LABEL } from "./imageViewer_mixinHistory.js";
 
 // The spaces' own icons (imageViewer_spaceIcons.js): the same ones their tabs show.
 const ICONS = {
@@ -49,6 +50,9 @@ const COMFY_LOGO = "/assets/images/comfy-logo-mono.svg";
 
 const GROUPS = [
     { id: "comfy", title: "ComfyUI", icon: "comfy", items: [
+        // The Viewer space's own item, as every other space has one: its tab, and the panels that suit it.
+        { label: "Open Viewer\u2026", run: (p) => p.spaceOpen("viewer"),
+          checked: (p) => !!(p.dockSpace && p.dockSpace() === "viewer") },
         { label: "History", panel: "history" },
         { label: "Parameters", panel: "params" },
         // Agent code and Dataset open as tabs of the main canvas (imageViewer_viewTabs.js).
@@ -127,9 +131,11 @@ export const BarGroupsMixin = {
      * "Open Paint…" / "Open Edit…" / "Open Motion…" / "Open 3D…": the open tab
      * of that kind (the one up, else the first in the bar), else the newest
      * recent file that is still there, else a new empty one.
+     * "Open Viewer…" has no document to look for: its tab, and the panels that suit it.
      */
     async spaceOpen(kind) {
         if (this.requestPanelOpen) this.requestPanelOpen();
+        if (kind === "viewer") return this.viewerSpaceOpen();
         const is = { paint: "isPaintTab", edit: "isEditTab", motion: "isMotionTab", comp: "isCompTab", "3d": "isPrevizTab" }[kind];
         if (!is || !this[is]) return false;
         const ASK = ["paint:", "motion:", "comp:"];   // the tabs that only ask for a document
@@ -161,6 +167,23 @@ export const BarGroupsMixin = {
         const gone = this._editTlRecentGone ? await this._editTlRecentGone(list.slice(0, 3)) : new Set();
         const n = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
         return list.slice(0, 3).find((p) => !gone.has(n(p))) || "";
+    },
+
+    /**
+     * "Open Viewer…": the Viewer tab - made empty when there is none, as "Open 3D…" makes an empty scene - and
+     * the space's own panel layout (mixinDock's dockViewerPreset): the picture in the middle, the History on the
+     * left, the File browser and the Parameters panel on the right.
+     */
+    viewerSpaceOpen() {
+        const tab = HISTORY_VIEW_TAB;
+        if (!this.allTabs[tab]) {
+            this.allTabs[tab] = [];
+            this.tabLabels[tab] = VIEWER_TAB_LABEL;
+            if (!(this.tabOrder || []).includes(tab)) this.tabOrder = [...(this.tabOrder || []), tab];
+            this._rebuildTabBar(null);
+        }
+        if (this.activeTab !== tab) this.switchTab(tab);
+        return this.dockViewerPreset ? this.dockViewerPreset() : true;
     },
 
     /** "Open in 3D" (the History's menu): a 3D asset or a splat in a new 3D scene of its own. */

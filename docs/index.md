@@ -13,7 +13,7 @@ A viewer panel for ComfyUI. It shows what a workflow produces and adds the tools
 
 ## Spaces
 
-Each tab of the viewer belongs to a space. The Viewer space is for looking at media; every other space edits one kind of document. The lower bar has a menu per space, and its first entry (**Open Edit…**, **Open Paint…** and so on) brings up the open document, otherwise the last one you used, otherwise a new one.
+Each tab of the viewer belongs to a space. The Viewer space is for looking at media; every other space edits one kind of document. The lower bar has a menu per space, and its first entry (**Open Edit…**, **Open Paint…** and so on) brings up the open document, otherwise the last one you used, otherwise a new one. The Viewer space has no document: **Open Viewer…** brings up the Viewer tab — empty when there is none — and the panels that suit it.
 
 | Space | Document | Used for |
 |---|---|---|
