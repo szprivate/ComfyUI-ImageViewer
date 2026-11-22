@@ -207,6 +207,7 @@ class ModelingTests(unittest.TestCase):
         box = ids["box"]
         try:
             pg.evaluate(f"() => window.__panel._modelView().meshEditBegin('{box}', 'vertex')")
+            pg.evaluate("() => window.__panel._modelView().setGizmoSpace('world')")   # this drag is along the world axes
             pg.wait_for_timeout(100)
             corner = pg.evaluate(SCREEN, [0.5, 1, 0.5])
             self._click(pg, corner)
@@ -257,6 +258,59 @@ class ModelingTests(unittest.TestCase):
         self.assertGreaterEqual(len(boxed["sel"]), 6)
         self.assertLess(len(boxed["sel"]), 8)
         self.assertEqual(len(boxed_xray["sel"]), 8)
+
+    def test_local_gizmo_follows_the_selection_normal(self):
+        """In Modeling, Local turns the gizmo to the selected face / edge / vertex's normal."""
+        pg, ids = self._page()
+        box = ids["box"]
+        # The gizmo's own up axis (+Y) in world space, and whether its handle is identity.
+        UP = """() => { const v = window.__panel._modelView(); const T = v.libs.THREE;
+            v._me.handle.updateMatrixWorld(true);
+            const up = new T.Vector3(0, 1, 0).applyQuaternion(v._me.handle.getWorldQuaternion(new T.Quaternion()));
+            const q = v._me.handle.quaternion.toArray();
+            return { space: v.gizmoSpace, up: [up.x, up.y, up.z],
+                     ident: q.every((c, i) => Math.abs(c - (i === 3 ? 1 : 0)) < 1e-6) }; }"""
+        # Pick the one face whose normal points along `want`, without clicking.
+        SEL_FACE = """async (want) => { const M = await import('/extensions/viewer/imageViewer_meshData.js');
+            const v = window.__panel._modelView(); const w = v._me.work;
+            const fi = w.f.findIndex((f) => { const n = M.faceNormal(w, f);
+                return Math.abs(n[0] - want[0]) < 0.5 && Math.abs(n[1] - want[1]) < 0.5 && Math.abs(n[2] - want[2]) < 0.5; });
+            v.meshEditSetSelection([fi], 'replace', 'face'); return fi; }"""
+        try:
+            pg.evaluate(f"() => window.__panel._modelView().meshEditBegin('{box}', 'face')")
+            pg.evaluate("() => window.__panel._modelView().setGizmoSpace('world')")
+            pg.wait_for_timeout(60)
+            # World: a side face selected, the handle stays identity (unchanged behaviour).
+            pg.evaluate(SEL_FACE, [1, 0, 0])
+            pg.wait_for_timeout(60)
+            world_side = pg.evaluate(UP)
+            # Toggle to Local WITHOUT re-selecting: the handle turns to the +X face's normal.
+            pg.evaluate("() => window.__panel._modelView().setGizmoSpace('local')")
+            pg.wait_for_timeout(60)
+            local_side = pg.evaluate(UP)
+            self._shot(pg, "mesh_gizmo_normal_side.png")
+            # The top face in Local: its normal is +Y, so the handle is identity again.
+            pg.evaluate(SEL_FACE, [0, 1, 0])
+            pg.wait_for_timeout(60)
+            local_top = pg.evaluate(UP)
+            self._shot(pg, "mesh_gizmo_normal_top.png")
+            # Vertex mode, a top corner: the normal leans up and out (equal parts on all axes).
+            pg.evaluate("""() => { const v = window.__panel._modelView(); const w = v._me.work;
+                const vi = w.v.map((p, i) => [p, i]).filter(([[, y]]) => y > 0.4)[0][1];
+                v.meshEditSetSelection([vi], 'replace', 'vertex'); }""")
+            pg.wait_for_timeout(60)
+            local_vert = pg.evaluate(UP)
+        finally:
+            pg.close()
+        self.assertEqual(self.errors, [])
+        self.assertEqual(world_side["space"], "world")
+        self.assertTrue(world_side["ident"], world_side)
+        self.assertEqual(local_side["space"], "local")
+        self.assertAlmostEqual(local_side["up"][0], 1.0, places=3)   # +X face normal
+        self.assertAlmostEqual(local_side["up"][1], 0.0, places=3)
+        self.assertAlmostEqual(local_top["up"][1], 1.0, places=3)    # +Y face normal
+        self.assertTrue(local_top["ident"], local_top)
+        self.assertAlmostEqual(local_vert["up"][1], 1 / 3 ** 0.5, places=3)   # a cube corner
 
     def test_converting_a_shape_and_saving_the_mesh(self):
         pg, ids = self._page()
@@ -371,6 +425,7 @@ class ModelingTests(unittest.TestCase):
             pg.keyboard.press("b")
             pg.keyboard.press("1")
             pg.evaluate("() => window.__panel._modelView().setMeshEditOptions({ softRadius: 1.2 })")
+            pg.evaluate("() => window.__panel._modelView().setGizmoSpace('world')")   # this drag is along the world axes
             pg.wait_for_timeout(100)
             corner = pg.evaluate(SCREEN, [0.5, 1, 0.5])
             self._click(pg, corner)

@@ -688,13 +688,38 @@ export const View3DMeshEditMixin = {
         host.updateMatrixWorld(true);
         const at = new THREE.Vector3(...c).applyMatrix4(host.matrixWorld);
         me.handle.position.copy(at);
-        if ((this.gizmoSpace || "local") === "local") host.getWorldQuaternion(me.handle.quaternion);
-        else me.handle.quaternion.identity();
+        if ((this.gizmoSpace || "local") === "local") {
+            // Local turns the gizmo to the selection's own normal - its face /
+            // edge / vertex normal - so its up axis points out of what is
+            // selected. With no usable normal (a whole closed shell, say) it
+            // falls back to the mesh's own orientation.
+            const nrm = this._meSelNormalWorld(host);
+            if (nrm) me.handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), nrm);
+            else host.getWorldQuaternion(me.handle.quaternion);
+        } else me.handle.quaternion.identity();
         me.handle.scale.set(1, 1, 1);
         me.handle.updateMatrixWorld(true);
         this.gizmo.setMode(this.gizmoMode);
         if (this.gizmo.object !== me.handle) this.gizmo.attach(me.handle);
         return true;
+    },
+
+    /**
+     * The selection's normal in world space (a unit vector), or null when it has
+     * none: the averaged face / edge / vertex normal of the working mesh, turned
+     * by the mesh node's own rotation and scale. What the gizmo points along in
+     * Local space.
+     */
+    _meSelNormalWorld(host) {
+        const me = this._me;
+        if (!me || !me.work || !me.sel.size || !host || !this.libs) return null;
+        const n = MD.selNormal(me.work, me.mode, [...me.sel]);
+        if (!n) return null;
+        const { THREE } = this.libs;
+        host.updateMatrixWorld(true);
+        const v = new THREE.Vector3(n[0], n[1], n[2])
+            .applyMatrix3(new THREE.Matrix3().getNormalMatrix(host.matrixWorld));
+        return v.lengthSq() > 1e-12 ? v.normalize() : null;
     },
 
     /** The gizmo's dragging-changed while it holds the components; true = handled. */
