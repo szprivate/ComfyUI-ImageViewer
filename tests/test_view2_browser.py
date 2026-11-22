@@ -114,10 +114,11 @@ class SecondViewTests(unittest.TestCase):
                          sameObject: v.scene3d === m.scene3d, differentCanvas: v.renderer.domElement !== m.renderer.domElement }; }""")
             self._shot(pg, "view2_3d.png")
             # Look through the scene's camera in the second view only.
-            cam = pg.evaluate("""() => { const P = window.__panel; const c = P.previzScene().items.find((i) => i.kind === 'camera');
+            cam = pg.evaluate("""() => { const P = window.__panel; const c = P.previzScene().items.find((i) => i.kind === 'camera' && !i.view);
                 P.view2SetCamera(c.id); const v = P._v2.view, m = P._modelView();
+                const def = P.previzScene().items.find((i) => i.view === 'persp');
                 return { id: c.id, through: v.activeCameraObject() === v._entries.get(c.id).camera,
-                         mainFree: m.activeCameraObject() === m.camera, sel: P._v2.ui.camSel.value,
+                         mainDef: m.activeCameraObject() === m._entries.get(def.id).camera, sel: P._v2.ui.camSel.value,
                          activeCamera: P.previzScene().activeCamera || null }; }""")
             # The frame follows the viewer's.
             pg.evaluate("() => window.__panel.setFrame(5)")
@@ -142,7 +143,8 @@ class SecondViewTests(unittest.TestCase):
         self.assertGreater(info["canvas"][0], 100)
         self.assertGreater(info["canvas"][1], 100)
         self.assertTrue(cam["through"])
-        self.assertTrue(cam["mainFree"])
+        # The main view draws through the scene's hidden default camera, not a free one.
+        self.assertTrue(cam["mainDef"])
         self.assertEqual(cam["sel"], cam["id"])
         self.assertIsNone(cam["activeCamera"])
         self.assertEqual(frame, 5)

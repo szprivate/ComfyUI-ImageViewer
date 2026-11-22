@@ -329,7 +329,7 @@ export function makeLocatorItem(name, size = 1) {
 }
 
 export function makeScene(patch = {}) {
-    return {
+    const scene = {
         version: SCENE_VERSION,
         fps: NEW_SCENE.fps,
         length: NEW_SCENE.length,
@@ -341,6 +341,10 @@ export function makeScene(patch = {}) {
         lengthSet: false,
         ...patch,
     };
+    // A scene nobody filled starts with the default view cameras; one read from
+    // somewhere brings its items and is seeded in parseScene instead.
+    if (!("items" in patch)) seedDefaultCameras(scene);
+    return scene;
 }
 
 export function makeModelItem(src, name) {
@@ -506,6 +510,80 @@ export function makeCameraItem(name, patch = {}) {
         parent: null,
         ...patch,
     };
+}
+
+// ── The default view cameras ─────────────────────────────────────────────────
+// The main perspective view's camera is a NORMAL scene camera (Sebastian
+// 2026-11-22): every scene starts with it, the Outliner lists it (hidden, as
+// view furniture), USD keeps it, and navigating the view moves it like any
+// other camera. The `view` flag says which view an item is the default camera
+// of; nothing else is special about it - it keys, parents, renames and deletes
+// like any camera. The extra perspective views keep cameras of their own in
+// the viewer until one is chosen for them (imageViewer_view3dPanes.js).
+export const DEFAULT_VIEW_CAMERAS = [
+    { view: "persp", name: "Perspective", from: [1, 0.55, 1] },
+];
+
+/** The item that is the default camera of view `view`, or null. */
+export function defaultViewCamera(scene, view) {
+    return (scene && scene.items || []).find((it) => it && it.kind === "camera" && it.view === view) || null;
+}
+
+const _norm3 = (v) => {
+    const l = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+};
+
+/**
+ * The rotation (degrees, XYZ order, as an item's rotation) that makes a camera
+ * at `pos` look at `target` with +Y up. The same numbers three's lookAt would
+ * leave behind, worked out here so this module stays free of three.
+ */
+export function lookRotation(pos, target, up = [0, 1, 0]) {
+    const z = _norm3([pos[0] - target[0], pos[1] - target[1], pos[2] - target[2]]);
+    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let x = cross(up, z);
+    if (Math.hypot(x[0], x[1], x[2]) < 1e-9) x = cross([0, 0, 1], z);   // straight up or down
+    x = _norm3(x);
+    const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+    const D = 180 / Math.PI;
+    // Euler XYZ out of the matrix whose columns are x, y, z (three's order).
+    return [Math.atan2(-z[1], z[2]) * D, Math.asin(Math.min(1, Math.max(-1, z[0]))) * D,
+            Math.atan2(-y[0], x[0]) * D];
+}
+
+/** A default view camera, framed on an empty scene from its own side. Hidden:
+ *  it is the view's furniture, not content - the Outliner's eye shows it off
+ *  until somebody wants it in the shot. */
+export function makeDefaultViewCamera(spec) {
+    const center = [0, 1, 0], reach = 2 * 2.4;      // the empty scene's box, as the panes frame it
+    const dir = _norm3(spec.from);
+    const position = [center[0] + dir[0] * reach, center[1] + dir[1] * reach, center[2] + dir[2] * reach];
+    return makeCameraItem(spec.name, { position, rotation: lookRotation(position, center),
+                                       view: spec.view, visible: false });
+}
+
+/** Whether `item` still stands exactly where its default view camera was seeded. */
+export function untouchedDefaultViewCamera(item) {
+    const spec = DEFAULT_VIEW_CAMERAS.find((s) => s.view === (item && item.view));
+    if (!spec) return false;
+    const seeded = makeDefaultViewCamera(spec);
+    const close = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-6);
+    return close(item.position || [], seeded.position) && close(item.rotation || [], seeded.rotation);
+}
+
+/**
+ * Give the scene the default view cameras it lacks - a new scene all four, an
+ * older or imported one the ones missing. They come in LAST, after everything
+ * the scene already holds: what somebody put in a scene is its content, the
+ * view cameras are its furniture.
+ */
+export function seedDefaultCameras(scene) {
+    if (!scene) return scene;
+    const have = new Set((scene.items || []).map((it) => (it && it.view) || ""));
+    const add = DEFAULT_VIEW_CAMERAS.filter((s) => !have.has(s.view)).map(makeDefaultViewCamera);
+    if (add.length) scene.items = [...(scene.items || []), ...add];
+    return scene;
 }
 
 export function itemById(scene, id) {
@@ -1358,6 +1436,10 @@ export function parseScene(raw) {
         if (isCam) {
             item.fov = num(raw.fov, 35);
             item.resolution = cameraResolution(raw);
+            // Which view this is the default camera of; where two claim one,
+            // the first in the list keeps the flag and the other is a camera.
+            if (DEFAULT_VIEW_CAMERAS.some((s) => s.view === raw.view)
+                && !items.some((it) => it.view === raw.view)) item.view = raw.view;
             // The picture this camera's view has to match (a world's reference).
             const ref = referenceSettings(raw);
             if (ref) item.reference = ref;
@@ -1526,6 +1608,9 @@ export function parseScene(raw) {
     if (data.matchmove && typeof data.matchmove === "object" && typeof data.matchmove.file === "string")
         scene.matchmove = { file: data.matchmove.file, ...(typeof data.matchmove.group === "string" ? { group: data.matchmove.group } : {}) };
     if (scene.activeCamera && !itemById(scene, scene.activeCamera)) scene.activeCamera = null;
+    // An older scene, or a stage saved before the default view cameras were
+    // scene cameras, gets the ones it lacks (they keep their view flags).
+    seedDefaultCameras(scene);
     // Animation layers (imageViewer_animLayers.js blends them).
     const layers = readAnimLayers(data);
     if (layers.length) {

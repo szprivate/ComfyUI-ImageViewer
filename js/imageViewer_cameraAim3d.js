@@ -88,7 +88,8 @@ export const CameraAim3DMixin = {
     _aimSync() {
         if (!this.libs || !this.scene) return;
         const { THREE } = this.libs;
-        const activeId = this._throughCam ? this._throughCam() : this.scene3d && this.scene3d.activeCamera;
+        const activeId = this._mainThroughId ? this._mainThroughId()
+            : (this._throughCam ? this._throughCam() : this.scene3d && this.scene3d.activeCamera);
         const size = 0.3 * ((this.gridOptions && this.gridOptions().auto) ? (this._gridAutoScale || 1) : 1);
         for (const entry of this._entries.values()) {
             if (!entry.camera) continue;

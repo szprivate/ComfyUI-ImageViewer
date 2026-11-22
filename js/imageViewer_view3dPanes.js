@@ -24,9 +24,16 @@
 // set the ACTIVE pane's, the pane menu any pane's. Path traced shading traces
 // one pane at a time (the active one when it is path traced, else the one it
 // traced last), the others draw raster.
+//
+// The main perspective view's DEFAULT camera is a normal scene camera, hidden
+// in the Outliner (Sebastian 2026-11-22, imageViewer_scene3d.js): the view with
+// nothing chosen looks through it, navigating moves it, USD keeps it. The extra
+// perspective views keep cameras of their own in this state until a scene
+// camera is chosen for them (the pane menu's Look through, a camera dragged
+// onto the pane, or its "New camera…").
 // Clean-room: written from how the layouts behave, no code from any program.
 
-import { cameraResolution } from "./imageViewer_scene3d.js";
+import { cameraResolution, defaultViewCamera } from "./imageViewer_scene3d.js";
 
 const KEY = "imageviewer.viewer.view3dPanes";
 
@@ -246,11 +253,18 @@ export const View3DPanesMixin = {
 
     /**
      * The scene camera the pane showing `kind` looks through (the active pane's by
-     * default), or null: the free camera, a flat view, or a camera that is gone.
+     * default), or null: a flat view, a camera that is gone, or an extra perspective
+     * view with none chosen (it draws through a camera of its own then). The main
+     * perspective view with nothing chosen looks through the scene's default
+     * camera (imageViewer_scene3d.js).
      */
     paneThroughId(kind = this.paneActiveKind()) {
         if (this._walk) return null;
-        if (kind === "persp") return this._throughCam ? this._throughCam() : ((this.scene3d && this.scene3d.activeCamera) || null);
+        if (kind === "persp") {
+            const def = this.scene3d ? defaultViewCamera(this.scene3d, "persp") : null;
+            return (this._throughCam && this._throughCam())
+                || ((this.scene3d && this.scene3d.activeCamera) || (def && def.id) || null);
+        }
         if (!EXTRA_PERSP.includes(kind)) return null;
         const id = this._paneState().through[kind];
         const entry = id && this._entries && this._entries.get(id);
@@ -345,7 +359,9 @@ export const View3DPanesMixin = {
         return !this._walk && !this._rendering && !isPerspKind(this.paneActiveKind());
     },
 
-    /** The active pane draws through a camera of its own (a flat view, an extra perspective view). */
+    /** The active pane draws through a camera that is not the main view's: a flat
+     *  view, an extra perspective view (its scene camera, default or chosen, or a
+     *  camera of its own where its default was deleted). */
     _paneOwnCamActive() {
         return !this._walk && !this._rendering && this.paneActiveKind() !== "persp";
     },
@@ -1130,27 +1146,46 @@ export const View3DPanesMixin = {
         win.addEventListener("pointerup", up, true);
     },
 
+    /**
+     * "New camera…" in a pane's menu: a scene camera where the pane looks right
+     * now, looked through at once - the new camera gets exactly what you see.
+     * The scene reload that carries the new camera is async, so the look-through
+     * waits for its entry before it can take.
+     */
+    async _paneNewCamera(slot) {
+        if (!this.scene3d || !this.hooks || !this.hooks.onNewCamera) return;
+        this._paneActivate(slot);
+        const item = this.hooks.onNewCamera();
+        if (!item || !item.id) return;
+        for (let i = 0; i < 100 && !((this._entries.get(item.id) || {}).camera); i++) {
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        this.paneLookThrough(slot, item.id);
+    },
+
     /** The menu at a pane's top right: its view, maximise, the layouts. */
     _paneMenu(slot, anchor) {
         this._paneActivate(slot);
         const s = this._paneState();
         const kind = s.views[slot];
         const tick = (on, label) => (on ? "✓ " : "") + label;
-        const entries = PANE_VIEWS.map(([k, label], i) => ({
-            label: tick(k === kind, label), run: () => this.setPaneView(slot, k),
-        }));
-        // Perspective views first, then the flat ones.
-        entries.splice(PANE_VIEWS.findIndex(([k]) => !isPerspKind(k)), 0, "-");
+        const through = this.paneThroughId(kind);
+        // The pane's camera selector (Sebastian 2026-11-22): the scene's cameras -
+        // the hidden default first, then the user's - and "New camera…". A
+        // perspective view IS the camera it looks through, so the views' own
+        // names are not listed: a new scene shows exactly one perspective camera.
+        const def = this.scene3d ? defaultViewCamera(this.scene3d, "persp") : null;
+        const cams = [def, ...((this.scene3d && this.scene3d.items) || [])
+            .filter((it) => it.kind === "camera" && it.view !== "persp" && this._entries.get(it.id))]
+            .filter((it) => it);
+        const entries = cams.map((it) => ({ label: tick(through === it.id, it.name),
+                                            run: () => this.paneLookThrough(slot, it.id) }));
+        entries.push({ label: "New camera…", run: () => this._paneNewCamera(slot) });
         entries.push("-");
-        if (isPerspKind(kind)) {
-            const through = this.paneThroughId(kind);
-            const cams = ((this.scene3d && this.scene3d.items) || []).filter((it) => it.kind === "camera" && this._entries.get(it.id));
-            entries.push({ label: "Look through", sub: [
-                { label: tick(!through, kind === "persp" ? "Free camera" : "Own camera"), run: () => this.paneLookThrough(slot, null) },
-                ...(cams.length ? ["-"] : []),
-                ...cams.map((it) => ({ label: tick(through === it.id, it.name), run: () => this.paneLookThrough(slot, it.id) })),
-            ] });
+        for (const [k, label] of PANE_VIEWS.filter(([k]) => !isPerspKind(k))) {
+            entries.push({ label: tick(k === kind, label), run: () => this.setPaneView(slot, k) });
         }
+        entries.push("-");
         if (this.materialModes) {
             const mode = this.paneShading(slot);
             entries.push({ label: "Shading", sub: this.materialModes().map(([m, label]) => ({

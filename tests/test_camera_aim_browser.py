@@ -230,9 +230,9 @@ class CameraAimOriginTests(unittest.TestCase):
             off = pg.evaluate(f"() => ({{ aim: window.__panel.previzSelectedItem().aim, rows: !!{cb}.querySelector('.cb-row[data-ch=\"aim:x\"]'), "
                               "gizmo: !!window.__panel._modelView()._aimGizmo.object })")
             # Saved and read back: the switch and the target stay.
-            kept = pg.evaluate("""async () => { const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+            kept = pg.evaluate(f"""async () => {{ const S = await import('/extensions/viewer/imageViewer_scene3d.js');
                 const s = S.parseScene(JSON.parse(JSON.stringify(window.__panel.previzScene())));
-                return s.items.find((i) => i.kind === 'camera').aim; }""")
+                return s.items.find((i) => i.id === '{cid}').aim; }}""")
         finally:
             pg.close()
         self.assertEqual(default["sel"], "off")

@@ -151,7 +151,8 @@ test("the scene keeps a control through serialize and parse", () => {
     S.setKeyframe(ik, "ikfk", 0, 1, "hold");
     S.setKeyframe(ik, "ikfk", 10, 0, "hold");
     const back = S.parseScene(S.serializeScene(scene));
-    assert.equal(back.items.length, scene.items.length);
+    // A read seeds the default view cameras; everything else comes back as it went.
+    assert.equal(back.items.filter((i) => !i.view).length, scene.items.length);
     const ik2 = back.items.find((c) => c.id === ik.id);
     assert.equal(ik2.kind, "control");
     assert.deepEqual(ik2.control.chain, ik.control.chain);

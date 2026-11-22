@@ -419,8 +419,11 @@ export const PrevizMixin = {
     /** Everything in the scene, selected. */
     previzSelectAll() {
         const scene = this.previzScene();
-        if (!scene || !scene.items.length) return;
-        const ids = scene.items.map((it) => it.id);
+        if (!scene) return;
+        // What the eye hides is furniture or put away: Select all reaches what
+        // the view shows - which keeps the hidden default camera out of it.
+        const ids = (scene.items || []).filter((it) => it.visible !== false).map((it) => it.id);
+        if (!ids.length) return;
         this._previzAlso = new Set(ids.slice(0, -1));
         this._previzSelection = ids[ids.length - 1];
         if (this._model3d) {
@@ -736,7 +739,7 @@ export const PrevizMixin = {
      * of moving the item for the whole shot, which is what would silently undo
      * the animation.
      */
-    previzApplyTransform(id, transform, props, { live = false } = {}) {
+    previzApplyTransform(id, transform, props, { live = false, solo = false } = {}) {
         const scene = this.previzScene();
         const item = S.itemById(scene, id);
         if (!item) return;
@@ -750,10 +753,13 @@ export const PrevizMixin = {
         const write = (target, prop, value) => {
             S.setPose(scene, target, prop, frame, value, { key: this._previzAutokey });
         };
-        // Everything else that is selected comes along, by the same amount.
+        // Everything else that is selected comes along, by the same amount -
+        // unless the move is solo: a view navigating its camera reports through
+        // here too, and the selection must not tumble along with the view
+        // (Sebastian 2026-11-22).
         // Anything inside a selected group is left out: its parent is already
         // carrying it, and moving both would move it twice.
-        const others = this.previzSelectedIds().filter((x) => x !== id);
+        const others = solo ? [] : this.previzSelectedIds().filter((x) => x !== id);
         const carried = new Set();
         for (const one of [id, ...others]) {
             for (const child of S.descendantsOf(scene, one)) carried.add(child.id);

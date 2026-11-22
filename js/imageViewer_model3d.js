@@ -508,23 +508,29 @@ export class Model3DView {
             const id = this.paneThroughId();
             if (!id || !this.hooks.onCameraMoved) return;
             const entry = this._entries.get(id);
+            if (!entry || !entry.camera) return;
             this.hooks.onCameraMoved(id, this._aimReported(id, this.readTransform(this.activeCameraObject(),
-                                                            entry && entry.item)), live);
+                                                            entry.item)), live);
         };
         this._reportCamera = reportCamera;
         controls.addEventListener("change", () => {
             // The controls looked at their centre: a scene camera's roll goes back on.
-            if (this._navigating) { this._aimNavChange(); reportCamera(true); }
+            if (this._navigating) { this._navMoved = true; this._aimNavChange(); reportCamera(true); }
             this.requestRender();
         });
         controls.addEventListener("start", () => {
             this._navigating = true;
+            this._navMoved = false;
             // Their centre onto the camera's view axis, or its target (imageViewer_cameraAim3d.js).
             this._aimNavStart();
         });
         controls.addEventListener("end", () => {
             this._navigating = false;
-            reportCamera(false);
+            // A gesture that moved nothing (a click, a gizmo drag the orbit
+            // controls only touched) reports nothing: a snapshot for nothing
+            // would sit in the undo line in front of the edit the user means.
+            if (this._navMoved) reportCamera(false);
+            this._navMoved = false;
             if (this._paneCamMoved) this._paneCamMoved();
         });
         controls.update();
@@ -962,9 +968,20 @@ export class Model3DView {
         return this.scene3d.activeCamera || null;
     }
 
+    /**
+     * The scene camera the main perspective draws through: the one looked through,
+     * else the view's own default camera (a scene camera like any other), else
+     * null - a view whose default was deleted draws through the free camera.
+     * Everything that has to agree with what is on screen reads this: the drawn
+     * camera, the gate, the lens, the gizmo, the aim target (imageViewer_view3dPanes.js).
+     */
+    _mainThroughId() {
+        return this.paneThroughId ? this.paneThroughId("persp") : this._throughCam();
+    }
+
     _perspCameraObject() {
         if (this._walk) return this.camera;
-        const id = this._throughCam();
+        const id = this._mainThroughId();
         const entry = id ? this._entries.get(id) : null;
         return (entry && entry.camera) || this.camera;
     }
@@ -1934,7 +1951,7 @@ export class Model3DView {
         this._syncControlsCamera();
         const { THREE } = this.libs;
         const D = Math.PI / 180;
-        const activeId = this._throughCam();
+        const activeId = this._mainThroughId();
         const fps = this.scene3d.fps || 24;
         // Display layers (imageViewer_sceneLayers.js): hidden, template, reference.
         const layers = displayStates(this.scene3d);
@@ -2089,7 +2106,7 @@ export class Model3DView {
         if (!cam || this._sizeBackup) return;
         const item = entry.item;
         const f = fov || 35;
-        const active = this._throughCam() === item.id;
+        const active = this._mainThroughId() === item.id;
         let share = [1, 1];
         if (active) {
             const g = this._gateRect(item);
@@ -2134,7 +2151,7 @@ export class Model3DView {
     _syncGate() {
         const ui = this.ui;
         if (!ui || !ui.gate) return;
-        const id = this._throughCam();
+        const id = this._mainThroughId();
         const entry = id && !this._walk ? this._entries.get(id) : null;
         // The gate is drawn over the whole stage: only with one perspective view on it.
         if (!entry || !entry.camera || !this._panePlain()) {
@@ -2495,11 +2512,15 @@ export class Model3DView {
     /**
      * Whether the gizmo's handles follow the world axes or the item's own.
      * three always scales along the item's axes, so "world" there is a no-op —
-     * the same as every other 3D app.
+     * the same as every other 3D app. Editing a mesh, "local" (the item's own)
+     * is the selection's normal instead (imageViewer_view3dMeshEdit.js).
      */
     setGizmoSpace(space) {
         this.gizmoSpace = space === "world" ? "world" : "local";
         if (this.gizmo) this.gizmo.setSpace(this.gizmoSpace);
+        // Editing a mesh: the handle's turn depends on the space, so work out
+        // where the gizmo goes again rather than wait for the next selection.
+        if (this._me) this._syncSelection();
         this._syncToolbar();
         this.requestRender();
     }
@@ -2632,7 +2653,7 @@ export class Model3DView {
         if (this._me && this._meSyncGizmo()) { this._aimSync(); return; }
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
-        if (entry.item.kind === "camera" && entry.item.id === this._throughCam()) this.gizmo.detach();
+        if (entry.item.kind === "camera" && entry.item.id === this._mainThroughId()) this.gizmo.detach();
         else if (this.gizmoMode === "select" || this._msOn) this.gizmo.detach();
         else if (this.pivotMode && entry.body) {
             // A stand-in at the pivot point: dragging the item's own root would
