@@ -65,8 +65,6 @@ const DOCK_PANELS = {
     // more than the rest; the channel buttons set the width.
     curves:  { prop: "curvesPanel",  label: "Curve Editor", minW: 220, minH: 190, defaultRail: "bottom" },
     // Timing: keys as diamonds over time (imageViewer_previzDopeSheet.js), a tab beside the Curve Editor.
-    // A second view: another open tab - a 3D scene, a picture - beside the picture (imageViewer_view2.js).
-    view2: { prop: "view2Panel", label: "Second view", minW: 240, minH: 180, defaultRail: "right", size: 2 },
     dopeSheet: { prop: "dopeSheetPanel", label: "Dope Sheet", minW: 320, minH: 140, defaultRail: "bottom", tabWith: "curves" },
     // The Clip Sequencer (imageViewer_previzClips.js): clips on tracks, under the picture where time has width.
     clips: { prop: "clipsPanel", label: "Clip Sequencer", minW: 320, minH: 150, defaultRail: "bottom", tabWith: "curves" },
@@ -781,8 +779,6 @@ export const DockMixin = {
             if (this.editTlRefresh) this.editTlRefresh();
         } else if (id === "curves") {
             if (this.previzRefreshCurves) this.previzRefreshCurves();
-        } else if (id === "view2") {
-            if (this.view2Wake) this.view2Wake();
         } else if (id === "dopeSheet") {
             if (this.previzRefreshDopeSheet) this.previzRefreshDopeSheet();
         } else if (id === "clips") {

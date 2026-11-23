@@ -397,8 +397,6 @@ export const UIMixin = {
         if (this._gridAfterMove) this._gridAfterMove();
         // So does the 3D view, and its WebGL canvas belongs to the old document.
         if (this._model3d) this._model3d.rebind();
-        // And the second view (imageViewer_view2.js), whose canvas and frame loop do too.
-        if (this._v2AfterMove) this._v2AfterMove();
         // So do the comps' pictures.
         if (this._cpAfterMove) this._cpAfterMove();
     },

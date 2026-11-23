@@ -971,10 +971,7 @@ export class Model3DView {
     }
 
     /** The perspective view's camera: a scene camera looked through, or the free one. */
-    /**
-     * The scene camera the main perspective looks through: the scene's own, unless the hooks
-     * choose one (a second view of the same scene looks through its own, imageViewer_view2.js).
-     */
+    /** The scene camera the main perspective looks through: the scene's own, unless a hook chooses one. */
     _throughCam() {
         if (!this.scene3d) return null;
         if (this.hooks.perspThrough) return this.hooks.perspThrough(this.scene3d) || null;
