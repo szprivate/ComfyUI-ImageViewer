@@ -442,6 +442,9 @@ export function createCompEditor(host, opts = {}) {
     gbar.append(addBtn, gridBtn, snapBtn, alignBtn, crumbs);
     graph.append(gbar);
     const props = el(doc, "div", "mg-side mg-part"); props.tabIndex = 0;
+    // Further views of the props bin (dock instances of the Parameters panel, imageViewer_paramsInstance.js):
+    // each draws itself after every props render, into a host of its own and with a node set of its own.
+    const propsViews = new Set();
     const layers = el(doc, "div", "cp-layers"); layers.tabIndex = 0;
     // The Layers panel is a timeline: a bar of actions over a scroller that is never replaced (drags hold its pointer).
     const lbarEl = el(doc, "div", "cp-lbar"), lscroll = el(doc, "div", "cp-lrows");
@@ -532,6 +535,9 @@ export function createCompEditor(host, opts = {}) {
     // Every selected node has a panel of its own (Nuke's Properties bin): a change goes to that node only.
     const targetsOf = (n) => [n];
     let pane = null;   // the panel being filled
+    // Where the bin is drawn, and the nodes it shows: this panel and the selection, or another view's host and
+    // its pinned ids (renderPropsInto). Only the render reads them; a row keeps the node it was built for.
+    let propsHost = props, propsSel = null;
     const sameVal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
     /** Write ``p`` on every target: ``fn(its value now)`` -> its new value (keyed when the param is keyed). */
     function writeAll(n, p, d, fn) {
@@ -1469,13 +1475,13 @@ export function createCompEditor(host, opts = {}) {
         const i = el(doc, "input"); i.value = value || ""; i.spellcheck = false;
         m.append(el(doc, "div", "cp-tmhead", title), i);
         for (const t of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) m.addEventListener(t, (ev) => ev.stopPropagation());
-        m.style.left = Math.max(4, (graph.clientWidth || 300) / 2 - 105) + "px"; m.style.top = "40px";
-        graph.append(m); menuEl = m;
+        m.style.left = Math.max(4, (menuGraph.clientWidth || 300) / 2 - 105) + "px"; m.style.top = "40px";
+        menuGraph.append(m); menuEl = m;
         i.focus(); i.select();
         i.onkeydown = (e) => {
             e.stopPropagation();
-            if (e.key === "Enter") { const v = i.value.trim(); closeMenus(); graph.focus({ preventScroll: true }); if (v) done(v); }
-            else if (e.key === "Escape") { closeMenus(); graph.focus({ preventScroll: true }); }
+            if (e.key === "Enter") { const v = i.value.trim(); closeMenus(); menuGraph.focus({ preventScroll: true }); if (v) done(v); }
+            else if (e.key === "Escape") { closeMenus(); menuGraph.focus({ preventScroll: true }); }
         };
     }
     /** The colour menu: the selected nodes' colour in the graph (backdrops and notes too). */
@@ -1494,7 +1500,7 @@ export function createCompEditor(host, opts = {}) {
         m.append(sw, other, el(doc, "hr"), def);
         for (const t of ["pointerdown", "mousedown", "click", "dblclick", "contextmenu"]) m.addEventListener(t, (ev) => ev.stopPropagation());
         m.style.left = where.left + "px"; m.style.top = where.top + "px";
-        graph.append(m); menuEl = m;
+        menuGraph.append(m); menuEl = m;
     }
     /** A backdrop's or a note's corner dragged: its size (one undo step). */
     function resizeBox(e, id) {
@@ -1816,6 +1822,8 @@ export function createCompEditor(host, opts = {}) {
 
     // ── menus (Motion's look) ────────────────────────────────────────────────
     let menuEl = null;
+    // The graph a menu opens in: this one, or another view of the same network (graphMenus below).
+    let menuGraph = graph;
     function closeMenus() { if (menuEl) { menuEl.remove(); menuEl = null; } }
     /** A menu dropped from a button: ``items`` = [[label, fn, enabled?, keys?] | null (a line)]. */
     function popMenu(anchor, items) {
@@ -1861,11 +1869,13 @@ export function createCompEditor(host, opts = {}) {
             st.sel = [n.id];
         });
     }
-    graph.addEventListener("contextmenu", (e) => {
+    graph.addEventListener("contextmenu", (e) => graphContextMenu(e, gxy, graph));
+    /** The graph's right-click menu, for this graph or another view of it (its own gxy and element). */
+    function graphContextMenu(e, gx, host) {
         e.preventDefault();
         const box = e.target.closest ? e.target.closest(".cp-node") : null;
-        const at = gxy(e);
-        const r = graph.getBoundingClientRect();
+        const at = gx(e);
+        const r = host.getBoundingClientRect();
         const where = { left: e.clientX - r.left, top: e.clientY - r.top };
         const other = e.target.closest ? e.target.closest(".cp-sticky, .cp-backdrop") : null;
         const id = box ? box.dataset.id : other ? other.dataset.id : null;
@@ -1889,7 +1899,7 @@ export function createCompEditor(host, opts = {}) {
             if (st.scope.length) acts.unshift(["Up one level (Ctrl+Backspace)", upLevel]);
             tabMenu(where, { place: at, actions: acts });
         }
-    });
+    }
     /** Shows node ``id`` of the graph on screen in the picture. */
     function setView(id) { setViewFlat(fid(id)); }
     /** Shows the node of that flat id (null: the Output). */
@@ -1952,6 +1962,7 @@ export function createCompEditor(host, opts = {}) {
      *  coordinates (null: under the selected node, or at the pointer with none selected); ``actions``: [[label, fn]] shown first. */
     function tabMenu(at, { place = null, actions = [] } = {}) {
         closeMenus();
+        const host = menuGraph;
         const m = el(doc, "div", "cp-tabmenu");
         const inp = el(doc, "input"); inp.placeholder = "Type to find a node…"; inp.spellcheck = false;
         const list = el(doc, "div", "cp-tmlist");
@@ -1986,7 +1997,7 @@ export function createCompEditor(host, opts = {}) {
         };
         const pickable = (r) => r && !r.head;
         const choose = (r) => {
-            closeMenus(); graph.focus({ preventScroll: true });
+            closeMenus(); host.focus({ preventScroll: true });
             if (!r) return;
             if (r.run) r.run(); else if (r.tool) insertToolNamed(r.tool, place); else addNodeAt(r.type, place);
         };
@@ -2036,9 +2047,9 @@ export function createCompEditor(host, opts = {}) {
             else if (e.key === "ArrowUp") { step(-1); e.preventDefault(); }
             else if (e.key === "PageDown" || e.key === "PageUp") { for (let k = 0; k < 8; k++) step(e.key === "PageDown" ? 1 : -1); e.preventDefault(); }
             else if (e.key === "Enter") { e.preventDefault(); choose((m._rows || [])[on]); }
-            else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenus(); graph.focus({ preventScroll: true }); }
+            else if (e.key === "Escape" || e.key === "Tab") { e.preventDefault(); closeMenus(); host.focus({ preventScroll: true }); }
         };
-        const W = graph.clientWidth, H = graph.clientHeight;
+        const W = host.clientWidth, H = host.clientHeight;
         let left = at ? at.left : Math.max(4, W / 2 - 100), top = at ? at.top : 30;
         left = Math.max(4, Math.min(left, W - 214));
         // Room below; when there is little of it, the menu opens higher up.
@@ -2046,7 +2057,7 @@ export function createCompEditor(host, opts = {}) {
         if (H - top - 8 < Math.min(want, H * 0.6)) top = Math.max(4, H - 8 - Math.min(want, H - 12));
         m.style.left = left + "px"; m.style.top = top + "px";
         list.style.maxHeight = Math.max(80, H - top - 8 - 30) + "px";
-        graph.append(m); menuEl = m;
+        host.append(m); menuEl = m;
         draw_(); inp.focus({ preventScroll: true });
         if (o.tools) loadTools().then(() => { if (menuEl === m) draw_(); });
         return m;
@@ -2951,28 +2962,50 @@ export function createCompEditor(host, opts = {}) {
         return wrap;
     }
     function renderProps() {
-        props.replaceChildren();
-        const n = primary();
+        renderPropsInto(props, null);
+        for (const fn of propsViews) fn();
+    }
+    /** The props bin in another element (a second Parameters panel): ``ids`` the nodes it shows, the last on top
+     *  (null: the selection, as this panel). The selection is not touched; the rows built here edit these nodes.
+     *  The picture's tools (Roto, Paint) stay in the first panel, which is the one they draw on. */
+    function renderPropsInto(hostEl, ids) {
+        if (!hostEl) return;
+        const keepHost = propsHost, keepSel = propsSel, keepPane = pane;
+        propsHost = hostEl; propsSel = ids ? ids.slice() : null;
+        try {
+            renderPropsBin();
+            // A field stepped with the arrow keys is found again in the host it was drawn in (refresh looks in this one).
+            if (st.refocus) {
+                const f = [...propsHost.querySelectorAll("[data-fk]")].find((x) => x.dataset.fk === st.refocus);
+                if (f) { st.refocus = null; f.focus({ preventScroll: true }); f.select && f.select(); }
+            }
+        } finally { propsHost = keepHost; propsSel = keepSel; pane = keepPane; }
+    }
+    function renderPropsBin() {
+        propsHost.replaceChildren();
+        if (!st.comp) return;
+        const sel = propsSel || st.sel;
+        const n = sel.length ? node(sel[sel.length - 1]) : null;
         if (!n) {
             const f = fmt();
-            props.append(el(doc, "h4", "", "Composition"));
+            propsHost.append(el(doc, "h4", "", "Composition"));
             for (const [k, lo, step] of [["width", 4, 1], ["height", 4, 1], ["fps", 1, 1], ["frames", 1, 1]]) {
-                props.append(field(k, numInput(f[k], step, (v) => { if (v !== null && v >= lo) mutate(() => { f[k] = k === "fps" ? v : Math.round(v); }); if (o.onComp) o.onComp(); }, { min: lo })));
+                propsHost.append(field(k, numInput(f[k], step, (v) => { if (v !== null && v >= lo) mutate(() => { f[k] = k === "fps" ? v : Math.round(v); }); if (o.onComp) o.onComp(); }, { min: lo })));
             }
-            props.append(el(doc, "div", "mg-empty", "Select a node to edit it. Tab in the Node graph adds one; a History thumbnail dropped on the graph, the layers or the picture becomes a Read."));
+            propsHost.append(el(doc, "div", "mg-empty", "Select a node to edit it. Tab in the Node graph adds one; a History thumbnail dropped on the graph, the layers or the picture becomes a Read."));
             return;
         }
-        // One panel per selected node, the one picked last on top (Nuke's Properties bin), at most MAX_PANES.
-        const shown = [n, ...st.sel.slice(0, -1).reverse().map(node).filter((x) => x && x !== n)].slice(0, MAX_PANES);
+        // One panel per node shown, the one picked last on top (Nuke's Properties bin), at most MAX_PANES.
+        const shown = [n, ...sel.slice(0, -1).reverse().map(node).filter((x) => x && x !== n)].slice(0, MAX_PANES);
         shown.forEach((m, i) => nodePane(m, i === 0));
-        if (st.sel.length > MAX_PANES) props.append(el(doc, "div", "mg-empty cp-multi", `${st.sel.length - MAX_PANES} more selected: their panels are not shown.`));
+        if (sel.length > MAX_PANES) propsHost.append(el(doc, "div", "mg-empty cp-multi", `${sel.length - MAX_PANES} more selected: their panels are not shown.`));
     }
     const MAX_PANES = 10;
     function nodePane(n, first) {
         const t = C.NODE_TYPES[n.type];
         const box = el(doc, "div", "cp-pane" + (first ? " first" : ""));
         box.dataset.pane = n.id;
-        props.append(box);
+        propsHost.append(box);
         const folded = st.folded && st.folded.has(n.id);
         const head = el(doc, "div", "cp-panehead" + (folded ? " folded" : ""));
         const fold = el(doc, "span", "cp-panefold", folded ? "▸" : "▾");
@@ -2988,8 +3021,11 @@ export function createCompEditor(host, opts = {}) {
         head.append(fold, name, tile);
         if (n.tile) { const r = btn("↺", "Its own colour again", () => mutate(() => { delete n.tile; }, { structure: false })); r.classList.add("cp-panetilereset"); head.append(r); }
         head.append(el(doc, "span", "cp-panetype", t.label));
-        const x = btn("×", "Close this panel (the node leaves the selection)", () => select(st.sel.filter((id) => id !== n.id)));
-        head.append(x);
+        // A pinned view's nodes are not the selection's: there is nothing to take out of it, so no × there.
+        if (!propsSel) {
+            const x = btn("×", "Close this panel (the node leaves the selection)", () => select(st.sel.filter((id) => id !== n.id)));
+            head.append(x);
+        }
         head.onclick = (e) => {
             if (e.target.closest("button, input")) return;
             st.folded = st.folded || new Set();
@@ -3246,7 +3282,12 @@ export function createCompEditor(host, opts = {}) {
             shuffleSection(pn);
             for (const [p, d] of ps) if (!SHUFFLE_OWN.has(p) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
         } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p)) && (!d.only || d.only(pn))) pane.append(paramRow(pn, p, d));
-        if (n.type === "paint") paintTool.section(n, pane, first);
+        // A pinned view (propsSel) does not mount the picture's tools: they draw on the first panel's top node,
+        // and mounting them here would take them off it (and Paint's stroke list with it).
+        if (n.type === "paint") {
+            if (propsSel) pane.append(el(doc, "div", "mg-empty", "Strokes are painted in the first Parameters panel."));
+            else paintTool.section(n, pane, first);
+        }
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "cdl") cdlSection(n, t.params);
         if (n.type === "grain" || n.type === "degrain" || n.type === "regrain") grainSection(n);
@@ -3265,10 +3306,11 @@ export function createCompEditor(host, opts = {}) {
             pane.append(row);
         }
         if (n.type === "roto") {
-            if (first) rotoSection(n);
-            else pane.append(el(doc, "div", "mg-empty", "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));
+            if (first && !propsSel) rotoSection(n);
+            else pane.append(el(doc, "div", "mg-empty", propsSel ? "The shapes are drawn in the first Parameters panel."
+                : "The shapes are drawn in the panel on top: click this node in the graph to bring it there."));
         }
-        if (first && n.type !== "roto" && o.roto && o.roto.unmount) o.roto.unmount();
+        if (first && !propsSel && n.type !== "roto" && o.roto && o.roto.unmount) o.roto.unmount();
         if (n.type === "read" || n.type === "deepread") {
             const line = el(doc, "div", "mg-empty", "…");
             pane.append(line);
@@ -3719,7 +3761,8 @@ export function createCompEditor(host, opts = {}) {
         if (!fromHost && o.onFrame) o.onFrame(st.frame);
         queueRender();
         renderOverlay();
-        if (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto" || primary().type === "paint")) renderProps();
+        // A view of its own may show keyed nodes the selection has not: the playhead moves their numbers too.
+        if (propsViews.size || (primary() && (Object.keys(primary().tracks || {}).length || primary().type === "roto" || primary().type === "paint"))) renderProps();
         if (curvesEl.isConnected && st.sel.length) curves().draw();
         ltPlayhead();
     }
@@ -3867,6 +3910,22 @@ export function createCompEditor(host, opts = {}) {
         /** Another view of this graph (a dock instance): fn() is called after every graph render. */
         addGraphView(fn) { graphViews.add(fn); },
         removeGraphView(fn) { graphViews.delete(fn); },
+        /** The graph's menus and bar actions, opened in another view's element (imageViewer_compGraphView.js). */
+        graphMenus: {
+            context(e, gx, hostEl) { menuGraph = hostEl; try { graphContextMenu(e, gx, hostEl); } finally { menuGraph = graph; } },
+            add(hostEl, at) { menuGraph = hostEl; try { tabMenu(at || { left: 6, top: 34 }); } finally { menuGraph = graph; } },
+            close() { closeMenus(); },
+            grid(patch) { setGrid(patch); },
+            gridState: () => st.grid,
+            align(anchorEl) { return popMenu(anchorEl, alignItems()); },
+            remove() { removeSel(); },
+            disable() { toggleDisable(); },
+        },
+        /** Another view of the props bin (a dock instance of Parameters): fn() is called after every props render. */
+        addPropsView(fn) { propsViews.add(fn); },
+        removePropsView(fn) { propsViews.delete(fn); },
+        /** The props bin drawn into another element: ``ids`` the nodes it shows, the last on top (null: the selection). */
+        renderPropsInto: (hostEl, ids) => renderPropsInto(hostEl, ids),
         select: (ids) => select(ids),
         selection: () => st.sel.slice(),
         addNodeAt: (type, at) => addNodeAt(type, at),

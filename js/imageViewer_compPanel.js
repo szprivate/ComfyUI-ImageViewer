@@ -86,6 +86,11 @@ export const CompPanelMixin = {
         const doc = (this._dockRootEl && this._dockRootEl.ownerDocument) || (this.viewport && this.viewport.ownerDocument) || document;
         const host = doc.createElement("div");
         host.className = "curves-panel motion-part-panel comp-graph-panel";
+        // The view lives in a slot under the title bar the dock gives the panel; attaching another tab's
+        // editor replaces the slot's content only, never the bar.
+        const slot = doc.createElement("div");
+        slot.className = "comp-slot";
+        host.append(slot);
         let view = null, editor = null, seed = saved || null;
         const note = (text) => {
             const n = doc.createElement("div");
@@ -98,9 +103,9 @@ export const CompPanelMixin = {
             if (ed === editor) { if (view) view.render(); return; }
             if (view) { view.dispose(); view = null; }
             editor = ed;
-            host.replaceChildren();
-            if (!ed) { host.append(note("Open a comp to see its node graph here.")); return; }
-            view = createCompGraphView(host, ed, seed);
+            slot.replaceChildren();
+            if (!ed) { slot.append(note("Open a comp to see its node graph here.")); return; }
+            view = createCompGraphView(slot, ed, seed);
             seed = null;
         };
         return {

@@ -352,6 +352,59 @@ class DockSplitTests(unittest.TestCase):
         self.assertGreaterEqual(out["primary"], 2)
         self.assertEqual(self.errors, [])
 
+    def test_a_second_parameters_panel_is_a_channel_box_with_its_own_pin(self):
+        # tabs.html: the bare viewer; a 3D space makes the Parameters panel the Channel Box.
+        pg = self.page()
+        pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+        pg.wait_for_function("window.__ready===true", timeout=20000)
+        out = pg.evaluate("""async () => {
+            const P = window.__panel;
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            P.spaceOpen("3d");
+            await sleep(400);
+            await P.previzAddPrimitive("box");
+            await sleep(200);
+            const boxId = P.previzSelectedIds()[0];
+            P.setPanelDocked("params", true);
+            await sleep(200);
+            P.dockPanelUnder("params", "params");
+            await sleep(250);
+            const el = P._dockPanelEl("params@2");
+            if (!el) return { err: "no instance" };
+            const title = el.querySelector(".params-title").textContent;
+            const rows = el.querySelectorAll(".cb-row").length;
+            await P.previzAddPrimitive("sphere");
+            await sleep(250);
+            const sphId = P.previzSelectedIds()[0];
+            const nameOf = (root) => { const n = root.querySelector(".cb-name"); return n ? n.value : null; };
+            const follows = nameOf(el);
+            el.querySelector(".params-lock-btn").click();
+            await sleep(150);
+            P.previzSelect(boxId);
+            await sleep(250);
+            const primaryAfter = nameOf(P.paramsPanel), pinned = nameOf(el);
+            const scene = P.previzScene();
+            const item = (id) => scene.items.find(i => i.id === id);
+            const inp = el.querySelector('.cb-row[data-ch="position.0"] .cb-val');
+            inp.value = "5";
+            inp.dispatchEvent(new Event("change", { bubbles: true }));
+            await sleep(250);
+            const boxX = item(boxId).position[0], sphX = item(sphId).position[0];
+            const saved = P.serializeDock().inst && P.serializeDock().inst["params@2"];
+            return { title, rows, follows, primaryAfter, pinned, boxX, sphX,
+                     saved: !!(saved && saved.locked && saved.pin && saved.pin.itemId === sphId) };
+        }""")
+        self.assertNotIn("err", out)
+        self.assertEqual(out["title"], "Parameters")
+        self.assertGreater(out["rows"], 5)
+        self.assertEqual(out["follows"], "Sphere", "unlocked, it follows the selection")
+        self.assertEqual(out["primaryAfter"], "Box")
+        self.assertEqual(out["pinned"], "Sphere", "locked, it keeps its item")
+        self.assertEqual(out["boxX"], 0, "the edit went to the pinned item, not the selection")
+        self.assertEqual(out["sphX"], 5)
+        self.assertTrue(out["saved"], "the pin saved with the layout")
+        self.assertEqual(self.errors, [])
+
 
 if __name__ == "__main__":
     unittest.main()

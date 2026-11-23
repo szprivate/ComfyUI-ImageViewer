@@ -65,8 +65,8 @@ const GROUPS = [
         // Every World Labs Atlas tool, as a submenu (imageViewer_previzAtlasOrient.js previzAtlasMenuEntries).
         { label: "Atlas", sub: (p) => p.previzAtlasMenuEntries() },
         { label: "Outliner", panel: "previz", needs: "3d" },
-        // The Channel Box is the Parameters panel on a 3D tab.
-        { label: "Channel Box", panel: "params", needs: "3d" },
+        // The Channel Box is the Parameters panel on a 3D tab, and is called that there too.
+        { label: "Parameters", panel: "params", needs: "3d" },
         { label: "Anim Layers", panel: "animLayers", needs: "3d" },
         { label: "Curve Editor", panel: "curves", needs: "3d" },
         { label: "Layers", panel: "layers3d", needs: "3d" },
@@ -261,9 +261,8 @@ export const BarGroupsMixin = {
             for (const it of list) seen.add(it.id);
             if (list.length) out.push({ title, items: list });
         };
-        const in3d = !!(this.isPrevizTab && this.isPrevizTab());
         add("Viewer", [{ id: "history", label: "History" }, { id: "browser", label: "Files" },
-                       { id: "params", label: in3d ? "Channel Box" : "Parameters" }, { id: "agentChat", label: "agentY" }]);
+                       { id: "params", label: "Parameters" }, { id: "agentChat", label: "agentY" }]);
         for (const g of GROUPS) {
             if (g.id === "comfy") continue;
             add(g.title, g.items.filter((it) => it.panel && this._barGroupCan(it)

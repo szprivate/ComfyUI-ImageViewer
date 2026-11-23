@@ -48,8 +48,31 @@ export function createCompGraphView(host, editor, saved) {
     const wires = svgEl(doc, "svg", { class: "cp-wires" });
     world.append(wires);
     const crumbs = el(doc, "div", "cp-crumbs");
-    const hint = el(doc, "div", "cp-hint", "Drag: pan · wheel: zoom · drag a node: move it · double-click: show it in the picture (a group: go inside) · F: frame all");
-    graph.append(world, crumbs, hint);
+    const hint = el(doc, "div", "cp-hint", "Tab or right-click: add a node · drag: pan · wheel: zoom · drag a node: move it · double-click: show it in the picture (a group: go inside) · F: frame all");
+    graph.append(world, hint);
+    // The bar the first graph has: Add, grid, snap, align — the editor's own menus, opened here.
+    const gbar = el(doc, "div", "cp-gbar");
+    const ib = (cls, icon, title, fn) => {
+        const b = el(doc, "button", "mg-btn cp-ib " + cls);
+        b.title = title;
+        b.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icon}</svg>`;
+        b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        b.addEventListener("click", (e) => { e.stopPropagation(); fn(b); });
+        return b;
+    };
+    const addBtn = el(doc, "button", "mg-btn cp-add");
+    addBtn.title = "Add a node (Tab)";
+    addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span>Add</span>';
+    addBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
+    addBtn.addEventListener("click", (e) => { e.stopPropagation(); editor.graphMenus.add(graph); });
+    const gridBtn = ib("cp-grid-btn", '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+        "Show the grid (G)", () => editor.graphMenus.grid({ show: !editor.graphMenus.gridState().show }));
+    const snapBtn = ib("cp-snap-btn", '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>',
+        "Snap nodes to the grid (S)", () => editor.graphMenus.grid({ snap: !editor.graphMenus.gridState().snap }));
+    const alignBtn = ib("cp-align-btn", '<rect width="6" height="16" x="4" y="6" rx="2"/><rect width="6" height="9" x="14" y="6" rx="2"/><path d="M22 2H2"/>',
+        "Align the selected nodes", (b) => editor.graphMenus.align(b));
+    gbar.append(addBtn, gridBtn, snapBtn, alignBtn, crumbs);
+    graph.append(gbar);
     host.append(graph);
 
     const gc = () => G.levelView(() => editor.comp(), st.scope);
@@ -192,6 +215,9 @@ export function createCompGraphView(host, editor, saved) {
         }
         placeWorld();
         if (!gv.fitted && graph.clientWidth) frameAll();
+        const gs = editor.graphMenus.gridState();
+        gridBtn.classList.toggle("on", !!(gs && gs.show));
+        snapBtn.classList.toggle("on", !!(gs && gs.snap));
     }
 
     // ── Looking around ───────────────────────────────────────────────────────
@@ -214,6 +240,7 @@ export function createCompGraphView(host, editor, saved) {
 
     graph.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
+        editor.graphMenus.close();
         const eye = e.target.closest && e.target.closest(".cp-eye");
         if (eye) { e.stopPropagation(); editor.view(eye.dataset.eye); return; }
         const box = e.target.closest && e.target.closest(".cp-node, .cp-backdrop, .cp-sticky");
@@ -287,8 +314,17 @@ export function createCompGraphView(host, editor, saved) {
         editor.view(n.id);
     });
 
+    graph.addEventListener("contextmenu", (e) => {
+        e.preventDefault(); e.stopPropagation();
+        editor.graphMenus.context(e, gxy, graph);
+    });
+
     graph.addEventListener("keydown", (e) => {
         if (e.key === "f" || e.key === "F") { e.preventDefault(); e.stopPropagation(); frameAll(); return; }
+        if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); editor.graphMenus.add(graph); return; }
+        if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey) { e.preventDefault(); e.stopPropagation(); editor.graphMenus.remove(); return; }
+        if (e.key === "d" || e.key === "D") { e.preventDefault(); e.stopPropagation(); editor.graphMenus.disable(); return; }
+        if (e.key === "1") { const id = editor.selection()[0]; if (id) { e.preventDefault(); e.stopPropagation(); editor.view(id); } return; }
         if (e.key === "Backspace" && (e.ctrlKey || e.metaKey) && st.scope.length) {
             e.preventDefault(); e.stopPropagation();
             st.scope = st.scope.slice(0, -1); st.sel = []; st.graph.fitted = false; gv.fitted = false;

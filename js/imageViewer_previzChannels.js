@@ -142,7 +142,7 @@ export const PrevizChannelsMixin = {
 
     _cbParamsTitle() {
         if (!this._cbParamsMode || !this.paramsTitle) return;
-        const t = "Channel Box";
+        const t = "Parameters";
         if (this.paramsTitle.innerText !== t) this.paramsTitle.innerText = t;
     },
 
@@ -165,20 +165,27 @@ export const PrevizChannelsMixin = {
     /** Draw or refresh the Channel Box for the current selection. */
     _previzRenderChannels() {
         if (!this.isPrevizTab || !this.isPrevizTab()) return;
-        if (!this._cbParamsMode || !this.isPanelDocked || !this.isPanelDocked("params")) return;
-        const ui = (this._cbUI && this._cbUI.root.isConnected) ? this._cbUI : this._cbBuild();
-        if (!ui) return;
-        const item = this.previzSelectedItem();
-        const ids = this.previzSelectedIds();
-        const scene = this.previzScene();
-        const looking = !!(item && scene && scene.activeCamera === item.id);
-        // Everything that decides WHICH rows there are. Values are not in it.
-        const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}|${item.kind === "mesh" && item.mesh ? `${item.mesh.v.length}:${item.mesh.f.length}:${!!item.smooth}:${item.subdiv || 0}:${JSON.stringify(item.uv || null)}` : ""}|${item.frameMask ? `${item.frameMask.on}:${item.frameMask.key}` : ""}` : "";
-        if (sig !== ui.sig) {
-            ui.sig = sig;
-            this._cbBuildRows(ui, item, ids, looking);
+        if (this._cbParamsMode && this.isPanelDocked && this.isPanelDocked("params")) {
+            const ui = (this._cbUI && this._cbUI.root.isConnected) ? this._cbUI : this._cbBuild();
+            if (ui) {
+                const item = this.previzSelectedItem();
+                const ids = this.previzSelectedIds();
+                const scene = this.previzScene();
+                const looking = !!(item && scene && scene.activeCamera === item.id);
+                // Everything that decides WHICH rows there are. Values are not in it.
+                const sig = item ? `${ids.join(",")}|${item.kind}|${looking}|${this._cbConstraintSig ? this._cbConstraintSig(item) : ""}|${Object.keys(item.attrs || {}).join(",")}|${this._cbMorphs(item).length}|${item.kind === "light" && item.light ? `${item.light.type}:${(item.light.fixture || {}).shape}` : ""}|${aimOn(item)}|${item.kind === "mesh" && item.mesh ? `${item.mesh.v.length}:${item.mesh.f.length}:${!!item.smooth}:${item.subdiv || 0}:${JSON.stringify(item.uv || null)}` : ""}|${item.frameMask ? `${item.frameMask.on}:${item.frameMask.key}` : ""}` : "";
+                if (sig !== ui.sig) {
+                    ui.sig = sig;
+                    this._cbBuildRows(ui, item, ids, looking);
+                }
+                this._cbFillValues(ui, item);
+            }
         }
-        this._cbFillValues(ui, item);
+        // Further Parameters panels are Channel Boxes too, each with its own item (imageViewer_paramsInstance.js).
+        // (Their own render comes back through here with a context of theirs: no fan-out from that, or it loops.)
+        if (this._dockInstancesOf && !this._isParamsCtx) {
+            for (const { inst } of this._dockInstancesOf("params")) if (inst.cbRefresh) inst.cbRefresh();
+        }
     },
 
     _cbBuildRows(ui, item, ids, looking) {

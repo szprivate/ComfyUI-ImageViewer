@@ -271,8 +271,8 @@ class MenuBarPaneTests(unittest.TestCase):
                          widgets: vis(pp.querySelector('.params-content')), title: P.paramsTitle.innerText,
                          ids: P.dockPanelEntries().map((x) => x.id),
                          alias: P.isPanelDocked('channels') === P.isPanelDocked('params') }; }""")
-            # The Windows menu's Channel Box puts the Parameters panel away and back.
-            pg.evaluate("() => { const P = window.__panel; P.previzMenuBarOpen('windows'); [...P.shadowRoot.querySelectorAll('button.previz-menu-item')].find((b) => /Channel Box/.test(b.textContent)).click(); }")
+            # The Windows menu's Parameters puts the panel away and back.
+            pg.evaluate("() => { const P = window.__panel; P.previzMenuBarOpen('windows'); [...P.shadowRoot.querySelectorAll('button.previz-menu-item')].find((b) => /Parameters/.test(b.textContent)).click(); }")
             off = pg.evaluate("() => window.__panel.isPanelDocked('params')")
             pg.evaluate("() => window.__panel.togglePanelDocked('channels')")
             on = pg.evaluate("() => window.__panel.isPanelDocked('params')")
@@ -285,7 +285,7 @@ class MenuBarPaneTests(unittest.TestCase):
             pg.close()
         self.assertTrue(st["docked"] and st["mode"] and st["box"], st)
         self.assertFalse(st["widgets"])
-        self.assertEqual(st["title"], "Channel Box")
+        self.assertEqual(st["title"], "Parameters")
         self.assertTrue(st["name"])
         self.assertGreater(st["rows"], 5)
         self.assertNotIn("channels", st["ids"])

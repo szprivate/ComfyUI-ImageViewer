@@ -19,8 +19,8 @@ import { PANE_VIEWS, PANE_LAYOUTS } from "./imageViewer_view3dPanes.js";
 // The third field is the keymap action that shows / hides it (bindable in Settings -> Keybinding).
 const WINDOWS = [
     ["Outliner", "previz", "View3DPrevizPanel"],
-    // The Parameters panel: on a 3D tab it is the Channel Box.
-    ["Channel Box", "params", "View3DChannelBox"],
+    // The Parameters panel: on a 3D tab it shows the channels (the Channel Box's rows).
+    ["Parameters", "params", "View3DChannelBox"],
     ["Curve Editor", "curves", "View3DCurvesPanel"],
     ["Dope Sheet", "dopeSheet", "View3DDopeSheet"],
     ["Anim Layers", "animLayers"],

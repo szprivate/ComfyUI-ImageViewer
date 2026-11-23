@@ -173,7 +173,7 @@ class PanelSwitchTests(unittest.TestCase):
         pg.wait_for_timeout(200)
         items = self.open_switch(pg, "curves")
         self.assertIn("# 3D", items)
-        self.assertIn("Channel Box", items, "Parameters is the Channel Box on a 3D tab")
+        self.assertIn("Parameters", items, "the channel box is the Parameters panel on a 3D tab, and is called that")
         self.pick(pg, "Dope Sheet")
         L = pg.evaluate(LAYOUT)
         self.assertIn("dopeSheet", L["bottom"])

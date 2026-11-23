@@ -322,7 +322,7 @@ const ACTION_DEFS = [
     })),
     { key: "View3DClipsPanel", label: "3D View: Show / Hide Clip Sequencer",
       enabled: _previz, run: (p) => p.togglePanelDocked("clips") },
-    { key: "View3DChannelBox", label: "3D View: Show / Hide Channel Box",
+    { key: "View3DChannelBox", label: "3D View: Show / Hide Parameters",
       enabled: _previz, run: (p) => p.togglePanelDocked("params") },
 
     // On a 3D tab F frames the selection (over the Outliner: shows it there) - imageViewer_previzHotkeys.js.

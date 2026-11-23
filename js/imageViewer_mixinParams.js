@@ -122,7 +122,7 @@ export const ParamsMixin = {
             const d = (v._dockRootEl && v._dockRootEl.ownerDocument) || (v.paramsPanel && v.paramsPanel.ownerDocument) || document;
             const host = d.createElement("div");
             host.className = "params-panel";
-            return createParamsInstance(v, host, {}, saved);
+            return createParamsInstance(v, host, {}, saved, id);
         };
         let running = true;
         const tick  = () => {
