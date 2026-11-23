@@ -643,6 +643,9 @@ class ViewerPanel extends HTMLElement {
         // worth taking the whole viewer down for if a future edit throws here.
         try { this._initFileBrowser(); }   // needs the toolbar button it toggles from
         catch (e) { console.warn('imageViewer: file browser failed to start', e); }
+        // Layers/Picker makers, before a restored layout names their instances (imageViewer_previzLayers.js).
+        try { this._initPrevizLayerPanels(); }
+        catch (e) { console.warn('imageViewer: layers/picker panels failed to start', e); }
         // Last: it adopts all three panels into rails, so they must exist first.
         try { this._initAgentPanel(); }   // the agentY chat panel's slot, before the dock adopts it
         catch (e) { console.warn('imageViewer: agentY panel failed to start', e); }
@@ -931,7 +934,7 @@ class ViewerPanel extends HTMLElement {
             this.paramsPanel.innerHTML    = `
                 <div class="params-header">
                     <span id="params-title">No Node Selected</span>
-                    <button id="params-lock-btn" title="Lock  freeze to currently selected node"></button>
+                    <button id="params-lock-btn" class="params-lock-btn sprite-icon" title="Lock  freeze to currently selected node"></button>
                 </div>
                 <div id="params-content" class="params-content"></div>
             `;

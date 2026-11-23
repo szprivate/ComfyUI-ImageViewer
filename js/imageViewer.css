@@ -1087,6 +1087,12 @@ textarea.param-input {
     background: #222; border: 1px solid #444; border-radius: 3px; cursor: pointer; }
 .curves-sub .curves-action:hover { background: #2c2c2c; color: #fff; }
 .curves-empty { padding: 10px 8px; color: #777; line-height: 1.4; }
+/* An extra Parameter Curves panel picks the node it shows (imageViewer_curvePanelsInstance.js). */
+.curves-node-bar { flex: 0 0 auto; display: flex; padding: 6px 8px 0; }
+.curves-node-sel { flex: 1 1 auto; min-width: 0; min-height: 0; padding: 2px 6px; font-size: 11px;
+    background: #222; border: 1px solid #444; border-radius: 3px; color: #ccc; text-align: left; }
+.curves-node-sel:hover { border-color: #f60; }
+.curves-node-sel option { color: #ccc; background: #111; }
 /* The selected key wears a ring, because its handles belong to it. */
 .kf-dot.chosen { box-shadow: 0 0 0 2px #fff; z-index: 4; }
 /* A tangent handle and the arm holding it. */

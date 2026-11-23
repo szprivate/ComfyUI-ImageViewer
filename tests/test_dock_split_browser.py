@@ -259,7 +259,7 @@ class DockSplitTests(unittest.TestCase):
         labels = pg.evaluate("""()=>[...__panel.shadowRoot.querySelectorAll('.pt-add-menu *')]
             .filter(e=>e.children.length===0).map(e=>e.textContent)""")
         self.assertIn("Files", labels)
-        self.assertNotIn("Parameters", labels, "not itself")
+        self.assertIn("Parameters", labels, "a kind that can multiply offers another of itself")
         self.shot(pg, "9-plus-menu")
         at = pg.evaluate("""()=>{const it=[...__panel.shadowRoot.querySelectorAll('.pt-add-menu *')]
             .find(e=>e.children.length===0&&e.textContent==='Files');const r=it.getBoundingClientRect();return [r.x+r.width/2,r.y+r.height/2]}""")
@@ -269,11 +269,87 @@ class DockSplitTests(unittest.TestCase):
         p, b = self.rect(pg, "#params-panel"), self.rect(pg, "#browser-panel")
         self.assertLess(p["b"], b["t"] + 1, "under it")
         self.assertAlmostEqual(p["w"], b["w"], delta=2)
-        # The main view has one too; a panel open elsewhere moves under it.
+        # The main view has one too; a kind that can multiply and is already open comes up as one MORE of it.
         self.assertTrue(pg.evaluate("()=>!!__panel.shadowRoot.querySelector('#view-add-btn')"))
         pg.evaluate("()=>__panel.dockPanelUnder('history','__view__')")
-        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(V,history),col(params,browser)))")
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),col(V,history@2),col(params,browser)))")
+        self.assertTrue(pg.evaluate("()=>__panel.isPanelDocked('history')"), "the first one keeps its place")
+        pg.evaluate("()=>__panel.dockCloseInstance('history@2')")
+        self.assertEqual(pg.evaluate(SHAPE), "col(row(col(history),V,col(params,browser)))")
         self.shot(pg, "10-added-under")
+        self.assertEqual(self.errors, [])
+
+    def test_a_panel_instance_is_saved_with_the_layout_and_closed_for_good(self):
+        pg = self.page()
+        made = pg.evaluate("""()=>{const P=__panel;
+            P.dockPanelUnder('browser','browser');
+            const el=P._dockPanelEl('browser@2');
+            return { id: P.dockPanelEntries().some(e=>e.id==='browser@2'),
+                     title: el && el.querySelector('.pt-name').textContent,
+                     cls: el && el.className.includes('dock-instance') };}""")
+        self.assertTrue(made["id"])
+        self.assertEqual(made["title"], "Files 2")
+        self.assertTrue(made["cls"])
+        # The layout carries it, and reading it back makes its element again.
+        pg.evaluate("()=>{const P=__panel;window.__ser=JSON.parse(JSON.stringify(P.serializeDock()));P.dockCloseInstance('browser@2');}")
+        self.assertFalse(pg.evaluate("()=>__panel.dockPanelEntries().some(e=>e.id==='browser@2')"))
+        pg.evaluate("()=>__panel.applyDockData(window.__ser)")
+        pg.wait_for_timeout(150)
+        self.assertTrue(pg.evaluate("()=>__panel.dockPanelEntries().some(e=>e.id==='browser@2'&&!e.hidden)"))
+        self.assertTrue(pg.evaluate("()=>!!__panel._dockPanelEl('browser@2')"))
+        # Its close takes it for good; the first browser stays.
+        pg.evaluate("()=>__panel.dockCloseInstance('browser@2')")
+        self.assertFalse(pg.evaluate("()=>!!__panel._dockPanelEl('browser@2')"))
+        self.assertTrue(pg.evaluate("()=>__panel.isPanelDocked('browser')"))
+        self.assertEqual(self.errors, [])
+
+    def test_a_second_node_graph_views_the_same_network(self):
+        pg = self.page()
+        out = pg.evaluate("""async () => {
+            const P = window.__panel;
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            const comp = { format: { width: 640, height: 480, frames: 10, fps: 24 },
+                nodes: [ { id: "1", type: "constant", name: "Plate", x: 40, y: 40, inputs: [] },
+                         { id: "2", type: "output", name: "Output", x: 40, y: 200, inputs: ["1"] } ],
+                output: "2" };
+            const f = window.__fetchApi;
+            window.__fetchApi = async (p, o) => {
+                if (p.startsWith("/imageviewer/comp?")) return { ok: true, json: async () => ({ path: "/tmp/x.comp.json", comp }) };
+                if (p.startsWith("/imageviewer/comp")) return { ok: true, json: async () => ({}) };
+                return f ? f(p, o) : { ok: false, status: 404, json: async () => ({}) };
+            };
+            await P.compOpenFile("/tmp/x.comp.json");
+            await sleep(600);
+            const ed = P._cpActive() && P._cpActive().editor;
+            if (!ed) return { err: "no editor" };
+            P.dockPanelUnder("compGraph", "compGraph");
+            await sleep(250);
+            const el = P._dockPanelEl("compGraph@2");
+            if (!el) return { err: "no instance" };
+            const count = el.querySelectorAll(".cp-node").length;
+            // Its own zoom: the world transform differs from the first graph's.
+            const g = el.querySelector(".cp-graph");
+            const r0 = g.getBoundingClientRect();
+            g.dispatchEvent(new WheelEvent("wheel", { clientX: r0.left + 100, clientY: r0.top + 80, deltaY: -300, bubbles: true, cancelable: true }));
+            await sleep(100);
+            const differ = el.querySelector(".cp-world").style.transform !== P.compGraphPanel.querySelector(".cp-world").style.transform;
+            // One model: a move through the editor redraws both; a click selects in both.
+            const id = el.querySelector(".cp-node").dataset.id;
+            ed.setNodes({ [id]: { x: 300 } });
+            await sleep(150);
+            const moved = el.querySelector('.cp-node[data-id="' + id + '"]').style.left === "300px"
+                && P.compGraphPanel.querySelector('.cp-node[data-id="' + id + '"]').style.left === "300px";
+            const saved = P.serializeDock().inst && P.serializeDock().inst["compGraph@2"];
+            P.dockCloseInstance("compGraph@2");
+            return { count, differ, moved, saved: !!(saved && saved.view),
+                     primary: P.compGraphPanel.querySelectorAll(".cp-node").length };
+        }""")
+        self.assertNotIn("err", out)
+        self.assertGreaterEqual(out["count"], 2)
+        self.assertTrue(out["differ"], "a viewport of its own")
+        self.assertTrue(out["moved"], "the same network, redrawn in both")
+        self.assertTrue(out["saved"], "its viewport saved with the layout")
+        self.assertGreaterEqual(out["primary"], 2)
         self.assertEqual(self.errors, [])
 
 

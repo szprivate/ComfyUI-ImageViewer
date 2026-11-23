@@ -113,6 +113,29 @@ test("a clean copy keeps only what a layout is made of", () => {
     assert.ok(T.isRailLayout(RAILS));
 });
 
+test("panel instances are ordinary ids: two of a kind stay, a true double goes", () => {
+    const known = (id) => ["history", "browser", "params"].includes(id.split("@")[0]);
+    let root = T.tidy(T.fromRails(RAILS).root, known);
+    const b = T.detach(root, "browser");
+    root = T.tidy(root, known);
+    T.railNode(root, "right").children.unshift(b);
+    root = T.tidy(T.insertBeside(root, T.locate(root, "params").node, "bottom", { id: "browser@2", hidden: false }, 240), known);
+    assert.ok(T.locate(root, "browser@2"), "the instance keeps its place");
+    assert.ok(T.locate(root, "browser"), "the first one too");
+    // A second entry with the SAME instance id is a double and goes; a different number stays.
+    const rail = T.railNode(root, "right");
+    rail.children.push({ id: "browser@2", hidden: true });
+    rail.children.push({ id: "browser@3", hidden: true });
+    root = T.tidy(root, known);
+    assert.equal(T.panels(root).filter((p) => p.id === "browser@2").length, 1);
+    assert.ok(T.locate(root, "browser@3"));
+    // An id of a kind that does not multiply is unknown.
+    const noEdit = (id) => known(id) && !id.startsWith("edit");
+    rail.children.push({ id: "editTimeline@2", hidden: true });
+    root = T.tidy(root, noEdit);
+    assert.equal(T.locate(root, "editTimeline@2"), null);
+});
+
 test("a panel dropped on the main view becomes a tab of it, and leaves it again", () => {
     let root = T.tidy(T.fromRails(RAILS).root);
     const p = T.detach(root, "params");

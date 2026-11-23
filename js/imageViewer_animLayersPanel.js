@@ -13,9 +13,16 @@
 //
 // AI motion takes are put on a layer of their own (previzLayerBakeTarget), so
 // a take can be weighted, muted, soloed against another or merged down.
+//
+// The panel comes in instances: the drawing and the rows live in
+// imageViewer_animLayersInstance.js, one closure per panel with its own rows, signature and scroll. This mixin
+// keeps the FIRST one — the markup in imageViewer.html — with its state on the viewer as it always was
+// (this._alUI), registers the maker the dock calls for every further one ("animLayers@2", ...), and fans a
+// refresh out to all of them. The layers they show are the tab's scene, shared: an edit in one is seen by all.
 import * as S from "./imageViewer_scene3d.js";
 import * as L from "./imageViewer_animLayers.js";
 import { notice } from "./imageViewer_exportUI.js";
+import { createAnimLayersInstance } from "./imageViewer_animLayersInstance.js";
 
 export const AnimLayersMixin = {
 
@@ -164,44 +171,31 @@ export const AnimLayersMixin = {
 
     // ── The panel ────────────────────────────────────────────────────────────
 
-    _alBuild() {
+    /** The first panel: the markup's, its state on the viewer (st === this) so this._alUI stays where it was. */
+    _alPrimary() {
+        this._alRegisterMaker();
         const host = this.animLayersPanel;
         if (!host) return null;
-        const doc = host.ownerDocument;
-        host.querySelectorAll(":scope > .al-body").forEach((n) => n.remove());
-        const root = doc.createElement("div");
-        root.className = "al-body";
-        const bar = doc.createElement("div");
-        bar.className = "al-bar";
-        const btn = (text, title, run, cls = "") => {
-            const b = doc.createElement("button");
-            b.className = `previz-btn al-btn ${cls}`.trim();
-            b.textContent = text;
-            b.title = title;
-            b.onclick = (e) => { e.stopPropagation(); run(e); };
-            bar.append(b);
-            return b;
+        if (!this._alInst || this._alInst.el !== host) this._alInst = createAnimLayersInstance(this, host, this, null);
+        return this._alInst;
+    },
+
+    /** Every further one: a panel of its own, showing the same stack, with rows and scroll of its own. */
+    _alRegisterMaker() {
+        if (!this._dockMakers || this._dockMakers().animLayers) return;
+        this._dockMakers().animLayers = (v, id, saved) => {
+            const doc = (v._dockRootEl && v._dockRootEl.ownerDocument)
+                || (v.animLayersPanel && v.animLayersPanel.ownerDocument);
+            if (!doc) return null;
+            const host = doc.createElement("div");
+            host.className = "previz-panel anim-layers-panel";
+            return createAnimLayersInstance(v, host, {}, saved);
         };
-        btn("+ Add", "New additive layer: its keys are added on top of what is below (offsets)",
-            () => this.previzLayerAdd({ mode: "additive" }), "al-add");
-        btn("+ Over", "New override layer: its keys replace what is below, by the layer's weight",
-            () => this.previzLayerAdd({ mode: "override", name: "Override" }), "al-addover");
-        btn("Extract", "Move the selected items' keys on the active layer to a new layer above it",
-            () => this.previzLayerExtract(), "al-extract");
-        btn("Merge", "Merge the active layer into the layer under it (bakes what the two show together)",
-            () => this.previzLayerMergeDown(), "al-merge");
-        const up = btn("▲", "Move the active layer up", () => this._alMoveActive(1), "al-up");
-        const down = btn("▼", "Move the active layer down", () => this._alMoveActive(-1), "al-down");
-        const del = btn("✕", "Delete the active layer and its keys", () => {
-            const id = this.previzScene() && this.previzScene().activeLayer;
-            if (id) this.previzLayerRemove(id);
-        }, "al-del");
-        const list = doc.createElement("div");
-        list.className = "al-list";
-        root.append(bar, list);
-        host.appendChild(root);
-        this._alUI = { root, list, up, down, del, sig: "", rows: new Map() };
-        return this._alUI;
+    },
+
+    _alBuild() {
+        const inst = this._alPrimary();
+        return inst ? inst.build() : null;
     },
 
     _alMoveActive(dir) {
@@ -209,175 +203,25 @@ export const AnimLayersMixin = {
         if (scene && scene.activeLayer) this.previzLayerMove(scene.activeLayer, dir);
     },
 
-    /** Draw the panel (rows rebuilt only when the stack's shape changes). */
-    _alRender() {
-        if (!this.isPrevizTab || !this.isPrevizTab()) return;
-        if (!this.isPanelDocked || !this.isPanelDocked("animLayers")) return;
-        const ui = (this._alUI && this._alUI.root.isConnected) ? this._alUI : this._alBuild();
-        if (!ui) return;
-        const scene = this.previzScene();
-        const layers = (scene && scene.animLayers) || [];
-        const sig = layers.map((l) => `${l.id}:${l.name}:${l.mode}:${l.mute}:${l.solo}:${l.lock}`).join("|")
-            + `#${(scene && scene.activeLayer) || ""}`;
-        if (sig !== ui.sig) {
-            ui.sig = sig;
-            this._alBuildRows(ui, scene, layers);
-        }
-        const active = scene && scene.activeLayer;
-        const i = layers.findIndex((l) => l.id === active);
-        ui.up.disabled = i < 0 || i === layers.length - 1;
-        ui.down.disabled = i <= 0;
-        ui.del.disabled = i < 0;
-        this._alRefreshValues();
+    /** The instances of this kind that are up and in front (the first one is not among them). */
+    _alExtraInstances() {
+        const found = this._dockInstancesOf ? this._dockInstancesOf("animLayers") : [];
+        return found.filter((x) => x.inst !== this._alInst);
     },
 
-    _alBuildRows(ui, scene, layers) {
-        const doc = ui.list.ownerDocument;
-        ui.list.innerHTML = "";
-        ui.rows = new Map();
-        const active = (scene && scene.activeLayer) || null;
-        const solo = layers.some((l) => l.solo && !l.mute);
-        const toggle = (label, title, on, run, cls) => {
-            const b = doc.createElement("button");
-            b.className = `al-tog ${cls}` + (on ? " on" : "");
-            b.textContent = label;
-            b.title = title;
-            b.onclick = (e) => { e.stopPropagation(); run(); };
-            return b;
-        };
-        // Top of the stack first, as a layer editor reads.
-        for (const layer of [...layers].reverse()) {
-            const row = doc.createElement("div");
-            row.className = "al-row" + (layer.id === active ? " active" : "")
-                + (layer.mute || (solo && !layer.solo) ? " silent" : "");
-            row.dataset.layer = layer.id;
-            row.title = L.describeLayer(scene, layer) + (layer.id === active ? " - keys go here" : " - click to key on this layer");
-            row.onclick = () => this.previzLayerSetActive(layer.id);
-            row.oncontextmenu = (e) => { e.preventDefault(); e.stopPropagation(); this._alMenu(layer, e); };
-
-            const mode = toggle(layer.mode === "override" ? "O" : "A",
-                layer.mode === "override" ? "Override - click for additive" : "Additive - click for override",
-                false, () => this.previzLayerSet(layer.id, { mode: layer.mode === "override" ? "additive" : "override" },
-                                                 { label: "layer mode" }), "al-mode " + layer.mode);
-            const name = doc.createElement("span");
-            name.className = "al-name";
-            name.textContent = layer.name;
-            name.ondblclick = (e) => { e.stopPropagation(); this._alRename(layer, name); };
-
-            const slider = doc.createElement("input");
-            slider.type = "range"; slider.min = "0"; slider.max = "1"; slider.step = "0.01";
-            slider.className = "al-weight";
-            slider.title = "Weight";
-            slider.onclick = (e) => e.stopPropagation();
-            slider.oninput = () => this.previzLayerWeight(layer.id, Number(slider.value), { live: true });
-            // The drag's own undo step was taken at its first move.
-            slider.onchange = () => { this.previzLayerWeight(layer.id, Number(slider.value)); this.previzEndDrag?.(); };
-            const num = doc.createElement("input");
-            num.className = "al-wnum";
-            num.title = "Weight (0 - 1)";
-            num.onclick = (e) => e.stopPropagation();
-            num.onchange = () => {
-                const v = Number(num.value);
-                if (Number.isFinite(v)) this.previzLayerWeight(layer.id, Math.max(0, Math.min(1, v)));
-            };
-            const key = doc.createElement("button");
-            key.className = "al-key";
-            key.textContent = "◆";
-            key.onclick = (e) => { e.stopPropagation(); this.previzLayerKeyWeight(layer.id); };
-
-            const m = toggle("M", "Mute: the layer counts for nothing", layer.mute,
-                () => this.previzLayerSet(layer.id, { mute: !layer.mute }, { label: "mute layer" }), "al-mute");
-            const s = toggle("S", "Solo: only soloed layers (and the base) play", layer.solo,
-                () => this.previzLayerSet(layer.id, { solo: !layer.solo }, { label: "solo layer" }), "al-solo");
-            const l = toggle("L", "Lock: the layer takes no keys", layer.lock,
-                () => this.previzLayerSet(layer.id, { lock: !layer.lock }, { label: "lock layer" }), "al-lock");
-            row.append(mode, name, slider, num, key, m, s, l);
-            ui.list.append(row);
-            ui.rows.set(layer.id, { row, slider, num, key });
-        }
-        const base = doc.createElement("div");
-        base.className = "al-row al-base" + (active ? "" : " active");
-        base.dataset.layer = "";
-        base.title = active ? "The item's own keys - click to key on them" : "The item's own keys - keys go here";
-        base.onclick = () => this.previzLayerSetActive(null);
-        const bname = doc.createElement("span");
-        bname.className = "al-name";
-        bname.textContent = "BaseAnimation";
-        base.append(Object.assign(doc.createElement("span"), { className: "al-mode base", textContent: "–" }), bname);
-        ui.list.append(base);
-        if (!layers.length) {
-            ui.list.append(Object.assign(doc.createElement("div"), {
-                className: "al-empty",
-                textContent: "No layers yet. Add one to key changes on top of the animation without touching its keys.",
-            }));
-        }
+    /** Draw the panel: the first one when it is open, and every instance in front. */
+    _alRender() {
+        if (!this.isPrevizTab || !this.isPrevizTab()) return;
+        // Registered even while the panel is put away, so the dock's + menu offers another one.
+        this._alRegisterMaker();
+        if (this.isPanelDocked && this.isPanelDocked("animLayers")) this._alPrimary()?.refresh();
+        for (const { inst } of this._alExtraInstances()) inst.refresh();
     },
 
     /** The weights and key diamonds as they stand at the playhead (cheap; every frame). */
     _alRefreshValues() {
-        const ui = this._alUI;
-        if (!ui || !ui.root.isConnected) return;
-        const scene = this.previzScene();
-        const f = Math.round(this.currentFrame || 0);
-        for (const layer of (scene && scene.animLayers) || []) {
-            const r = ui.rows.get(layer.id);
-            if (!r) continue;
-            const w = L.layerWeightAt(layer, f);
-            const focused = r.num.ownerDocument.activeElement;
-            if (focused !== r.slider) r.slider.value = String(w);
-            if (focused !== r.num) r.num.value = String(Math.round(w * 100) / 100);
-            const keys = (layer.tracks && layer.tracks.weight) || [];
-            r.key.classList.toggle("keyed", keys.length > 0);
-            r.key.classList.toggle("now", keys.some((k) => k.f === f));
-            r.key.title = keys.length ? (keys.some((k) => k.f === f) ? "Remove the weight key here" : "Key the weight here")
-                : "Key the weight here (the weight then animates)";
-        }
-    },
-
-    _alRename(layer, nameEl) {
-        const doc = nameEl.ownerDocument;
-        const input = doc.createElement("input");
-        input.className = "al-rename";
-        input.value = layer.name;
-        nameEl.replaceWith(input);
-        input.focus();
-        input.select();
-        let done = false;
-        const finish = (ok) => {
-            if (done) return;
-            done = true;
-            if (ok && input.value.trim() && input.value.trim() !== layer.name) {
-                this.previzLayerSet(layer.id, { name: input.value.trim() }, { label: "rename layer" });
-            } else {
-                input.replaceWith(nameEl);
-            }
-        };
-        input.onkeydown = (e) => {
-            e.stopPropagation();
-            if (e.key === "Enter") finish(true);
-            else if (e.key === "Escape") finish(false);
-        };
-        input.onclick = (e) => e.stopPropagation();
-        input.onblur = () => finish(true);
-    },
-
-    _alMenu(layer, e) {
-        const scene = this.previzScene();
-        const members = L.layerMembers(scene, layer.id);
-        this._previzOpenMenu([
-            { label: "Make active", run: () => this.previzLayerSetActive(layer.id) },
-            { label: `Select its items (${members.length})`, disabled: !members.length,
-              title: "Nothing is keyed on this layer yet.",
-              run: () => { members.forEach((it, i) => this.previzSelect(it.id, { add: i > 0 })); } },
-            "-",
-            { label: layer.mode === "override" ? "Make additive" : "Make override",
-              run: () => this.previzLayerSet(layer.id, { mode: layer.mode === "override" ? "additive" : "override" }, { label: "layer mode" }) },
-            { label: "Merge down", run: () => this.previzLayerMergeDown(layer.id) },
-            { label: "Move up", run: () => this.previzLayerMove(layer.id, 1) },
-            { label: "Move down", run: () => this.previzLayerMove(layer.id, -1) },
-            "-",
-            { label: "Delete layer", run: () => this.previzLayerRemove(layer.id) },
-        ], e.clientX, e.clientY);
+        if (this._alInst) this._alInst.refreshValues();
+        for (const { inst } of this._alExtraInstances()) inst.refreshValues();
     },
 
     _previzHideLayers() {

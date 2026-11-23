@@ -19,26 +19,14 @@ import * as D from "./imageViewer_matchmoveData.js";
 import * as MS from "./imageViewer_maskShape.js";
 import { openFilePicker, notice, canvasContext } from "./imageViewer_exportUI.js";
 import { openLensChart } from "./imageViewer_lensChart.js";
-import { setEditIcon } from "./imageViewer_editIcons.js";
+import { createMmGuideInstance, createMmPlateInstance } from "./imageViewer_previzMatchmoveInstance.js";
 
 const PLATE_EXTS = [".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi", ".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".heic", ".heif"];
 const PICT_EXTS = [".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx", ".mp4", ".mov"];
-const TRAIL = 12;               // frames of trail drawn behind a track
-const FRAME_CACHE = 48;         // frames of the plate kept as pictures
 const UNDO = 30;
 const BACKPLATE_DISTANCE = 50;  // solve units (its points' median distance is 10)
 const MAX_POINTS = 400;
 const PLATE_SIZE = 1920;        // the longest side of the plate's pictures on the image plane         // locators made of the solved points (the best by error)
-
-const TOOLS = [
-    ["select", "Select", "Click a track to pick it (Shift adds), drag a box or a lasso round several (Shift adds, Ctrl takes away), drag a picked one to move its key here"],
-    ["add", "Add track", "Click a feature: a track is made there and followed through the shot"],
-    ["mask", "Mask", "Click to place a mask's points (drag: pull out tangents), click the first point, Enter or a double-click to close it; drag a point to key it here"],
-    ["lines", "Lines", "Click along something straight in the world (3 or more points), Enter to end the line"],
-    ["ground", "Ground", "Click round the floor (3 or more corners), Enter or a double-click to end: the solved tracks inside set the ground"],
-];
-
-const TOOL_ICONS = { select: "select", add: "mmAdd", mask: "mmMask", lines: "mmLines", ground: "mmGround" };
 
 const STYLE = `
 .mm-body { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; color: #ddd; container-type: inline-size; }
@@ -147,6 +135,7 @@ export const PrevizMatchmoveMixin = {
     // ── the state of this tab's matchmove ────────────────────────────────────
 
     _mmCur(create = true) {
+        this._mmRegisterMakers();
         if (!this.isPrevizTab || !this.isPrevizTab()) return null;
         const key = this.activeTab;
         this._mmTabs = this._mmTabs || {};
@@ -375,93 +364,87 @@ export const PrevizMatchmoveMixin = {
         else this._mmPlateEnsure();
     },
 
-    /** Draw the guide. Called on every change; cheap enough (a few dozen rows). */
+    // ── the panels as instances ──────────────────────────────────────────────
+    // The first guide and the first plate are the markup's own panels, their state on the viewer (st === this),
+    // so this._mmUI and every older caller stay where they were. Every further one is made by the factories
+    // (imageViewer_previzMatchmoveInstance.js) with a state of its own: the matchmove is the tab's and shared,
+    // the view of it (the guide's step and scroll, the plate's pan and zoom) is each panel's own.
+
+    _mmRegisterMakers() {
+        if (!this._dockMakers) return;
+        const makers = this._dockMakers();
+        if (makers.mmGuide) return;
+        const hostOf = (v, cls) => {
+            const doc = (v._dockRootEl && v._dockRootEl.ownerDocument)
+                || (v.mmGuidePanel && v.mmGuidePanel.ownerDocument);
+            if (!doc) return null;
+            const host = doc.createElement("div");
+            host.className = `previz-panel ${cls}`;
+            return host;
+        };
+        makers.mmGuide = (v, id, saved) => {
+            const host = hostOf(v, "mm-guide-panel");
+            return host ? createMmGuideInstance(v, host, {}, saved) : null;
+        };
+        makers.mmPlate = (v, id, saved) => {
+            const host = hostOf(v, "mm-plate-panel");
+            if (!host) return null;
+            host.dataset.panel = id;
+            return createMmPlateInstance(v, host, {}, saved);
+        };
+    },
+
+    /** The first guide: the markup's panel, its state on the viewer. */
+    _mmGuidePrimary() {
+        const host = this.mmGuidePanel;
+        if (!host) return null;
+        if (!this._mmGuideInst || this._mmGuideInst.el !== host) this._mmGuideInst = createMmGuideInstance(this, host, this, null);
+        return this._mmGuideInst;
+    },
+
+    /** The first plate: the markup's panel, its state on the viewer (this._mmUI). */
+    _mmPlatePrimary() {
+        const host = this.mmPlatePanel;
+        if (!host || !this._mmPlateUp() || !this._mmCur()) return null;
+        if (!this._mmPlateInst || this._mmPlateInst.el !== host) this._mmPlateInst = createMmPlateInstance(this, host, this, null);
+        return this._mmPlateInst;
+    },
+
+    _mmGuideExtras() {
+        const found = this._dockInstancesOf ? this._dockInstancesOf("mmGuide") : [];
+        return found.filter((x) => x.inst !== this._mmGuideInst);
+    },
+
+    _mmPlateExtras() {
+        const found = this._dockInstancesOf ? this._dockInstancesOf("mmPlate") : [];
+        return found.filter((x) => x.inst !== this._mmPlateInst);
+    },
+
+    /** Every guide up: the first one and the instances in front. */
+    _mmGuideAll() {
+        const out = this._mmGuideInst ? [this._mmGuideInst] : [];
+        for (const { inst } of this._mmGuideExtras()) out.push(inst);
+        return out;
+    },
+
+    _mmPlateAll() {
+        const out = this._mmPlateInst ? [this._mmPlateInst] : [];
+        for (const { inst } of this._mmPlateExtras()) out.push(inst);
+        return out;
+    },
+
+    /** Draw the guides: the first one when it is open, and every instance in front. */
     _mmRender(force = false) {
         const host = this.mmGuidePanel;
-        if (!host || !this.isPanelDocked || !this.isPanelDocked("mmGuide")) { this._mmPlateEnsure(); return; }
-        const st = this._mmCur();
-        if (!st) return;
-        this._mmStyle(host);
-        const doc = host.ownerDocument;
-        // keep a field being typed into
-        const active = doc.activeElement;
-        if (active && host.contains(active) && active.tagName === "INPUT" && active.type !== "checkbox" && !force) return;
-        const oldScroll = host.querySelector(".mm-scroll");
-        const top = oldScroll ? oldScroll.scrollTop : 0;
-        host.querySelectorAll(":scope > .mm-body").forEach((n) => n.remove());
-        const body = el(doc, "div", "mm-body");
-        const mm = st.mm;
-        const steps = el(doc, "div", "mm-steps");
-        const done = this._mmDone(st);
-        D.MM_STEPS.forEach((s, n) => {
-            const c = el(doc, "button", "mm-chip");
-            c.append(el(doc, "span", "mm-chip-n", done[s.id] && mm.step !== s.id ? "✓" : String(n + 1)), el(doc, "span", "mm-chip-l", s.label));
-            c.dataset.step = s.id;
-            c.title = `${n + 1}. ${s.title}`;
-            c.classList.toggle("on", mm.step === s.id);
-            c.classList.toggle("done", !!done[s.id]);
-            c.onclick = () => { mm.step = s.id; this._mmRender(); this._mmSaveSoon(st); };
-            steps.append(c);
-        });
-        const scroll = el(doc, "div", "mm-scroll");
-        const spec = D.MM_STEPS.find((s) => s.id === mm.step) || D.MM_STEPS[0];
-        scroll.append(el(doc, "div", "mm-title", spec.title), this._mmHelp(doc, "mm-help", spec.help));
-        if (st.loadError) scroll.append(el(doc, "div", "mm-note bad", st.loadError));
-        if (st.busy) {
-            const row = el(doc, "div", "mm-row");
-            row.append(el(doc, "span", "", `${st.busy.what}…`));
-            const stop = el(doc, "button", "mm-btn", "Stop");
-            stop.onclick = () => this._mmStop(st);
-            row.append(stop);
-            const bar = el(doc, "div", "mm-progress");
-            bar.append(el(doc, "div"));
-            scroll.append(row, bar);
-            st.progressBar = bar.firstChild;
-            this._mmProgress();
+        const up = host && this.isPanelDocked && this.isPanelDocked("mmGuide");
+        if (up) {
+            const st = this._mmCur();
+            if (!st) return;
+            this._mmGuidePrimary().render(force);
         }
-        const ctx = { doc, st, mm, box: scroll };
-        if (this._mmAskBox) this._mmAskBox(ctx);
-        const draw = { plate: this._mmStepPlate, lens: this._mmStepLens, masks: this._mmStepMasks, track: this._mmStepTrack,
-                       solve: this._mmStepSolve, objects: this._mmStepObjects, scene: this._mmStepScene }[spec.id];
-        if (mm.step !== "plate" && !mm.plate) scroll.append(el(doc, "div", "mm-note warn", "Pick the plate first (step 1)."));
-        else draw.call(this, ctx);
-        if (st.saveError) scroll.append(el(doc, "div", "mm-note bad", `Not saved: ${st.saveError}`));
-        else if (st.file) {
-            const saved = el(doc, "div", "mm-saved");
-            const name = el(doc, "span", "mm-note", `Saved as ${st.file.split(/[\\/]/).pop()}`);
-            name.title = st.file;
-            const copy = el(doc, "button", "mm-btn", "Copy path");
-            copy.title = st.file;
-            copy.onclick = () => {
-                const nav = (doc.defaultView || window).navigator;
-                Promise.resolve(nav.clipboard && nav.clipboard.writeText(st.file))
-                    .then(() => notice("info", "Path copied", st.file), () => notice("warn", "Not copied", st.file));
-            };
-            saved.append(name, copy);
-            scroll.append(saved);
-        }
-        const tips = el(doc, "details", "mm-tips");
-        tips.open = !!st.tipsOpen;
-        tips.ontoggle = () => { st.tipsOpen = tips.open; };
-        tips.append(el(doc, "summary", "", "What to watch out for"));
-        const ul = el(doc, "ul");
-        for (const t of spec.tips) ul.append(el(doc, "li", "", t));
-        tips.append(ul);
-        scroll.append(tips);
-        const nav = el(doc, "div", "mm-nav");
-        const i = D.STEP_IDS.indexOf(mm.step);
-        const back = el(doc, "button", "mm-btn", "‹ Back");
-        back.disabled = i <= 0;
-        back.onclick = () => { mm.step = D.STEP_IDS[i - 1]; this._mmRender(); };
-        const next = el(doc, "button", "mm-btn primary", "Next ›");
-        next.disabled = i >= D.STEP_IDS.length - 1;
-        next.onclick = () => { mm.step = D.STEP_IDS[i + 1]; this._mmRender(); this._mmSaveSoon(st); };
-        nav.append(back, next);
-        body.append(steps, scroll, nav);
-        host.append(body);
-        scroll.scrollTop = top;
+        for (const { inst } of this._mmGuideExtras()) inst.render(force);
         this._mmPlateEnsure();
-        if (this.updateShapeInfo) this.updateShapeInfo();
+        if (up && this.updateShapeInfo) this.updateShapeInfo();
     },
 
     /** Matchmove is up on this tab: its panels are out and it has a plate (the 3D view's scene stats stand aside). */
@@ -517,10 +500,9 @@ export const PrevizMatchmoveMixin = {
 
     _mmProgress() {
         const st = this._mmCur(false);
-        if (st && st.busy && st.progressBar) {
-            const share = st.busy.total ? Math.min(1, st.busy.done / st.busy.total) : 0;
-            st.progressBar.style.width = `${Math.round(share * 100)}%`;
-        }
+        if (!st || !st.busy) return;
+        const share = st.busy.total ? Math.min(1, st.busy.done / st.busy.total) : 0;
+        for (const inst of this._mmGuideAll()) inst.progress(share);
     },
 
     _mmDone(st) {
@@ -1230,7 +1212,7 @@ export const PrevizMatchmoveMixin = {
                     this._mmNum(wctx, share, (v) => { st.worstShare = Math.max(1, Math.min(50, v || 10)); }, { step: 1, width: "40px" }), el(ctx.doc, "span", "", "%"),
                     this._mmBtn(wctx, "Over 1 px", () => this._mmEdit("delete over 1 px", (m) => D.removeTracks(m, D.withoutMeasured(m, D.worstTracks(m.solve, { px: 1 })))),
                                 { title: "Delete every track whose error is over 1 px (measured tracks are kept)" }));
-        this._mmRow(ctx, "", this._mmBtn(ctx, "Into the scene ›", () => { mm.step = "scene"; this._mmRender(); }));
+        this._mmRow(ctx, "", this._mmBtn(ctx, "Into the scene ›", () => ctx.setStep("scene")));
     },
 
     /** The Measurements section of the Solve step: real distances and shapes from the tracks picked. */
@@ -1685,139 +1667,17 @@ export const PrevizMatchmoveMixin = {
         return this._mmPlateMainShown();
     },
 
+    /** The plate panels: the first one when it is open, and every instance in front. */
     _mmPlateEnsure() {
-        const host = this.mmPlatePanel;
-        if (!host || !this._mmPlateUp()) return null;
-        const st = this._mmCur();
-        if (!st) return null;
-        this._mmStyle(host);
-        let ui = this._mmUI;
-        if (!ui || !ui.root.isConnected || ui.root.parentNode !== host) {
-            host.querySelectorAll(":scope > .mm-plate").forEach((n) => n.remove());
-            const doc = host.ownerDocument;
-            const root = el(doc, "div", "mm-plate");
-            // three groups: the tools (and how Select drags) | what is drawn over the plate | the view
-            const bar = el(doc, "div", "mm-pbar");
-            const group = () => { const g = el(doc, "div", "mm-pgroup"); bar.append(g); return g; };
-            const sep = () => bar.append(el(doc, "span", "mm-psep"));
-            const icon = (b, name) => { const t = b.title; setEditIcon(b, name); b.title = t; };
-            const gTools = group();
-            const tools = {};
-            let shape = null;
-            for (const [id, label, title] of TOOLS) {
-                const b = el(doc, "button", "mm-btn", label);
-                b.title = `${label}: ${title}`;
-                b.dataset.tool = id;
-                b.onclick = () => this.matchmoveTool(id);
-                icon(b, TOOL_ICONS[id]);
-                tools[id] = b;
-                gTools.append(b);
-                if (id === "mask") {
-                    // Bezier / B-spline: the picked mask is turned to it, new masks start as it (shared by every mask tool).
-                    const sw = MS.shapeSwitch(doc, MS.preferredShape(), (k) => this.matchmoveMaskShape(k), { label: "" });
-                    sw.classList.add("mm-mask-shape");
-                    gTools.append(sw);
-                    tools.__shape = sw;
-                }
-                if (id === "select") {
-                    shape = el(doc, "button", "mm-btn mm-select-shape", "");
-                    shape.title = "Box or lasso: how a drag with Select picks tracks (Shift adds, Ctrl takes away)";
-                    shape.onclick = () => { const s2 = this._mmCur(); s2.selectShape = s2.selectShape === "lasso" ? "box" : "lasso"; if (s2.tool !== "select") this.matchmoveTool("select"); this._mmPlateEnsure(); };
-                    gTools.append(shape);
-                }
-            }
-            sep();
-            const gShow = group();
-            const toggles = {};
-            for (const [id, label, title, ic] of [["trails", "Trails", "the tracks' paths over the last frames", "mmTrails"],
-                                                   ["solved", "Solved", "where the solved 3D points land (cyan): far from their track = a bad track", "mmSolved"]]) {
-                const b = el(doc, "button", "mm-btn", label);
-                b.title = `${label}: ${title}`;
-                b.onclick = () => { const s = this._mmCur(); s.show[id] = !s.show[id]; this._mmDraw(); this._mmPlateEnsure(); };
-                icon(b, ic);
-                toggles[id] = b;
-                gShow.append(b);
-            }
-            sep();
-            const gView = group();
-            const fit = el(doc, "button", "mm-btn mm-fit", "Fit");
-            fit.title = "Fit: the whole plate in view (F)";
-            fit.onclick = () => { this._mmCur().view = null; this._mmDraw(); };
-            icon(fit, "fit");
-            gView.append(fit);
-            const info = el(doc, "span", "mm-info", "");
-            bar.append(info);
-            const stage = el(doc, "div", "mm-stage");
-            stage.tabIndex = 0;
-            const canvas = el(doc, "canvas");
-            const empty = el(doc, "div", "mm-empty", "");
-            stage.append(canvas, empty);
-            root.append(bar, stage);
-            host.append(root);
-            ui = this._mmUI = { root, bar, tools, toggles, shape, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
-            this._mmWirePlate(ui);
-        }
-        for (const [id, b] of Object.entries(ui.tools)) if (id !== "__shape") b.classList.toggle("on", st.tool === id);
-        if (ui.tools.__shape) {
-            const pick = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
-            ui.tools.__shape.style.display = st.tool === "mask" ? "" : "none";
-            ui.tools.__shape.setShape(pick ? pick.shape : MS.preferredShape());
-        }
-        for (const [id, b] of Object.entries(ui.toggles)) b.classList.toggle("on", !!st.show[id]);
-        const lasso = st.selectShape === "lasso";
-        if (ui.shape.dataset.icon !== (lasso ? "mmLasso" : "mmBox")) {
-            const t = ui.shape.title;
-            setEditIcon(ui.shape, lasso ? "mmLasso" : "mmBox");
-            ui.shape.title = t;
-        }
-        ui.shape.dataset.shape = lasso ? "lasso" : "box";
-        this._mmLoop();
+        const inst = this._mmPlatePrimary();
+        const ui = inst ? inst.ensure() : null;
+        for (const { inst: extra } of this._mmPlateExtras()) extra.ensure();
         return ui;
     },
 
-    /** A frame loop while the panel is up: redraws when the viewer's frame or the panel's size changed. */
-    _mmLoop() {
-        const ui = this._mmUI;
-        if (!ui || ui.raf) return;
-        const win = ui.root.ownerDocument.defaultView || window;
-        const tick = () => {
-            ui.raf = 0;
-            if (!ui.root.isConnected || !this._mmPlateUp() || !this.isPrevizTab || !this.isPrevizTab()) return;
-            const f = Math.round(this.currentFrame || 0);
-            const w = ui.stage.clientWidth, h = ui.stage.clientHeight;
-            if (f !== ui.lastFrame || w !== ui.lastW || h !== ui.lastH || ui.dirty) {
-                ui.lastFrame = f; ui.lastW = w; ui.lastH = h; ui.dirty = false;
-                this._mmDrawNow();
-            }
-            ui.raf = win.requestAnimationFrame(tick);
-        };
-        ui.raf = win.requestAnimationFrame(tick);
-    },
-
+    /** Every plate draws itself: its own canvas, its own view, its own frame loop. */
     _mmDraw() {
-        if (this._mmUI) this._mmUI.dirty = true;
-        this._mmLoop();
-    },
-
-    /** The plate's picture at frame f: a cached Image of mm_frame (undistorted when asked); null while it loads. */
-    _mmFrameImage(st, f, size) {
-        const mm = st.mm;
-        const lens = st.show.undistort ? this._mmLens(mm) : null;
-        const key = `${f}|${size}|${lens ? `${lens.k1},${lens.k2}` : ""}`;
-        let img = st.frames.get(key);
-        if (img) { st.frames.delete(key); st.frames.set(key, img); return img.complete && img.naturalWidth ? img : (st.frameNear || null); }
-        const doc = this._mmUI.root.ownerDocument;
-        img = new (doc.defaultView || window).Image();
-        const q = { path: mm.plate.path, frame: f, size };
-        if (lens && (lens.k1 || lens.k2)) {
-            q.k1 = lens.k1; q.k2 = lens.k2;
-            if (lens.center) { q.cx = lens.center[0]; q.cy = lens.center[1]; }
-        }
-        img.onload = () => { st.frameNear = img; this._mmDraw(); };
-        img.src = api.apiURL(`/imageviewer/mm_frame?${new URLSearchParams(q)}`);
-        st.frames.set(key, img);
-        while (st.frames.size > FRAME_CACHE) st.frames.delete(st.frames.keys().next().value);
-        return st.frameNear || null;
+        for (const inst of this._mmPlateAll()) inst.draw();
     },
 
     _mmFit(st, w, h) {
@@ -1826,444 +1686,24 @@ export const PrevizMatchmoveMixin = {
         return { zoom: z, x: (w - p.width * z) / 2, y: (h - p.height * z) / 2 };
     },
 
-    _mmToScreen(st, x, y) {
-        const v = st.view;
+    // Plate coordinates. `view` is the pan / zoom of the plate asking: the tab's own for the first panel, an
+    // instance's own for every further one (the tracks and the lens are the tab's either way).
+
+    _mmToScreen(st, x, y, view = st.view) {
         if (st.show.undistort) [x, y] = D.lensPoint(x, y, "undistort", this._mmLens(st.mm), st.mm.plate.width, st.mm.plate.height);
-        return [x * v.zoom + v.x, y * v.zoom + v.y];
+        return [x * view.zoom + view.x, y * view.zoom + view.y];
     },
 
-    _mmToPlate(st, sx, sy) {
-        const v = st.view;
-        let x = (sx - v.x) / v.zoom, y = (sy - v.y) / v.zoom;
+    _mmToPlate(st, sx, sy, view = st.view) {
+        let x = (sx - view.x) / view.zoom, y = (sy - view.y) / view.zoom;
         if (st.show.undistort) [x, y] = D.lensPoint(x, y, "distort", this._mmLens(st.mm), st.mm.plate.width, st.mm.plate.height);
         return [x, y];
     },
 
-    _mmDrawNow() {
-        const ui = this._mmUI;
-        const st = this._mmCur(false);
-        if (!ui || !st) return;
-        const doc = ui.root.ownerDocument;
-        const dpr = (doc.defaultView || window).devicePixelRatio || 1;
-        const w = ui.stage.clientWidth, h = ui.stage.clientHeight;
-        const c = ui.canvas;
-        if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
-        const g = c.getContext("2d");
-        g.setTransform(dpr, 0, 0, dpr, 0, 0);
-        g.clearRect(0, 0, w, h);
-        const mm = st.mm;
-        ui.empty.style.display = mm.plate ? "none" : "flex";
-        if (!mm.plate) {
-            ui.empty.textContent = "No plate yet: pick one in the Matchmove guide (step 1).";
-            ui.info.textContent = "";
-            return;
-        }
-        if (!st.view) st.view = this._mmFit(st, w, h);
-        const f = Math.max(0, Math.min(mm.plate.frames - 1, Math.round(this.currentFrame || 0)));
-        const v = st.view;
-        const size = Math.max(128, Math.min(4096, Math.ceil(Math.max(mm.plate.width, mm.plate.height) * v.zoom * dpr / 256) * 256));
-        const img = this._mmFrameImage(st, f, size);
-        if (img) g.drawImage(img, v.x, v.y, mm.plate.width * v.zoom, mm.plate.height * v.zoom);
-        g.strokeStyle = "#444";
-        g.strokeRect(v.x, v.y, mm.plate.width * v.zoom, mm.plate.height * v.zoom);
-        // masks
-        for (const m of mm.masks) {
-            if (m.matte) {
-                const mc = this._mmMatteCanvas && this._mmMatteCanvas(m, f, doc);
-                if (mc && !st.show.undistort) g.drawImage(mc, v.x, v.y, mm.plate.width * v.zoom, mm.plate.height * v.zoom);
-                if (st.maskSel === m.id) { g.strokeStyle = "#fff"; g.strokeRect(v.x + 1, v.y + 1, mm.plate.width * v.zoom - 2, mm.plate.height * v.zoom - 2); }
-                continue;
-            }
-            const pts = D.maskAt(m, f);
-            if (pts.length < 3) continue;
-            const poly = D.maskPolygon(m, f);
-            g.beginPath();
-            poly.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
-            g.closePath();
-            g.fillStyle = !m.on ? "rgba(120,120,120,0.12)" : m.mode === "object" ? "rgba(80,160,255,0.18)" : "rgba(255,60,60,0.2)";
-            g.fill();
-            g.strokeStyle = st.maskSel === m.id ? "#fff" : m.mode === "object" ? "#5aa0ff" : "#ff5050";
-            g.lineWidth = st.maskSel === m.id ? 1.5 : 1;
-            g.stroke();
-            if (st.maskSel === m.id && st.tool === "mask") {
-                const keyed = m.keys.some((k) => k.f === f);
-                // The same guide as every mask tool: a B-spline's control polygon, the picked point's tangents.
-                const scr = pts.map((p) => this._mmAnchorToScreen(st, MS.fromArr(p)));
-                if (m.shape === "bspline") MS.drawGuide(g, { polygon: scr.map((a) => [a.x, a.y]), closed: true });
-                else if (st.maskPt != null && scr[st.maskPt]) MS.drawGuide(g, { handles: MS.handleLines(scr, [st.maskPt]) });
-                scr.forEach((a, i) => { g.fillStyle = i === st.maskPt ? "#ff8a00" : keyed ? "#ffcc00" : "#fff"; g.fillRect(a.x - 3, a.y - 3, 6, 6); });
-            }
-        }
-        // lens lines
-        if (mm.lens.lines.length || (st.drawing && st.tool === "lines")) {
-            g.strokeStyle = "#ffd24a";
-            g.lineWidth = 1.5;
-            for (const line of [...mm.lens.lines, ...(st.drawing && st.tool === "lines" ? [st.drawing] : [])]) {
-                g.beginPath();
-                line.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
-                g.stroke();
-                for (const [x, y] of line) { const [a, b] = this._mmToScreen(st, x, y); g.fillStyle = "#ffd24a"; g.fillRect(a - 2, b - 2, 4, 4); }
-            }
-        }
-        // the ground's shape (while the Ground tool is up)
-        if (st.tool === "ground" && st.groundRegion && st.groundRegion.pts.length >= 3) {
-            g.beginPath();
-            st.groundRegion.pts.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
-            g.closePath();
-            g.fillStyle = "rgba(90,220,120,0.14)";
-            g.fill();
-            g.strokeStyle = "#5adc78";
-            g.lineWidth = 1;
-            g.stroke();
-        }
-        if (st.drawing && st.tool === "mask" && st.drawing.length) {
-            // A mask on its way: its curve so far, and the tangents of the point just placed (Bezier) or the
-            // control polygon (B-spline) - the guide every mask tool draws.
-            const kind = MS.preferredShape();
-            const scr = st.drawing.map((p) => this._mmAnchorToScreen(st, MS.fromArr(p)));
-            g.strokeStyle = "#fff";
-            g.lineWidth = 1.5;
-            g.stroke(new Path2D(MS.curveD(MS.curveAnchors(scr, kind, false), false, (x, y) => [x, y])));
-            if (kind === "bspline") MS.drawGuide(g, { polygon: scr.map((a) => [a.x, a.y]) });
-            else MS.drawGuide(g, { handles: MS.handleLines(scr, [scr.length - 2, scr.length - 1].filter((i) => i >= 0)) });
-            for (const a of scr) { g.fillStyle = "#fff"; g.fillRect(a.x - 3, a.y - 3, 6, 6); }
-        }
-        if (st.drawing && st.tool === "ground" && st.drawing.length) {
-            g.strokeStyle = "#5adc78";
-            g.beginPath();
-            st.drawing.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
-            g.stroke();
-        }
-        // tracks
-        const errOf = new Map(((mm.solve && mm.solve.points) || []).map((p) => [p.id, p]));
-        let shown = 0;
-        for (const t of mm.tracks) {
-            const k = D.keyAt(t, f);
-            const sel = st.sel.has(t.id);
-            if (st.show.trails && (k || sel)) {
-                g.beginPath();
-                let started = false;
-                for (const q of t.keys) {
-                    if (q[0] < f - TRAIL || q[0] > f) continue;
-                    const [a, b] = this._mmToScreen(st, q[1], q[2]);
-                    if (started) g.lineTo(a, b); else { g.moveTo(a, b); started = true; }
-                }
-                g.strokeStyle = sel ? "rgba(255,255,255,0.8)" : "rgba(255,170,60,0.5)";
-                g.lineWidth = 1;
-                g.stroke();
-            }
-            if (!k) continue;
-            shown++;
-            const [a, b] = this._mmToScreen(st, k[1], k[2]);
-            const e = errOf.get(t.id);
-            const col = !t.on ? "#777" : t.group !== "camera" ? "#5aa0ff" : e ? (e.error < 0.5 ? "#6ce06c" : e.error < 1 ? "#e8d04a" : "#ef5050") : "#ffaa3c";
-            g.strokeStyle = sel ? "#fff" : col;
-            g.lineWidth = sel ? 2 : 1.2;
-            const r = sel ? 6 : 4;
-            g.beginPath();
-            g.moveTo(a - r, b); g.lineTo(a + r, b); g.moveTo(a, b - r); g.lineTo(a, b + r);
-            g.stroke();
-            if (sel) { g.strokeRect(a - 8, b - 8, 16, 16); }
-            if (st.show.solved && e && mm.solve) {
-                const pr = D.projectPoint(mm.solve, f, e.X, this._mmLens(mm), mm.plate.width, mm.plate.height);
-                if (pr) {
-                    const [pa, pb] = this._mmToScreen(st, pr[0], pr[1]);
-                    g.strokeStyle = "#3fd0e0";
-                    g.beginPath(); g.arc(pa, pb, 2.5, 0, Math.PI * 2); g.stroke();
-                    g.beginPath(); g.moveTo(a, b); g.lineTo(pa, pb); g.stroke();
-                }
-            }
-        }
-        // measurements: their tracks joined on this frame (green: holds after the solve, orange: not yet / off)
-        for (const c of mm.constraints || []) {
-            const at = c.ids.map((id) => { const t = mm.tracks.find((q) => q.id === id); const k = t && D.keyAt(t, f); return k ? this._mmToScreen(st, k[1], k[2]) : null; });
-            if (at.filter(Boolean).length < 2) continue;
-            const r = D.constraintResult(mm.solve, c.id);
-            g.strokeStyle = c.on === false ? "rgba(150,150,150,0.6)" : r && r.ok ? "rgba(90,220,120,0.85)" : "rgba(255,170,60,0.85)";
-            g.lineWidth = 1.5;
-            g.setLineDash(c.kind === "distance" ? [] : [5, 3]);
-            g.beginPath();
-            let started = false;
-            for (const q of at) { if (!q) continue; if (started) g.lineTo(q[0], q[1]); else { g.moveTo(q[0], q[1]); started = true; } }
-            if (c.kind === "plane" && at.filter(Boolean).length >= 3) g.closePath();
-            g.stroke();
-            g.setLineDash([]);
-            if (c.kind === "distance" && at[0] && at[1]) {
-                g.fillStyle = g.strokeStyle;
-                g.font = "11px sans-serif";
-                g.fillText(`${Number(c.value.toFixed(3))} m`, (at[0][0] + at[1][0]) / 2 + 4, (at[0][1] + at[1][1]) / 2 - 4);
-            }
-        }
-        if (this._mmDrawPins) this._mmDrawPins(g, st, f, (x, y) => this._mmToScreen(st, x, y));
-        if (st.lasso && st.lasso.length > 1) {
-            g.strokeStyle = "#fff";
-            g.setLineDash([4, 3]);
-            g.beginPath();
-            g.moveTo(st.lasso[0][0], st.lasso[0][1]);
-            for (const [x, y] of st.lasso.slice(1)) g.lineTo(x, y);
-            g.closePath();
-            g.stroke();
-            g.setLineDash([]);
-        }
-        if (st.box) {
-            g.strokeStyle = "#fff";
-            g.setLineDash([4, 3]);
-            g.strokeRect(Math.min(st.box[0], st.box[2]), Math.min(st.box[1], st.box[3]), Math.abs(st.box[2] - st.box[0]), Math.abs(st.box[3] - st.box[1]));
-            g.setLineDash([]);
-        }
-        const tool = TOOLS.find((t) => t[0] === st.tool);
-        ui.info.textContent = `frame ${f} · ${shown} tracks here${st.sel.size ? ` · ${st.sel.size} picked` : ""}${mm.solve ? ` · solve ${Number(mm.solve.rms).toFixed(2)} px` : ""} · ${tool ? tool[1] : ""}`;
-        ui.stage.dataset.frame = String(f);
-        ui.stage.dataset.shown = String(shown);
-    },
-
-    _mmWirePlate(ui) {
-        const stage = ui.stage;
-        const pos = (e) => { const r = stage.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
-        stage.addEventListener("wheel", (e) => {
-            const st = this._mmCur(false);
-            if (!st || !st.view) return;
-            e.preventDefault();
-            const [sx, sy] = pos(e);
-            const k = Math.exp(-e.deltaY * 0.0015);
-            const v = st.view;
-            v.x = sx - (sx - v.x) * k; v.y = sy - (sy - v.y) * k; v.zoom *= k;
-            this._mmDraw();
-        }, { passive: false });
-        stage.addEventListener("pointerdown", (e) => {
-            const st = this._mmCur(false);
-            if (!st || !st.mm.plate || !st.view) return;
-            stage.focus();
-            this._mmFocused = true;
-            const [sx, sy] = pos(e);
-            const win = stage.ownerDocument.defaultView || window;
-            const f = Math.round(this.currentFrame || 0);
-            let move = null, up = null;
-            // The Mask tool's Alt+click (add a point / pull out tangents) and right-click (take a point away) on the
-            // picked mask come before Alt-drag panning; anywhere else they pan / do nothing as before.
-            if (st.tool === "mask" && !st.drawing && (e.button === 2 || (e.button === 0 && e.altKey))) {
-                const [px, py] = this._mmToPlate(st, sx, sy);
-                const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
-                const r = m ? this._mmMaskDown(st, m, e, px, py, 9 / st.view.zoom, f, pos) : false;
-                if (r) { move = r.move || null; up = r.up || null; this._mmDraw(); if (!move) return; }
-            }
-            if (move) { /* the mask's own drag */ }
-            else if (e.button === 1 || (e.button === 0 && e.altKey)) {
-                const v0 = { ...st.view };
-                move = (ev) => { const [x, y] = pos(ev); st.view.x = v0.x + x - sx; st.view.y = v0.y + y - sy; this._mmDraw(); };
-            } else if (e.button === 0) {
-                const [px, py] = this._mmToPlate(st, sx, sy);
-                const radius = 9 / st.view.zoom;
-                if (st.tool === "add") {
-                    this.matchmoveAddTrackAt(px, py).catch((err) => notice("error", "Track", err.message));
-                    return;
-                }
-                if (st.tool === "lines" || st.tool === "ground") {
-                    st.drawing = st.drawing || [];
-                    st.drawing.push([px, py]);
-                    if (e.detail >= 2 && st.tool === "ground" && st.drawing.length >= 4) st.drawing.pop();
-                    if (e.detail >= 2) this._mmFinishDrawing(st);
-                    this._mmDraw();
-                    return;
-                }
-                if (st.tool === "mask") {
-                    const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
-                    const r = this._mmMaskDown(st, m, e, px, py, radius, f, pos);
-                    if (r) { move = r.move || null; up = r.up || null; }
-                    this._mmDraw();
-                    if (!move) return;
-                }
-                if (st.tool === "select") {
-                    const hit = D.trackNear(st.mm, f, px, py, radius);
-                    if (hit) {
-                        if (e.shiftKey || e.ctrlKey || e.metaKey) { if (st.sel.has(hit.id)) st.sel.delete(hit.id); else st.sel.add(hit.id); }
-                        else if (!st.sel.has(hit.id)) st.sel = new Set([hit.id]);
-                        let first = true;
-                        const k0 = D.keyAt(hit, f).slice();
-                        move = (ev) => {
-                            const [qx, qy] = this._mmToPlate(st, ...pos(ev));
-                            if (Math.hypot(qx - px, qy - py) * st.view.zoom < 2 && first) return;
-                            if (first) { this._mmEdit("move key", (m) => { const t = m.tracks.find((q) => q.id === hit.id); D.setKey(t, f, qx, qy, 1); t.manual = true; }); first = false; }
-                            else { D.setKey(st.mm.tracks.find((q) => q.id === hit.id), f, k0[1] + qx - px, k0[2] + qy - py, 1); this._mmDraw(); }
-                        };
-                        up = () => { if (!first) this._mmChanged(st); else { this._mmRender(); this._mmDraw(); } };
-                    } else {
-                        // a box, or a lasso (the bar's Box / Lasso switch): plain replaces, Shift adds, Ctrl takes away
-                        const remove = e.ctrlKey || e.metaKey;
-                        if (!e.shiftKey && !remove) st.sel.clear();
-                        const take = (ids) => { for (const id of ids) if (remove) st.sel.delete(id); else st.sel.add(id); };
-                        if (st.selectShape === "lasso") {
-                            st.lasso = [[sx, sy]];
-                            move = (ev) => {
-                                const [x, y] = pos(ev);
-                                const l = st.lasso[st.lasso.length - 1];
-                                if (Math.hypot(x - l[0], y - l[1]) >= 3) { st.lasso.push([x, y]); this._mmDraw(); }
-                            };
-                            up = () => {
-                                const poly = st.lasso.map(([x, y]) => this._mmToPlate(st, x, y));
-                                st.lasso = null;
-                                if (poly.length >= 3) take(D.tracksInPolygon(st.mm, f, poly));
-                                this._mmRender(); this._mmDraw();
-                            };
-                        } else {
-                            st.box = [sx, sy, sx, sy];
-                            move = (ev) => { const [x, y] = pos(ev); st.box[2] = x; st.box[3] = y; this._mmDraw(); };
-                            up = () => {
-                                const [x0, y0] = this._mmToPlate(st, st.box[0], st.box[1]);
-                                const [x1, y1] = this._mmToPlate(st, st.box[2], st.box[3]);
-                                take(D.tracksInRect(st.mm, f, x0, y0, x1, y1));
-                                st.box = null;
-                                this._mmRender(); this._mmDraw();
-                            };
-                        }
-                    }
-                    this._mmDraw();
-                }
-            }
-            if (!move) return;
-            e.preventDefault();
-            const mv = (ev) => move(ev);
-            const end = (ev) => {
-                win.removeEventListener("pointermove", mv);
-                win.removeEventListener("pointerup", end);
-                if (up) up(ev);
-            };
-            win.addEventListener("pointermove", mv);
-            win.addEventListener("pointerup", end);
-        });
-        stage.addEventListener("focusout", () => { this._mmFocused = false; });
-        stage.addEventListener("contextmenu", (e) => e.preventDefault());
-    },
-
     /** A screen anchor from a plate anchor (the point and its tangents). */
-    _mmAnchorToScreen(st, a) {
-        const [x, y] = this._mmToScreen(st, a.x, a.y), [ix, iy] = this._mmToScreen(st, a.ix, a.iy), [ox, oy] = this._mmToScreen(st, a.ox, a.oy);
+    _mmAnchorToScreen(st, a, view = st.view) {
+        const [x, y] = this._mmToScreen(st, a.x, a.y, view), [ix, iy] = this._mmToScreen(st, a.ix, a.iy, view), [ox, oy] = this._mmToScreen(st, a.ox, a.oy, view);
         return { x, y, ix, iy, ox, oy };
-    },
-
-    /**
-     * A press with the Mask tool, by the rules every mask tool shares (imageViewer_maskShape.js): while drawing, a
-     * click places a point and its drag pulls out the point's tangents (a B-spline's: moves it), the first point /
-     * a double-click closes; on the picked mask, a point or a tangent is dragged (keyed at this frame), Alt+click
-     * on the outline adds a point, right-click on a point takes it away; elsewhere a new mask is begun.
-     * -> {move, up} for a drag, {} when the press was taken, false when it was not (Alt pans, then).
-     */
-    _mmMaskDown(st, m, e, px, py, radius, f, pos) {
-        const kind = MS.preferredShape();
-        const place = () => {
-            const pt = [px, py];
-            st.drawing.push(pt);
-            const s0 = this._mmToScreen(st, px, py);
-            return {
-                move: (ev) => {
-                    const [qx, qy] = this._mmToPlate(st, ...pos(ev));
-                    const at = st.drawing && st.drawing.indexOf(pt);
-                    if (at == null || at < 0) return;
-                    if (kind === "bspline") { st.drawing[at] = [qx, qy]; this._mmDraw(); return; }
-                    const s1 = this._mmToScreen(st, qx, qy);
-                    if (Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) < 2) return;
-                    st.drawing[at] = [px, py, 2 * px - qx, 2 * py - qy, qx, qy];
-                    this._mmDraw();
-                },
-                up: () => this._mmDraw(),
-            };
-        };
-        if (st.drawing) {
-            if (e.button !== 0) return false;
-            const d = st.drawing;
-            if (d.length >= 3 && (MS.isDoubleClick(st, e, e.clientX, e.clientY) || Math.hypot(d[0][0] - px, d[0][1] - py) <= radius)) { this._mmFinishDrawing(st); return {}; }
-            return place();
-        }
-        if (m) {
-            const pts = D.maskAt(m, f).map((p) => p.slice());
-            const key = (fn) => {
-                let first = true;
-                return (ev) => {
-                    fn(this._mmToPlate(st, ...pos(ev)), ev);
-                    if (first) { this._mmEdit("mask key", (mm2) => D.setMaskKey(mm2.masks.find((q) => q.id === m.id), f, pts)); first = false; }
-                    else { D.setMaskKey(st.mm.masks.find((q) => q.id === m.id), f, pts); this._mmDraw(); }
-                };
-            };
-            // the picked point's tangents (Bezier)
-            if (m.shape !== "bspline" && st.maskPt != null && pts[st.maskPt]) {
-                const i = st.maskPt, a = MS.fromArr(pts[i]);
-                for (const side of ["in", "out"]) {
-                    const hx = side === "in" ? a.ix : a.ox, hy = side === "in" ? a.iy : a.oy;
-                    if ((hx !== a.x || hy !== a.y) && Math.hypot(hx - px, hy - py) <= radius) {
-                        return { move: key(([qx, qy], ev) => {
-                            const b = { ...a };
-                            if (side === "in") { b.ix = qx; b.iy = qy; } else { b.ox = qx; b.oy = qy; }
-                            if (!ev.altKey) {   // the other side mirrored, unless Alt breaks the tangent
-                                if (side === "in") { b.ox = 2 * a.x - qx; b.oy = 2 * a.y - qy; } else { b.ix = 2 * a.x - qx; b.iy = 2 * a.y - qy; }
-                            }
-                            pts[i] = [b.x, b.y, b.ix, b.iy, b.ox, b.oy];
-                        }), up: () => this._mmChanged(st) };
-                    }
-                }
-            }
-            const i = pts.findIndex((p) => Math.hypot(p[0] - px, p[1] - py) <= radius);
-            if (i >= 0 && e.button === 2) {
-                if (pts.length <= 3) { notice("warn", "Mask", "A mask needs three points; delete the mask instead."); return {}; }
-                this._mmEdit("mask point", (mm2) => { for (const k of mm2.masks.find((q) => q.id === m.id).keys) if (k.pts.length === pts.length) k.pts.splice(i, 1); });
-                st.maskPt = null;
-                this._mmChanged(st);
-                return {};
-            }
-            if (e.button === 2) return false;
-            if (i >= 0 && e.button === 0 && e.altKey && m.shape !== "bspline") {
-                // Alt+drag on a point pulls out its tangents (mirrored), as when it was placed
-                st.maskPt = i;
-                const a = MS.fromArr(pts[i]);
-                return { move: key(([qx, qy]) => { pts[i] = [a.x, a.y, 2 * a.x - qx, 2 * a.y - qy, qx, qy]; }), up: () => this._mmChanged(st) };
-            }
-            if (i >= 0 && e.button === 0) {
-                st.maskPt = i;
-                const a = MS.fromArr(pts[i]);
-                return { move: key(([qx, qy]) => {
-                    const dx = qx - a.x, dy = qy - a.y;   // the tangents ride along
-                    pts[i] = pts[i].length >= 6 ? [qx, qy, a.ix + dx, a.iy + dy, a.ox + dx, a.oy + dy] : [qx, qy];
-                }), up: () => this._mmChanged(st) };
-            }
-            const poly = D.maskPolygon(m, f);
-            if (e.button === 0 && e.altKey) {
-                // a point on the outline between the two around it, in every key (keys keep as many points)
-                const anch = MS.curveAnchors(pts.map(MS.fromArr), m.shape, true);
-                let best = null;
-                anch.forEach((a, j) => {
-                    const b = anch[(j + 1) % anch.length];
-                    for (let k = 1; k < 24; k++) {
-                        const [x, y] = MS.bezierAt(a, b, k / 24), dd = Math.hypot(x - px, y - py);
-                        if (!best || dd < best.d) best = { j, t: k / 24, d: dd };
-                    }
-                });
-                if (!best || best.d > radius * 1.6) return false;
-                {
-                    this._mmEdit("mask point", (mm2) => {
-                        const mk = mm2.masks.find((q) => q.id === m.id);
-                        for (const k of mk.keys) {
-                            if (k.pts.length !== pts.length) continue;
-                            const A = MS.curveAnchors(k.pts.map(MS.fromArr), mk.shape, true);
-                            const [x, y] = MS.bezierAt(A[best.j], A[(best.j + 1) % A.length], best.t);
-                            k.pts.splice(best.j + 1, 0, [x, y]);
-                        }
-                    });
-                    st.maskPt = best.j + 1;
-                    this._mmChanged(st);
-                }
-                return {};
-            }
-            if (e.button === 0 && !D.pointInPolygon(poly, px, py)) {
-                st.maskSel = null;
-                st.maskPt = null;
-                st.drawing = [];
-                return place();
-            }
-            return {};
-        }
-        if (e.button !== 0) return false;
-        st.drawing = [];
-        st.maskPt = null;
-        return place();
     },
 
     _mmFinishDrawing(st) {
@@ -2297,10 +1737,10 @@ export const PrevizMatchmoveMixin = {
 
     /** Asked by handleKeyDown first; true when the Plate panel took the key. */
     mmKeyDown(e) {
-        const ui = this._mmUI;
-        if (!ui || !this._mmFocused || !ui.root.isConnected || !this.isPrevizTab || !this.isPrevizTab()) return false;
-        const path = e.composedPath ? e.composedPath() : [];
-        if (!path.includes(ui.stage)) return false;
+        if (!this.isPrevizTab || !this.isPrevizTab()) return false;
+        // whichever plate has the focus: the edits are the tab's, the view fitted is that panel's own
+        const plate = this._mmPlateAll().find((inst) => inst.keyTarget(e));
+        if (!plate) return false;
         const st = this._mmCur(false);
         if (!st) return false;
         const k = e.key, ctrl = e.ctrlKey || e.metaKey;
@@ -2326,7 +1766,7 @@ export const PrevizMatchmoveMixin = {
         } else if (ctrl && (k === "z" || k === "Z")) this._mmUndo(e.shiftKey);
         else if (ctrl && (k === "y" || k === "Y")) this._mmUndo(true);
         else if (ctrl && (k === "a" || k === "A")) { st.sel = new Set(st.mm.tracks.filter((t) => D.keyAt(t, f)).map((t) => t.id)); this._mmRender(); this._mmDraw(); }
-        else if (!ctrl && (k === "f" || k === "F")) { st.view = null; this._mmDraw(); }
+        else if (!ctrl && (k === "f" || k === "F")) plate.fit();
         else if (!ctrl && (k === "q" || k === "Q")) this.matchmoveTool("select");
         else if (!ctrl && (k === "t" || k === "T")) this.matchmoveTool("add");
         else if (!ctrl && (k === "m" || k === "M")) this.matchmoveTool("mask");

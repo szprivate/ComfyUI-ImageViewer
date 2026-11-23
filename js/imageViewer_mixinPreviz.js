@@ -22,6 +22,7 @@ import "./imageViewer_animLayers.js";
 import { pref, PREF } from "./imageViewer_settings.js";
 import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
+import { createOutlinerInstance } from "./imageViewer_previzOutlinerInstance.js";
 import { PrevizUsdMixin } from "./imageViewer_previzUsd.js";
 import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
@@ -340,19 +341,19 @@ export const PrevizMixin = {
         return name;
     },
 
-    /** Edit a name in place in the outliner — the selected item's by default. */
-    previzBeginRename(id = this._previzSelection) {
+    /** Edit a name in place in the outliner — the selected item's by default. `st` is the view whose row it is. */
+    previzBeginRename(id = this._previzSelection, st = this) {
         const item = S.itemById(this.previzScene(), id);
         if (!item) return false;
         if (!this.previzIsSelected(id)) this.previzSelect(id);
         // Collapsed parents would hide the row being edited.
         let up = item.parent;
         while (up) {
-            if (this._previzCollapsed) this._previzCollapsed.delete(up);
+            if (st._previzCollapsed) st._previzCollapsed.delete(up);
             up = (S.itemById(this.previzScene(), up) || {}).parent;
         }
-        this._previzRenaming = { id, value: item.name, fresh: true };
-        if (!this.isPanelDocked("previz")) this.setPanelDocked("previz", true);
+        st._previzRenaming = { id, value: item.name, fresh: true };
+        if (st === this && !this.isPanelDocked("previz")) this.setPanelDocked("previz", true);
         this._previzRenderPanel();
         return true;
     },
@@ -362,8 +363,8 @@ export const PrevizMixin = {
      * playback does every frame — because what was typed is kept on
      * `_previzRenaming` and the field is put back on the new row.
      */
-    _previzMountRename(row, nameEl, item) {
-        const state = this._previzRenaming;
+    _previzMountRename(row, nameEl, item, st = this) {
+        const state = st._previzRenaming;
         const doc = row.ownerDocument;
         const input = doc.createElement("input");
         input.className = "previz-rename";
@@ -376,7 +377,7 @@ export const PrevizMixin = {
         const finish = (commit) => {
             if (done) return;
             done = true;
-            this._previzRenaming = null;
+            st._previzRenaming = null;
             if (commit) this.previzRename(item.id, input.value);
             else this._previzRenderPanel();
         };
@@ -400,7 +401,7 @@ export const PrevizMixin = {
         // the user clicking away — a redraw has mounted a new one by then.
         input.onblur = () => {
             (doc.defaultView || window).setTimeout(() => {
-                if (this._previzRenaming === state && state.input === input) finish(true);
+                if (st._previzRenaming === state && state.input === input) finish(true);
             }, 0);
         };
         for (const type of ["click", "pointerdown", "mousedown", "dblclick"]) {
@@ -1155,60 +1156,33 @@ export const PrevizMixin = {
      * (rail, width, title bar, dragging); previz only puts a body inside it, so
      * an undocked viewer takes the whole thing with it and nothing here needs
      * to know which window it ended up in.
+     *
+     * The first Outliner keeps its state on the viewer (st === this), so every
+     * older caller of this._previzUI / this._previzCollapsed still reads it; the
+     * build and the draw live in the factory (imageViewer_previzOutlinerInstance.js).
      */
     _previzBuildPanel() {
         const host = this.previzPanel;
         if (!host) return null;
-        const doc = host.ownerDocument;
-        const el = (tag, cls, text) => {
-            const n = doc.createElement(tag);
-            if (cls) n.className = cls;
-            if (text !== undefined) n.textContent = text;
-            return n;
-        };
-        const root = el("div", "previz-body");
+        this._previzOutlinerRegisterMaker();
+        if (!this._previzOutlinerInst || this._previzOutlinerInst.el !== host) {
+            this._previzOutlinerInst = createOutlinerInstance(this, host, this, null);
+            return this._previzUI;
+        }
+        return this._previzOutlinerInst.build();
+    },
 
-        // Everything that used to be a button here is in the 3D canvas's menu bar now
-        // (imageViewer_previzMenuBar.js): the Outliner is the tree.
-        this._previzBindDrops(host);
-
-        const list = el("div", "previz-list");
-        // The space below the tree is "no parent": dropping a row here lifts it
-        // out of whatever group it was in.
-        list.ondragover = (e) => {
-            if (!this._previzDragItem || e.target.closest(".previz-item")) return;
-            e.preventDefault();
-            this._previzClearDropMarks();
-            list.classList.add("drop-into");
+    /** Every further Outliner: a panel of its own, showing the same scene, with search, filter and folds of its own. */
+    _previzOutlinerRegisterMaker() {
+        if (!this._dockMakers || this._dockMakers().previz) return;
+        this._dockMakers().previz = (v, id, saved) => {
+            const doc = (v._dockRootEl && v._dockRootEl.ownerDocument)
+                || (v.previzPanel && v.previzPanel.ownerDocument);
+            if (!doc) return null;
+            const host = doc.createElement("div");
+            host.className = "previz-panel";
+            return createOutlinerInstance(v, host, {}, saved);
         };
-        list.ondragleave = () => list.classList.remove("drop-into");
-        list.ondrop = (e) => {
-            if (!this._previzDragItem || e.target.closest(".previz-item")) return;
-            e.preventDefault();
-            this._previzClearDropMarks();
-            this.previzMoveItems(this._previzDragIds(), null, null);
-        };
-
-        // A right-click on the empty space: what puts something into the scene
-        // (Sebastian 2026-11-12) - the menu bar's Create menu and File > Import Model.
-        list.oncontextmenu = (e) => {
-            if (e.target.closest(".previz-item")) return;
-            e.preventDefault();
-            e.stopPropagation();
-            this._previzOpenMenu(this._previzOutlinerSpaceMenuEntries(), e.clientX, e.clientY);
-        };
-
-        // The search field and the filter, above the tree (imageViewer_previzOutliner.js).
-        const head = this._olBuildHead(doc);
-        root.append(head.head, list);
-        // The title bar the dock built is a sibling and stays; only previz's own
-        // body is replaced.
-        this._previzCloseAddMenu();
-        host.querySelectorAll(":scope > .previz-body").forEach((n) => n.remove());
-        host.appendChild(root);
-        this._previzUI = { root, list, head: head.head, search: head.search, clear: head.clear, filter: head.filter };
-        if (this._olCloseFilterMenu) this._olCloseFilterMenu();
-        return this._previzUI;
     },
 
     /**
@@ -1619,7 +1593,7 @@ export const PrevizMixin = {
      * on one of five acts on all five; a row outside it selects itself first,
      * because acting on something you cannot see selected is a nasty surprise.
      */
-    _previzItemMenu(id, ev) {
+    _previzItemMenu(id, ev, st = this) {
         ev.preventDefault();
         ev.stopPropagation();
         if (!this.previzIsSelected(id)) this.previzSelect(id);
@@ -1629,7 +1603,7 @@ export const PrevizMixin = {
         const many = ids.length > 1;
         const count = `${ids.length} items`;
         this._previzOpenMenu([
-            { label: "Rename", disabled: many, run: () => this.previzBeginRename(id) },
+            { label: "Rename", disabled: many, run: () => this.previzBeginRename(id, st) },
             "-",
             { label: many ? `Group ${count}` : "Group", run: () => this.previzGroupSelection() },
             "-",
@@ -1688,6 +1662,8 @@ export const PrevizMixin = {
     },
 
     _previzRenderPanel() {
+        // Registered even while the panel is put away, so the dock's + menu offers another Outliner.
+        this._previzOutlinerRegisterMaker();
         if (!this.isPrevizTab()) { this._previzHidePanel(); return; }
         const ui = (this._previzUI && this._previzUI.root && this._previzUI.root.isConnected)
             ? this._previzUI : this._previzBuildPanel();
@@ -1725,19 +1701,20 @@ export const PrevizMixin = {
         if (this._plMaybeCheck) this._plMaybeCheck();
         // So is Anim Layers (imageViewer_animLayersPanel.js).
         if (this._alRender) this._alRender();
+        // Every further Outliner in front draws its own view of the same scene, whether or not the first is up.
+        if (this._dockInstancesOf) {
+            for (const { inst } of this._dockInstancesOf("previz")) inst.refresh();
+        }
         if (!this.isPanelDocked("previz")) return;
-        const scene = this.previzScene();
-        const doc = ui.root.ownerDocument;
 
         this._previzRefreshUndoButtons();
 
-        // Outliner: the tree as the search and the filter have it (imageViewer_previzOutliner.js).
-        this._olDrawTree(ui, scene, doc);
+        // Outliner: the tree as the search and the filter have it (imageViewer_previzOutlinerInstance.js).
+        if (this._previzOutlinerInst) this._previzOutlinerInst.refresh();
     },
 
 
-    _previzClearDropMarks() {
-        const ui = this._previzUI;
+    _previzClearDropMarks(ui = this._previzUI) {
         if (!ui || !ui.list) return;
         ui.list.querySelectorAll(".drop-into, .drop-before, .drop-after")
             .forEach((n) => n.classList.remove("drop-into", "drop-before", "drop-after"));
@@ -1751,7 +1728,7 @@ export const PrevizMixin = {
      * showing means first among them, which is where the line is drawn.
      * Null when the drop would put something inside itself.
      */
-    _previzDropFor(row, item, e, scene) {
+    _previzDropFor(row, item, e, scene, st = this) {
         const ids = this._previzDragIds();
         if (!ids.length || ids.includes(item.id)) return null;
         const r = row.getBoundingClientRect();
@@ -1759,7 +1736,7 @@ export const PrevizMixin = {
         const parent = item.parent || null;
         const siblings = S.childrenOf(scene, parent);
         const kids = S.childrenOf(scene, item.id);
-        const open = kids.length && !(this._previzCollapsed && this._previzCollapsed.has(item.id));
+        const open = kids.length && !(st._previzCollapsed && st._previzCollapsed.has(item.id));
         let drop;
         if (y < 0.25) drop = { zone: "before", parent, before: item.id };
         else if (y > 0.75) {
@@ -1787,7 +1764,7 @@ export const PrevizMixin = {
      * their new siblings, or last. They keep their order and their own local
      * numbers, and the whole move is one undo step.
      */
-    previzMoveItems(ids, parentId, beforeId) {
+    previzMoveItems(ids, parentId, beforeId, st = this) {
         const scene = this.previzScene();
         const list = (ids || []).filter((id) => S.itemById(scene, id));
         if (!scene || !list.length) return false;
@@ -1814,7 +1791,7 @@ export const PrevizMixin = {
             S.moveItem(scene, id, parentId, beforeId);
         }
         // Showing where it went: a folded parent opens.
-        if (parentId && this._previzCollapsed) this._previzCollapsed.delete(parentId);
+        if (parentId && st._previzCollapsed) st._previzCollapsed.delete(parentId);
         this.previzChanged({ reload: true });
         return true;
     },
