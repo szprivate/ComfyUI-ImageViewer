@@ -90,6 +90,23 @@ class PythonApi(unittest.TestCase):
         with self.assertRaises(A.CompError):
             c.apply([{"op": "explode"}])
 
+    def test_card_setup_and_the_3d_warnings(self):
+        c = A.Comp.new(24, 16)
+        got = c.apply([{"op": "add", "type": "read", "file": "plate.png"},
+                       {"op": "connect", "node": "Output1", "from": "$0"},
+                       {"op": "card_setup", "node": "$0", "renderer": "path traced"},
+                       {"op": "add", "type": "light3d"}])
+        self.assertEqual(got["ids"], ["Read1", "Card1", "Camera1", "Render3D1", "Light1"])
+        self.assertEqual(c.node("Render3D1")["inputs"][:2], ["Card1", "Camera1"])
+        self.assertEqual(c.node("Render3D1")["renderer"], "path traced")
+        self.assertEqual(c.node("Output1")["inputs"], ["Render3D1"])
+        warn = c.summary().get("warnings") or {}
+        self.assertEqual(list(warn), ["Light1"], "only the light is not wired")
+        c.apply([{"op": "add", "type": "render3d", "inputs": ["Read1"]}])
+        self.assertIn("Render3D2", c.summary()["warnings"], "a picture wired into a scene input draws nothing")
+        with self.assertRaises(A.CompError):
+            c.apply([{"op": "card_setup", "node": "Camera1"}])
+
 
 class CommandLine(unittest.TestCase):
     def setUp(self):

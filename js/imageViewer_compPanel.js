@@ -1291,7 +1291,11 @@ export const CompPanelMixin = {
 
     /** The comp tab's 3D renderer (made on first use; it lives in the tab's element, hidden). */
     _cpEngine(rec) {
-        if (!rec.engine) rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); } });
+        if (!rec.engine) {
+            rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); } });
+            // A trace running: the info line says how far it is (the picture is kept, so this costs little).
+            rec.engine.onProgress = () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); };
+        }
         return rec.engine;
     },
 

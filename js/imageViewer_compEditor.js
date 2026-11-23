@@ -365,8 +365,8 @@ export function createCompEditor(host, opts = {}) {
      * Node id's picture at f: from the cache, else the GPU (a region only when `roi`: not kept then), else renderNode.
      * `aheadOnly`: keep only this picture (rendering ahead).
      */
-    function picture(id, f, scale, pics, roi, aheadOnly) {
-        const ctx = { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf,
+    function picture(id, f, scale, pics, roi, aheadOnly, noTrace) {
+        const ctx = { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf, noTrace: !!(aheadOnly || noTrace),
             cacheBytes: CACHE_BYTES, keysUsed: new Map(), ...(aheadOnly ? { cacheIds: new Set([id]) } : { cacheAll: true }) };
         const key = C.resultKey(st.comp, id, f, ctx);
         if (heavy.has(key)) { const kept = heavy.get(key); heavy.delete(key); heavy.set(key, kept); const im = kept.img; im.ch = kept.ex; ctx.keysUsed.set(`${id}@${f}`, key); return { img: im, ctx, how: "kept" }; }
@@ -857,17 +857,23 @@ export function createCompEditor(host, opts = {}) {
             queueRender();
         },
     };
-    async function render3dFrame(id, f, view, w, h) {
+    async function render3dFrame(id, f, view, w, h, { raster = false } = {}) {
         const c = JSON.parse(JSON.stringify(st.comp));
         const n = (c.nodes || []).find((x) => x.id === id);
         if (!n || n.type !== "render3d") return null;
+        if (raster && n.renderer === "path traced") n.renderer = "3D space";
         n.inputs = [n.inputs[0], n.inputs[1], null];
         n.depth = "depth.z";
         const scale = w / Math.max(1, c.format.width);
         const pics = new Map();
         await loadNeeds(C.sourceNeeds(c, id, f, view || eyeNow()), pics, scale);
-        const ctx = Object.assign(sourcesCtx(pics), { scale, view: view || eyeNow() });
-        const img = C.renderNode(c, id, f, ctx);
+        const ctx = Object.assign(sourcesCtx(pics), { scale, view: view || eyeNow(), traces: [] });
+        let img = C.renderNode(c, id, f, ctx);
+        // A path traced Render3D: wait for its trace, then make the frame again with it.
+        if (ctx.traces.length) {
+            await Promise.all(ctx.traces).catch(() => null);
+            img = C.renderNode(c, id, f, Object.assign(sourcesCtx(pics), { scale, view: view || eyeNow() }));
+        }
         if (!img || img.w !== w || img.h !== h) return null;
         return { w, h, data: img.data, depth: img.ch && img.ch["depth.z"] ? img.ch["depth.z"] : null };
     }
@@ -907,7 +913,7 @@ export function createCompEditor(host, opts = {}) {
             roomLastKey = key;
             const F = C.formatAt(st.comp, t), k = Math.min(1, 256 / Math.max(F.width, F.height));
             const w = Math.max(1, Math.round(F.width * k)), h = Math.max(1, Math.round(F.height * k));
-            try { await render3dFrame(t, st.frame, eyeNow(), w, h); } catch (_) { /* the room keeps what it had */ }
+            try { await render3dFrame(t, st.frame, eyeNow(), w, h, { raster: true }); } catch (_) { /* the room keeps what it had */ }
         }
         if (o.room3dSync) o.room3dSync();
     }
@@ -920,6 +926,11 @@ export function createCompEditor(host, opts = {}) {
         win().requestAnimationFrame(() => { if (g !== moveGen) return; renderQueued = false; draw(); });
     }
     /** The view the picture is made in (a comp with views; null without). */
+    /** A path traced Render3D being traced: how far it is (the raster picture is up meanwhile). */
+    const traceNote = () => {
+        const e = o.engine3d ? o.engine3d() : null, p = e && e.traceProgress;
+        return p ? ` · path tracing ${p.done}/${p.of}` : e && e.traceWhy ? ` · not path traced: ${e.traceWhy}` : "";
+    };
     const eyeNow = () => { const vs = C.viewsOf(st.comp); return vs.includes(st.eye) ? st.eye : vs[0] || null; };
     /** renderNode's sources from the pixels loaded for a draw (Reads per view, DeepReads' deep pictures). */
     const sourcesCtx = (pics) => ({ view: eyeNow(), source: (n, nf) => pics.get(C.srcKey(n, nf)) || null,
@@ -985,7 +996,7 @@ export function createCompEditor(host, opts = {}) {
         const t0 = performance.now();
         const tLoad = t0 - tAsk;
         const roi = visibleRegion(scale);
-        const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false);
+        const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false, scale !== base);
         lastRoi = img.roi || null;
         lastHow = how;
         lastMs = Math.round(performance.now() - t0);
@@ -1031,7 +1042,7 @@ export function createCompEditor(host, opts = {}) {
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}${traceNote()}`;
         roomAfterDraw();
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
