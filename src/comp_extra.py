@@ -88,7 +88,7 @@ def _cdl_params():
     return out
 
 
-AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
+AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_inpaint": "inpaint", "ai_upscale": "upscale", "ai_workflow": "workflow"}
 _AI_DATA = {"matte", "depth"}
 # The VFX nodes (the page's VFX_KINDS): LTX-2.5's workflows over the whole range, one film as their result.
 VFX_KINDS = {"vfx_alpha": "alpha", "vfx_hdr": "hdr", "vfx_reframe": "reframe", "vfx_upscale": "upscale"}
@@ -100,7 +100,7 @@ EXTRA_LABELS = {"differencekeyer": "DifferenceKeyer", "despill": "Despill", "edg
                 "cdl": "CDL", "lut": "LUT", "huecurves": "HueCurves", "clamp": "Clamp", "loglin": "Log2Lin",
                 "colormatch": "ColorMatch", "grain": "Grain", "degrain": "Degrain", "regrain": "Regrain", "denoise": "Denoise", "sharpen": "Sharpen", "median": "Median",
                 "edgedetect": "EdgeDetect", "edgeblur": "EdgeBlur", "ai_matte": "AI Matte", "ai_depth": "AI Depth",
-                "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale",
+                "ai_inpaint": "AI Inpaint", "ai_upscale": "AI Upscale", "ai_workflow": "AI Workflow",
                 "vfx_alpha": "VFX Alpha Matte", "vfx_hdr": "VFX SDR to HDR", "vfx_reframe": "VFX Reframe", "vfx_upscale": "VFX Upscale"}
 
 # The per-pixel ones that take a mask input (the last) and a mix (the page's EXTRA_MASKABLE).
@@ -175,6 +175,7 @@ EXTRA_TYPES = {
     "ai_depth": {"inputs": ["src"], "params": {"invert": _n("enum", "off", choices=_ONOFF), "results": _RESULTS}},
     "ai_inpaint": {"inputs": ["src", "mask"], "params": {"prompt": _n("prompt", ""), "results": _RESULTS}},
     "ai_upscale": {"inputs": ["src"], "params": {"factor": _n("enum", "2", choices=["2", "4"]), "results": _RESULTS}},
+    "ai_workflow": {"inputs": ["src"], "params": {"results": _RESULTS}},
     "vfx_alpha": {"inputs": ["src"], "params": {"output": _n("enum", "premultiplied", choices=["premultiplied", "matte"]),
                                                 "prerender": _PRERENDER, "results": _RESULTS}},
     "vfx_hdr": {"inputs": ["src"], "params": {"prerender": _PRERENDER, "results": _RESULTS}},
@@ -728,8 +729,96 @@ def ai_read(n, f):
     rf = ai_result_frame(n, f)
     if rf is None:
         return None
+    kind = AI_KINDS[n["type"]]
     return {"id": f"{n['id']}#ai{rf}", "type": "read", "file": n["results"]["frames"][str(rf)],
-            "colorspace": "linear" if AI_KINDS[n["type"]] in _AI_DATA else "srgb", "fit": "stretch", "offset": 0, "inputs": []}
+            "colorspace": "linear" if kind in _AI_DATA else "auto" if kind == "workflow" else "srgb", "fit": "stretch",
+            "offset": 0, "inputs": []}
+
+
+# ── a workflow of the user's own (comp_ai_workflow; the page's customOf ... aiLayerReads) ──
+
+def custom_of(n):
+    c = n.get("custom") if isinstance(n, dict) else None
+    return c if isinstance(c, dict) and isinstance(c.get("graph"), dict) else None
+
+
+def uses_custom(n):
+    return bool(custom_of(n)) and (n.get("type") == "ai_workflow" or n.get("workflow") == "custom")
+
+
+def workflow_ports(n):
+    c = custom_of(n)
+    return [str(x.get("name")) for x in c["inputs"]] if c and isinstance(c.get("inputs"), list) else None
+
+
+_WF_KINDS = {"num": "num", "int": "int", "text": "text", "prompt": "prompt", "bool": "enum"}
+
+
+def wf_param_def(n, p):
+    if not isinstance(p, str) or not p.startswith("wf_"):
+        return None
+    c = custom_of(n)
+    q = next((x for x in (c.get("params") or []) if isinstance(x, dict) and x.get("id") == p), None) if c else None
+    if not q or q.get("kind") not in _WF_KINDS:
+        return None
+    d = {"kind": _WF_KINDS[q["kind"]], "def": ("on" if q.get("def") else "off") if q["kind"] == "bool" else q.get("def")}
+    if q["kind"] in ("num", "int"):
+        d["key"] = True
+    if q["kind"] == "bool":
+        d["choices"] = ["off", "on"]
+    return d
+
+
+def workflow_size(n):
+    r = n.get("results") if n and not n.get("disable") and n.get("type") == "ai_workflow" else None
+    if not isinstance(r, dict):
+        return None
+    try:
+        w, h = int(round(float(r.get("width")))), int(round(float(r.get("height"))))
+    except (TypeError, ValueError):
+        return None
+    return {"width": w, "height": h} if w > 0 and h > 0 else None
+
+
+def ai_layer_reads(n, f):
+    L = (n.get("results") or {}).get("layers") if n.get("type") == "ai_workflow" and isinstance(n.get("results"), dict) else None
+    if not isinstance(L, dict):
+        return []
+    out = []
+    for name, fr in L.items():
+        if not isinstance(fr, dict):
+            continue
+        one = ai_result_frame({"results": {"frames": fr}}, f)
+        if one is not None:
+            out.append((name, {"id": f"{n['id']}#ai_{name}{one}", "type": "read", "file": fr[str(one)], "colorspace": "auto",
+                               "fit": "stretch", "offset": 0, "inputs": []}))
+    return out
+
+
+def _workflow_make(n, f, api):
+    ins = n.get("inputs") or []
+    rd = ai_read(n, f)
+    got = api.source(rd, f) if rd and api.source else None
+    if got is None:
+        if ins and ins[0]:
+            return api.run(ins[0], f)
+        w0, h0 = api.size(n, 0)
+        return M.blank(w0, h0)
+    z = workflow_size(n)
+    gh, gw = got.shape[:2]
+    w = max(1, _round(z["width"] * api.scale)) if z else gw
+    h = max(1, _round(z["height"] * api.scale)) if z else gh
+    img = got if (gw, gh) == (w, h) else M.resample(got, M.fit_matrix(gw, gh, w, h, "stretch"), w, h)
+    ex = {}
+    for name, lr in ai_layer_reads(n, f):
+        lg = api.source(lr, f)
+        if lg is None:
+            continue
+        lh, lw = lg.shape[:2]
+        L = lg if (lw, lh) == (w, h) else M.resample(lg, M.fit_matrix(lw, lh, w, h, "stretch"), w, h)
+        for c, ch in enumerate("rgba"):
+            ex[f"{name}.{ch}"] = np.ascontiguousarray(L[..., c], dtype=np.float32)
+    return (img.astype(np.float32), ex) if ex else img.astype(np.float32)
 
 
 def vfx_span(n):
@@ -805,6 +894,8 @@ def upscale_factor(n):
 
 def _ai_make(n, f, p, api):
     kind = AI_KINDS[n["type"]]
+    if kind == "workflow":
+        return _workflow_make(n, f, api)
     ins = n.get("inputs") or []
     if ins and ins[0]:
         s = api.run(ins[0], f)

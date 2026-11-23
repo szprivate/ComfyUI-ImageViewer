@@ -666,6 +666,10 @@ def inputs_of(n):
         return []
     if n.get("type") == "group":
         return [x.get("name") or x.get("id") for x in G.group_inputs(n)]
+    if n.get("type") == "ai_workflow":
+        ports = _X.workflow_ports(n)
+        if ports is not None:
+            return ports
     return NODE_TYPES.get(n.get("type"), {"inputs": []})["inputs"]
 
 
@@ -908,7 +912,7 @@ def merge_live(n, f):
 
 
 def param_at(node, p, frame, scope=None):
-    d = NODE_TYPES.get(node.get("type"), {}).get("params", {}).get(p)
+    d = NODE_TYPES.get(node.get("type"), {}).get("params", {}).get(p) or _X.wf_param_def(node, p)
     own = node[p] if p in node else (d["def"] if d else None)
     if not d or not d.get("key"):
         return copy.deepcopy(own)
@@ -1220,6 +1224,10 @@ def format_at(comp, nid, depth=0):
         return format_at(comp, ins[1], depth + 1)
     if n["type"] in _X.VFX_KINDS:
         z = _X.vfx_size(n)
+        if z:
+            return z
+    if n["type"] == "ai_workflow":
+        z = _X.workflow_size(n)
         if z:
             return z
     if not n.get("disable") and n["type"] == "ai_upscale":

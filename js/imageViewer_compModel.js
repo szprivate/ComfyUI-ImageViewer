@@ -701,6 +701,7 @@ function normalizeLevel(raw, errors, where, depth) {
 export function inputsOf(n) {
     if (!n) return [];
     if (n.type === "group") return G.groupInputs(n).map((x) => x.name || x.id);
+    if (n.type === "ai_workflow") { const ports = EX.workflowPorts(n); if (ports) return ports; }
     return (NODE_TYPES[n.type] || { inputs: [] }).inputs;
 }
 
@@ -1140,7 +1141,7 @@ function shiftBelow(comp, node, aboveId) {
 
 /** A param's value at `frame`: its keys (Motion's interpolation), else its value, else the type's default. */
 export function paramAt(node, p, frame, scope) {
-    const d = NODE_TYPES[node.type] && NODE_TYPES[node.type].params[p];
+    const d = (NODE_TYPES[node.type] && NODE_TYPES[node.type].params[p]) || EX.wfParamDef(node, p);
     const own = node[p] !== undefined ? node[p] : d ? d.def : undefined;
     if (!d || !d.key) return clone(own);
     let v = valueAt({ tracks: node.tracks, [p]: own }, p, frame);
@@ -1661,6 +1662,7 @@ export function formatAt(comp, id, depth = 0) {
     if (!n.disable && n.type === "sidebyside") { const u = up(); return n.layout === "over under" ? { width: u.width, height: u.height * 2 } : { width: u.width * 2, height: u.height }; }
     if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
     if (EX.VFX_KINDS[n.type]) { const z = EX.vfxSize(n); if (z) return z; }
+    if (n.type === "ai_workflow") { const z = EX.workflowSize(n); if (z) return z; }
     if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
     if (n.type === "read") { const z = readSize(n); return z ? { width: z[0], height: z[1] } : F; }
     if (n.disable || n.type !== "reformat") return n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
@@ -1832,6 +1834,12 @@ export function aiKey(comp, n) {
     const parts = [ins[0] ? upstreamKey(comp, ins[0]) : "", ins[1] ? upstreamKey(comp, ins[1]) : "", n.type, n.prompt || "", n.factor || ""];
     // The workflow and models a node picked count too (a node without them keeps the key it had).
     if (n.workflow || models) parts.push(n.workflow || "", models);
+    // A workflow of its own: which one (its hash), every input wired into it, its parameters and their keys.
+    if (EX.usesCustom(n)) {
+        const c = EX.customOf(n);
+        parts.push("custom", c.sig || "", ins.slice(2).map((x) => (x ? upstreamKey(comp, x) : "")).join(","));
+        for (const [id] of EX.wfParams(n)) parts.push(`${id}=${JSON.stringify(n[id] ?? null)}${n.tracks && n.tracks[id] ? JSON.stringify(n.tracks[id]) : ""}`);
+    }
     const text = parts.join("\u0001");
     let h = 0x811c9dc5;
     for (let i = 0; i < text.length; i++) { h ^= text.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
@@ -2682,7 +2690,10 @@ export function sourceNeeds(comp, id, frame, view = null) {
         if (n.type === "oneview") { const w = paramAt(n, "view", f) || vs[0] || null; walk(n.inputs[0], f, depth + 1, vs.includes(w) ? w : v); return; }
         if (n.type === "anaglyph" || n.type === "sidebyside") { for (const w of vs.length ? vs.slice(0, 2) : [v]) walk(n.inputs[0], f, depth + 1, w); return; }
         if (n.type === "joinviews") { const i = Math.max(0, vs.indexOf(v)); walk(n.inputs[Math.min(i, 3)] || n.inputs[0], f, depth + 1, v); return; }
-        if (EX.AI_KINDS[n.type]) { const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
+        if (EX.AI_KINDS[n.type]) {
+            const rd = EX.aiRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v });
+            for (const [, lr] of EX.aiLayerReads(n, f)) out.push({ node: lr, frame: f, view: v });
+        }
         if (EX.VFX_KINDS[n.type] && !n.disable) { const rd = EX.vfxRead(n, f); if (rd) out.push({ node: rd, frame: f, view: v }); }
         const xr = EX.extraReads(n, f);
         if (xr) { for (const [k, g] of xr) walk(n.inputs[k], g, depth + 1, v); return; }

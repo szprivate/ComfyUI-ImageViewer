@@ -39,6 +39,12 @@ and a render of its Output by the export rule.
                                                           the answers as a PNG sequence beside the comp -> {frames}
     POST /imageviewer/comp_grain {path, comp, node, frames}  a Grain / Degrain / Regrain node's grain measured at
                                                           full size (comp_grain.analyse) -> {profile, frames, width, height}
+    POST /imageviewer/comp_ai_inspect {graph, name?, source?, path?}   a workflow of the user's own as a node keeps it
+                                                          (comp_ai_workflow.make_custom): {custom}
+    POST /imageviewer/comp_ai_custom {path, comp, node, frames, models?}   an AI node's own workflow over frames as
+                                                          ONE prompt (comp_ai_workflow.prepare): {run, graph, outputs ...}
+    POST /imageviewer/comp_ai_custom_place {run, images {output node: [{filename, subfolder, type}]}}
+                                                          what came back, beside the comp: {frames, layers, width, height}
     POST /imageviewer/comp_ai_workflows {kind, prompt?}   an AI node's own short list of workflows (comp_ai.workflows_for):
                                                           {kind, action, workflows, choice}
     POST /imageviewer/comp_ai_models {kind, prompt?, workflow?, graph?}  (or {action, ...}: an older page)
@@ -89,6 +95,7 @@ import time
 import numpy as np
 
 from . import comp_ai
+from . import comp_ai_workflow
 from . import comp_vfx
 from . import comp_files
 from . import comp_io
@@ -1280,6 +1287,82 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         res["missing"] = sorted(int(f) for f in images if str(f).lstrip("-").isdigit() and int(f) not in found)
         return web.json_response(res)
 
+    async def ai_inspect(request):
+        body = await body_of(request)
+        try:
+            res = await off(comp_ai_workflow.make_custom, body.get("graph"), str(body.get("name") or ""),
+                            str(body.get("source") or "file"), str(body.get("path") or ""))
+        except (comp_ai_workflow.WorkflowError, ValueError) as e:
+            return err(e)
+        return web.json_response({"custom": res})
+
+    async def ai_custom(request):
+        from . import paint_generate as G
+        body = await body_of(request)
+        path = abspath(body.get("path"))
+        why = comp_path_ok(path)
+        if why:
+            return err(why, 403)
+        comp = body.get("comp")
+        if not isinstance(comp, dict):
+            return err("'comp' (the comp as it stands) is needed")
+        frames = body.get("frames")
+        if not isinstance(frames, list) or not all(isinstance(f, (int, float)) and not isinstance(f, bool) for f in frames):
+            return err("'frames' must be a list of frame numbers")
+        sources = comp_io.Sources(path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        try:
+            res = await off(comp_ai_workflow.prepare, comp, path, str(body.get("node") or ""), frames, sources,
+                            folder_paths.get_input_directory(), ocio=comp_io.ocio_hook(path, path_access.is_allowed),
+                            folder_paths=folder_paths, node_classes=node_classes(),
+                            models=body.get("models") if isinstance(body.get("models"), dict) else None)
+        except G.Missing as e:
+            return web.json_response({"error": str(e), "missing": e.missing}, status=409)
+        except (comp_ai_workflow.WorkflowError, comp_ai.AiError, G.GenerateError, ValueError, OSError) as e:
+            return err(e)
+        finally:
+            sources.close()
+        return web.json_response(res)
+
+    async def ai_custom_place(request):
+        body = await body_of(request)
+        run = str(body.get("run") or "")
+        images = body.get("images") if isinstance(body.get("images"), dict) else {}
+        try:
+            rec = comp_ai_workflow.run_record(run)
+        except comp_ai_workflow.WorkflowError as e:
+            return err(e)
+        target, _rel = comp_ai_workflow.out_name(rec["comp"], rec["node"], run, "out", 0)
+        if not path_access.is_allowed(target):
+            return err(path_access.refusal(target), 403)
+        found = {}
+        for nid, refs in images.items():
+            refs = refs if isinstance(refs, list) else [refs]
+            got = []
+            for img in refs[:comp_ai_workflow.MAX_FILM_FRAMES]:
+                p = output_ref(img) if isinstance(img, dict) else None
+                if p and os.path.isfile(p) and path_access.may_serve(p):
+                    got.append(p)
+            if got:
+                found[str(nid)] = got
+        if not found:
+            return err("the workflow's pictures were not found", 404)
+        try:
+            res = await off(comp_ai_workflow.place, run, found)
+        except (comp_ai_workflow.WorkflowError, comp_ai.AiError, ValueError, OSError) as e:
+            return err(e)
+        try:
+            from PIL import Image
+            first = next(iter(res["paths"].values()))
+            if first.lower().endswith(".exr"):
+                px = comp_ai_workflow.P.image_pixels(first)
+                res["width"], res["height"] = int(px.shape[1]), int(px.shape[0])
+            else:
+                with Image.open(first) as im:
+                    res["width"], res["height"] = im.size
+        except Exception:  # noqa: BLE001 - the size is only a hint
+            pass
+        return web.json_response(res)
+
     async def ai_workflows(request):
         from . import paint_generate as G
         body = await body_of(request)
@@ -1411,6 +1494,9 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_agent_done", comp_agent_done)
         add("POST", f"{prefix}/comp_ai_models", ai_models)
         add("POST", f"{prefix}/comp_ai_workflows", ai_workflows)
+        add("POST", f"{prefix}/comp_ai_inspect", ai_inspect)
+        add("POST", f"{prefix}/comp_ai_custom", ai_custom)
+        add("POST", f"{prefix}/comp_ai_custom_place", ai_custom_place)
         add("POST", f"{prefix}/comp_grain", grain)
         add("POST", f"{prefix}/comp_vfx", vfx_prepare)
         add("POST", f"{prefix}/comp_vfx_finish", vfx_finish)

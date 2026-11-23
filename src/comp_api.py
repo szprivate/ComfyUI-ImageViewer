@@ -47,7 +47,7 @@ NODE_GAP = 60
 
 
 # The AI nodes (comp_ai.AI_KINDS): their pictures come from a ComfyUI run, kept as the node's results.
-AI_TYPES = ("ai_matte", "ai_depth", "ai_inpaint", "ai_upscale")
+AI_TYPES = ("ai_matte", "ai_depth", "ai_inpaint", "ai_upscale", "ai_workflow")
 
 
 def _shuffle_legacy(n, params):

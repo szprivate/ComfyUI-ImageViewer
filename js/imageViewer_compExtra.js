@@ -39,7 +39,7 @@ const vfxResults = { kind: "ai", def: null, help: "The film the workflow made (R
 const prerender = { kind: "enum", def: "on", choices: ["on", "off"],
     help: "on: what comes into the node is rendered to a film first and that goes through the workflow. off: the film of the Read coming in is used as it is (faster; only a Read of a film, with nothing between)" };
 
-export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_inpaint: "inpaint", ai_upscale: "upscale" };
+export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_inpaint: "inpaint", ai_upscale: "upscale", ai_workflow: "workflow" };
 /** The VFX nodes: the History's Convert Footage workflows (LTX-2.5, src/clip_vfx.py) on the comp, over its
  *  whole frame range at once (comp_vfx on the server). Their `results` is ONE film or EXR sequence:
  *  {file, offset, first, last, width, height, colorspace, key, prerender}; frames first..last show it, the
@@ -200,6 +200,10 @@ export const EXTRA_TYPES = {
         factor: { kind: "enum", def: "2", choices: ["2", "4"], help: "The picture this many times larger" },
         results,
     } },
+    // A ComfyUI workflow of the user's own (from the canvas or a .json file, kept on the node as `custom`): its
+    // picture loaders are the node's inputs, its first save the picture, further saves layers of it, the values
+    // of its nodes titled comp:<name> parameters (wf_<name>). See src/comp_ai_workflow.py.
+    ai_workflow: { label: "AI Workflow", cat: "AI", inputs: ["src"], params: { results } },
     // ── VFX, LTX-2.5 workflows over the whole range ──
     vfx_alpha: { label: "VFX Alpha Matte", cat: "VFX", inputs: ["src"], params: {
         output: { kind: "enum", def: "premultiplied", choices: ["premultiplied", "matte"], help: "matte: the matte as grey" },
@@ -245,9 +249,74 @@ export function aiResultFrame(n, f) {
 export function aiRead(n, f) {
     const rf = aiResultFrame(n, f);
     if (rf === null) return null;
-    return { id: `${n.id}#ai${rf}`, type: "read", file: n.results.frames[String(rf)], colorspace: AI_DATA.has(AI_KINDS[n.type]) ? "linear" : "srgb",
+    const kind = AI_KINDS[n.type];
+    return { id: `${n.id}#ai${rf}`, type: "read", file: n.results.frames[String(rf)], colorspace: AI_DATA.has(kind) ? "linear" : kind === "workflow" ? "auto" : "srgb",
         fit: "stretch", offset: 0, inputs: [] };
 }
+// ── a workflow of the user's own (src/comp_ai_workflow.py) ──────────────────
+
+/** The node's own workflow ({graph, name, source, path, sig, inputs, outputs, params}), or null. */
+export function customOf(n) {
+    const c = n && n.custom;
+    return c && typeof c === "object" && c.graph && typeof c.graph === "object" ? c : null;
+}
+/** Whether node n runs its own workflow: an AI Workflow node always, another AI node when it picked it. */
+export function usesCustom(n) { return !!customOf(n) && (n.type === "ai_workflow" || n.workflow === "custom"); }
+/** An AI Workflow node's ports: its workflow's inputs (picture, mask, film), else one `src`. */
+export function workflowPorts(n) {
+    const c = customOf(n);
+    return c && Array.isArray(c.inputs) ? c.inputs.map((x) => String(x.name)) : null;
+}
+const WF_KINDS = { num: "num", int: "int", text: "text", prompt: "prompt", bool: "enum" };
+/** A workflow parameter's description as the node table writes one (wf_<name>), or null. */
+export function wfParamDef(n, p) {
+    if (typeof p !== "string" || !p.startsWith("wf_")) return null;
+    const c = customOf(n), q = c && Array.isArray(c.params) ? c.params.find((x) => x && x.id === p) : null;
+    if (!q || !WF_KINDS[q.kind]) return null;
+    const d = { kind: WF_KINDS[q.kind], def: q.kind === "bool" ? (q.def ? "on" : "off") : q.def, label: String(q.name || p).slice(0, 28),
+        help: `${q.name}: ${q.input} of the workflow's node ${q.node}` };
+    if (q.kind === "num" || q.kind === "int") { d.key = true; d.step = q.kind === "int" ? 1 : 0.01; }
+    if (q.kind === "bool") d.choices = ["off", "on"];
+    return d;
+}
+/** Every workflow parameter of node n: [[id, def]]. */
+export function wfParams(n) {
+    const c = customOf(n);
+    return c && Array.isArray(c.params) ? c.params.map((q) => [q.id, wfParamDef(n, q.id)]).filter(([, d]) => d) : [];
+}
+/** The size an AI Workflow node's picture has once run (its result's), else null (= what comes in). */
+export function workflowSize(n) {
+    const r = n && !n.disable && n.type === "ai_workflow" && n.results;
+    const w = r && Math.round(Number(r.width)), h = r && Math.round(Number(r.height));
+    return w > 0 && h > 0 ? { width: w, height: h } : null;
+}
+/** The Reads standing for an AI Workflow node's further outputs at f: [[layer, read]]. */
+export function aiLayerReads(n, f) {
+    const L = n && n.type === "ai_workflow" && n.results && n.results.layers;
+    if (!L || typeof L !== "object") return [];
+    const out = [];
+    for (const [name, fr] of Object.entries(L)) {
+        const one = aiResultFrame({ results: { frames: fr } }, f);
+        if (one !== null) out.push([name, { id: `${n.id}#ai_${name}${one}`, type: "read", file: fr[String(one)], colorspace: "auto", fit: "stretch", offset: 0, inputs: [] }]);
+    }
+    return out;
+}
+
+/** Whether JSON is a workflow as the canvas saves it (nodes and links), not a prompt. */
+export function isCanvasFormat(j) { return !!(j && typeof j === "object" && Array.isArray(j.nodes)); }
+
+/** The node's own workflow's pictures of a prompt: {output node id: [{filename, subfolder, type}]}. Every picture,
+ *  film and animation an output answered (SaveVideo's `images` with `animated`, VHS' `gifs`). */
+export function outputRefs(out) {
+    const list = [];
+    for (const k of ["images", "gifs", "videos", "video"]) {
+        for (const im of (out && Array.isArray(out[k]) ? out[k] : [])) {
+            if (im && im.filename) list.push({ filename: im.filename, subfolder: im.subfolder || "", type: im.type || "output" });
+        }
+    }
+    return list;
+}
+
 /** The comp frames a VFX node's result covers ([first, last]), or null before it ran. */
 export function vfxSpan(n) {
     const r = n && n.results;
@@ -404,6 +473,7 @@ function vfxMake(n, f, p, api) {
 /** An AI node: its result laid over the size that comes in (an upscale: that x its factor), else its input. */
 function aiMake(n, f, p, api) {
     const kind = AI_KINDS[n.type], ins = n.inputs || [];
+    if (kind === "workflow") return workflowMake(n, f, api);
     const s = ins[0] ? api.run(ins[0], f) : (() => { const [w, h] = api.size(n, 0); return api.blank(w, h); })();
     const k = kind === "upscale" ? upscaleFactor(n) : 1;
     const w = Math.max(1, Math.round(s.w * k)), h = Math.max(1, Math.round(s.h * k));
@@ -426,6 +496,33 @@ function aiMake(n, f, p, api) {
         }
     }
     return out;
+}
+
+/** An AI Workflow node: its result at its own size, its further outputs as layers; before it ran its first input
+ *  (or nothing). */
+function workflowMake(n, f, api) {
+    const ins = n.inputs || [];
+    const rd = aiRead(n, f), got = rd && api.source ? api.source(rd, f) : null;
+    if (!got) {
+        if (ins[0]) return api.run(ins[0], f);
+        const [w, h] = api.size(n, 0);
+        return api.blank(w, h);
+    }
+    const z = workflowSize(n);
+    const w = z ? Math.max(1, Math.round(z.width * api.scale)) : got.w, h = z ? Math.max(1, Math.round(z.height * api.scale)) : got.h;
+    const img = got.w === w && got.h === h ? got : api.resample(got, api.fitMatrix(got.w, got.h, w, h, "stretch"), w, h);
+    const ex = {};
+    for (const [name, lr] of aiLayerReads(n, f)) {
+        const lg = api.source(lr, f);
+        if (!lg) continue;
+        const L = lg.w === w && lg.h === h ? lg : api.resample(lg, api.fitMatrix(lg.w, lg.h, w, h, "stretch"), w, h);
+        for (let c = 0; c < 4; c++) {
+            const a = new Float32Array(w * h);
+            for (let i = 0; i < w * h; i++) a[i] = L.data[i * 4 + c];
+            ex[`${name}.${"rgba"[c]}`] = a;
+        }
+    }
+    return api.X ? api.X(img, ex) : img;
 }
 
 /** The OCIO / LUT-file transforms extra nodes ask for at f (a LUT node's file). */

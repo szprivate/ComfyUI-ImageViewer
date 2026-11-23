@@ -317,7 +317,12 @@ def prepare_batch(comp, comp_path, node_id, frames, sources, input_dir, *, ocio=
 
 def models_for(action, folder_paths, *, wid=None, graph=None, kind=None, prompt="", node_classes=None):
     """What can be picked for a workflow: {workflow, inputs}. With *kind* (an AI node's) the workflow is *wid* when
-    the node's list has it, else the list's default; with only *action* (an older page) Paint's for it."""
+    the node's list has it, else the list's default; with only *action* (an older page) Paint's for it. With
+    *wid* "custom" the node's own workflow (*graph*, an API prompt) is read."""
+    if wid == "custom":
+        if not G.is_api_graph(graph):
+            raise AiError("the node's own workflow was not sent")
+        return {"workflow": "custom", "inputs": G.model_inputs(json.loads(json.dumps(graph)), folder_paths)}
     if kind:
         action, _w = action_of(kind, prompt)
         wid = pick_workflow(kind, prompt, wid, node_classes)
