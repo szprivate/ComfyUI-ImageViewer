@@ -133,8 +133,7 @@ const CSS = `
 .cp-bar .mg-sep{width:1px;height:18px;background:#ffffff1a;margin:0 3px}
 .cp-bar>.mg-title{font-weight:500;color:#c8c8cc;margin:0 2px 0 4px;font-size:12px;flex:0 1 auto;min-width:3em}
 @container (max-width:900px){.cp-root>.mg-bar.cp-bar{flex-wrap:wrap}.cp-bar>.mg-spacer{flex:1 0 100%;height:0;margin:-2px 0;order:2}
-  .cp-bar>.mg-spacer~*{order:3}.cp-root>.mg-bar>.mg-info{order:1;margin-left:auto}}
-.cp-bar>.mg-info{flex:0 1 auto;white-space:pre;min-width:0;overflow:hidden;text-overflow:ellipsis;opacity:1;color:#8a8a92;font:11px ui-monospace,Menlo,Consolas,monospace;margin-left:4px}
+  .cp-bar>.mg-spacer~*{order:3}}
 /* exposure: arrows step a stop, the readout (a click: back to 0), a thin track over a scale of stops */
 .cp-exp{display:inline-flex;align-items:center;gap:1px;height:24px;padding:0 6px 0 2px;cursor:default;user-select:none}
 .cp-exp-step{width:14px;height:20px;min-height:0;padding:0;border:0;background:transparent;color:#8a8a92;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
@@ -849,8 +848,7 @@ export function createCompEditor(host, opts = {}) {
             ...(has3d() && o.room3d ? [tb("box", "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d cp-wide" + (st.room ? " on" : "")),
                 tb("columns", "", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
             el(doc, "span", "mg-sep"),
-            tb("fit", "", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }, "cp-fit"),
-            Object.assign(el(doc, "span", "mg-info", `${fmt().width}×${fmt().height}  ${fmt().fps}fps  ${fmt().frames}f`), { title: `The comp's format: ${fmt().width} × ${fmt().height}, ${fmt().fps} fps, ${fmt().frames} frames` }));
+            tb("fit", "", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }, "cp-fit"));
     }
     function fileItems() {
         return [["Save", save, !!st.path, "Ctrl+S"], ["Save as…", saveAs, !!o.saveAs, "Ctrl+Shift+S"], null,

@@ -1612,11 +1612,12 @@ class CompBrowserTests(unittest.TestCase):
         # What only changes how the picture is LOOKED AT is one group, right of the file group and by Fit.
         pos = pg.evaluate(f"""() => {{ const kids = [...{BAR}.children]; const at = (s) => kids.findIndex((x) => x.matches(s));
             return {{ title: at('.mg-title'), spacer: at('.mg-spacer'), gpu: at('.cp-gpu'), chan: at('.cp-chan'),
-                exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools'), info: at('.mg-info') }}; }}""")
+                exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools') }}; }}""")
         self.assertTrue(-1 not in pos.values(), pos)
+        self.assertEqual(pg.evaluate(f"() => {BAR}.querySelectorAll('.mg-info').length"), 0)   # no format readout in the bar
         self.assertLess(pos["title"], pos["spacer"], pos)
-        self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")],
-                         sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")), pos)
+        self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")],
+                         sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")), pos)
         # The bar's slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170). The value is the viewer's,
         # so its exposure follows.
         pg.evaluate(f"() => {{ const r = {BAR}.querySelector('.cp-exp-s'); r.value = '2'; r.dispatchEvent(new Event('input')); }}")
