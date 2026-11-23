@@ -1131,6 +1131,31 @@ DEEP = {"deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "de
 _PLAIN_SIZE = (GEO3D | DEEP) - {"project3d"}
 
 
+def read_size(n):
+    """A Read's own size [w, h] (``n["size"]``, the page's ``readSize``), or None."""
+    z = (n or {}).get("size")
+    if isinstance(z, (list, tuple)) and len(z) == 2 and all(isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 65536 for v in z):
+        return [z[0], z[1]]
+    return None
+
+
+def with_read_sizes(comp, source):
+    """``comp`` with every Read that has no ``size`` given its file's own size, when ``source`` can say it
+    (comp_io.Sources.size_of); the comp itself when nothing changes."""
+    size_of = getattr(source, "size_of", None)
+    if not size_of or not comp:
+        return comp
+    nodes, changed = [], False
+    for n in comp.get("nodes") or []:
+        if isinstance(n, dict) and n.get("type") == "read" and not read_size(n) and n.get("file"):
+            z = size_of(n)
+            if z:
+                n = dict(n, size=[int(z[0]), int(z[1])])
+                changed = True
+        nodes.append(n)
+    return dict(comp, nodes=nodes) if changed else comp
+
+
 def format_at(comp, nid, depth=0):
     """The size of the picture node ``nid`` makes, in pixels of the comp (the page's ``formatAt``)."""
     if not depth:
@@ -1157,7 +1182,10 @@ def format_at(comp, nid, depth=0):
         u, k = up(), _X.upscale_factor(n)
         return {"width": max(1, int(math.floor(u["width"] * k + 0.5))), "height": max(1, int(math.floor(u["height"] * k + 0.5)))}
     if n.get("disable") or n["type"] != "reformat":
-        return F if n["type"] in ("read", "constant") or n["type"] in _PLAIN_SIZE else up()
+        if n["type"] == "read":
+            z = read_size(n)
+            return {"width": z[0], "height": z[1]} if z else F
+        return F if n["type"] == "constant" or n["type"] in _PLAIN_SIZE else up()
     w, h = reformat_size(n, 0, up())
     return {"width": w, "height": h}
 
@@ -2560,7 +2588,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
     their own size) or None, ``deep_source(node, frame)`` a DeepRead's deep picture (comp_deep) or None. The page's
     ``renderNode``: nodes that look at other times render their input at those frames; ``view`` is the view made
     (None: the comp's first, if it has views). Groups, Dots, backdrops and notes: the flat comp (comp_graph.py)."""
-    comp = G.flatten(comp)
+    comp = with_read_sizes(G.flatten(comp), source)
     nid = G.resolve(comp, nid)
     fmt = comp["format"]
     W = max(1, int(math.floor(fmt["width"] * scale + 0.5)))
@@ -2741,8 +2769,11 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             return run(ins[0], f, d1) if NODE_TYPES[t]["inputs"] else blank(W, H)
         if t == "read":
             src = source(n, f) if source else None
-            return resample(src, fit_matrix(src.shape[1], src.shape[0], W, H, n.get("fit") or "fit", scale), W, H) \
-                if src is not None else blank(W, H)
+            F = format_at(comp, n["id"])
+            rw = max(1, int(math.floor(F["width"] * scale + 0.5)))
+            rh = max(1, int(math.floor(F["height"] * scale + 0.5)))
+            return resample(src, fit_matrix(src.shape[1], src.shape[0], rw, rh, n.get("fit") or "fit", scale), rw, rh) \
+                if src is not None else blank(rw, rh)
         if t == "constant":
             c = param_at(n, "color", f) or [0, 0, 0, 1]
             img = np.empty((H, W, 4), np.float32)

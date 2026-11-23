@@ -117,7 +117,7 @@ Most colour, filter, keying and channel nodes have a **mask** input (the last on
 - **Relink footage…** looks for missing files by name under a folder you pick (a sequence by its name around the frame number) and points the Reads at them, as one undo step.
 - **Localise footage…** copies the footage of the Reads into a local cache and uses the copies from then on; the Read keeps its original path, and a copy is refreshed when the original changes.
 
-Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
+Each image keeps its own resolution; images of different sizes are aligned at the bottom-left corner. A **Read** gives its file at the file's own size, whatever the comp's size; use a **Reformat** to change it. The comp's width and height are only the size of what has none of its own: a Constant, a Reformat's default, a render with nothing plugged in. A Read's **fit** only matters when its file on disk changes to another size than the Read last saw. Extra channels (`depth.z`, `mask.a` …) travel down the graph with the image.
 
 A few notes on the newer nodes:
 

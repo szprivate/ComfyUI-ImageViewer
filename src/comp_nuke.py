@@ -280,6 +280,8 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
         note("Read: Nuke reads PNG / JPEG / films as sRGB and EXR / HDR as linear unless the comp names a colourspace "
              "(written as is: 'sRGB' and 'linear' are the nuke-default config's names); every Read is taken as straight "
              "and premultiplied, as the comp does")
+        if M.read_size(n):
+            return r      # a Read is its file's own size, as Nuke's is
         note("Read and Reformat: Nuke's resize filter is cubic, the comp's bilinear")
         return out.add("Reformat", f"{label}_fit", [("inputs", "1"), ("format", f'"{W} {H} 0 0 {W} {H} 1 comp_{W}x{H}"'),
                                                     ("resize", how), ("center", "true"), ("black_outside", "true")] + dis,

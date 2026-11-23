@@ -145,6 +145,9 @@ def source_info(path) -> dict:
         tc = _timecode_of(frame_path(path, nums[0]))
         if tc:
             info["timecode"] = tc
+        size = _still_size(frame_path(path, nums[0]))   # the first frame's: a Read's own size
+        if size:
+            info["width"], info["height"] = size
         return info
     if not os.path.isfile(path):
         return {"kind": "missing"}
@@ -461,6 +464,23 @@ class Sources:
                 if self.infos[path]["kind"] == "missing" and path:
                     self.note(f"{os.path.basename(path)}: not found")
         return path, self.infos[path]
+
+    def size_of(self, node):
+        """A Read's file's own size (w, h), or None while it cannot be told (comp_model.with_read_sizes)."""
+        path, info = self.info(node)
+        w, h = info.get("width"), info.get("height")
+        if w and h:
+            return int(w), int(h)
+        if info.get("kind") not in ("still", "sequence", "video"):
+            return None
+        # A header nobody here reads (an EXR without OpenImageIO): the first frame's pixels say it, once.
+        if "own_size" not in info:
+            try:
+                pic = self(dict(node, offset=0), 0)
+            except Exception:  # noqa: BLE001
+                pic = None
+            info["own_size"] = (int(pic.shape[1]), int(pic.shape[0])) if pic is not None else None
+        return info["own_size"]
 
     def _held(self, path, n):
         """The nearest frame number of a sequence that is on disk: the last one before n, else the first after."""
