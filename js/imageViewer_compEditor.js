@@ -86,6 +86,12 @@ const CSS = `
 .cp-ibtn svg{width:16px;height:16px}
 .cp-ibtn.dirty{color:#ff6a1a;border-color:#ff6a1a}
 .cp-display{max-width:13em;text-overflow:ellipsis}
+.cp-chan{max-width:15em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-exp{display:inline-flex;align-items:center;gap:6px;padding:1px 7px;background:#2b2b31;border:1px solid #3a3a42;border-radius:3px;cursor:pointer}
+.cp-exp:hover{background:#35353d}
+.cp-exp-l,.cp-exp-v{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:nowrap}
+.cp-exp-l{color:#9a9aa2}.cp-exp-v{color:#d8d8dc;min-width:4.5em;text-align:right}
+.cp-exp-s{width:104px;margin:0;accent-color:#ff6a1a;cursor:ew-resize}
 .cp-pop{position:absolute;z-index:40}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
@@ -238,6 +244,8 @@ const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Co
     Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a",
     "3D": "#7fb3d5", Deep: "#8c7fd5", Views: "#d5a07f", VFX: "#e07fa8" };
 const KIND_ICON = { layer: "▣", background: "▤", group: "⧉" };
+/** The channel menu's names for rgba's channels ("r" -> "red"), from the labels the viewer already uses. */
+const CHAN_LABEL = Object.fromEntries(C.VIEW_CHANNELS.filter(([c]) => c !== "rgb").map(([c, l]) => [c, l.toLowerCase()]));
 
 const el = (doc, tag, cls, text) => {
     const n = doc.createElement(tag);
@@ -588,25 +596,71 @@ export function createCompEditor(host, opts = {}) {
     }
 
     // ── toolbar ──────────────────────────────────────────────────────────────
-    // Exposure and the channel shown are the VIEWER's (its exposure bar, seated over this picture by the panel,
-    // and E + drag): `setViewing` is how they reach here. Without a viewer the R G B A keys still work.
+    // The layer, and in it the channel, that the picture is looked at in are ONE choice (Nuke's): the channel
+    // menu. It and the exposure are the VIEWER's, not the comp's - the render never sees them - so both are
+    // shared with it: `setViewing` is how its own (E + drag, the R G B A keys) arrive here, `o.setExposure`
+    // and `o.setChannel` how these go back. Without a viewer the comp keeps them itself.
     function setChannel(c) {
         c = C.VIEW_CHANNELS.some((x) => x[0] === c) ? c : "rgb";
         if (o.setChannel) o.setChannel(c);
-        else { st.channel = c; queueRender(); }
+        else { st.channel = c; paintLook(); queueRender(); }
     }
-    let layerSel = null, lastLayers = [];
-    function fillLayers(layers) {
-        lastLayers = layers;
-        if (!layerSel) return;
-        const want = ["rgba", ...layers];
-        if (st.layer !== "rgba" && !want.includes(st.layer)) want.push(st.layer);
-        if ([...layerSel.options].map((x) => x.value).join("|") !== want.join("|")) {
-            layerSel.replaceChildren(...want.map((l) => new Option(l === st.layer && !["rgba", ...layers].includes(l) ? `${l} (not here)` : l, l)));
+    function setEv(ev) {
+        ev = Math.max(-4, Math.min(4, Number(ev) || 0));
+        if (o.setExposure) o.setExposure(ev);
+        else { st.ev = ev; paintLook(); queueRender(); }
+    }
+    /** The channel menu's choice: a layer, and one of its channels (or "rgb" for the layer as a colour). */
+    function setLook(layer, c) {
+        const moved = st.layer !== layer;
+        st.layer = layer;
+        setChannel(c);
+        paintLook();
+        if (moved) queueRender();
+    }
+
+    // What the picture on show carries, noted at each draw: the layers in it, and the channels of each.
+    let chanBtn = null, expSlider = null, expValue = null, lastChans = [];
+    const chanLayers = () => ["rgba", ...C.CH.layersOf(lastChans)];
+    /** A channel's own name in the channel menu: rgba's by colour, a layer's without the layer in front of it. */
+    function chanLabel(name, layer) {
+        if (layer === "rgba") return CHAN_LABEL[name] || name;
+        const i = String(name).indexOf(".");
+        return i > 0 ? String(name).slice(i + 1) : String(name);
+    }
+    /** What the picture is looked at in, as one name: "rgba", "depth", "rgba.red", "depth.z". */
+    function lookLabel() {
+        const chans = C.CH.viewChannels(lastChans, st.layer);
+        const name = st.channel === "rgb" ? null : chans[C.CH.RGBA.indexOf(st.channel)] || CHAN_LABEL[st.channel];
+        const here = st.layer === "rgba" || C.CH.layersOf(lastChans).includes(st.layer);
+        return here ? st.layer + (name ? `.${chanLabel(name, st.layer)}` : "") : `${st.layer} (not here)`;
+    }
+    /** What the picture is looked at in now: the channel button's label and the exposure readout. */
+    function paintLook() {
+        if (expSlider && Number(expSlider.value) !== st.ev) expSlider.value = String(st.ev);
+        if (expValue) expValue.textContent = `${st.ev.toFixed(1)} EV`;
+        if (chanBtn) chanBtn.textContent = lookLabel() + " ▾";
+    }
+    const tick = (on, s) => (on ? "✓" : "\u00a0") + "\u00a0" + s;
+    /** The channel menu: every layer of the picture on show, and under it the channels of it that are there. */
+    function chanItems() {
+        const items = [];
+        for (const layer of chanLayers()) {
+            if (items.length) items.push(null);
+            items.push([tick(st.layer === layer && st.channel === "rgb", layer), () => setLook(layer, "rgb")]);
+            const seen = new Set();
+            C.CH.viewChannels(lastChans, layer).forEach((name, k) => {
+                if (!name || seen.has(name)) return;
+                seen.add(name);
+                const c = C.CH.RGBA[k];
+                items.push(["\u00a0\u00a0" + tick(st.layer === layer && st.channel === c, chanLabel(name, layer)),
+                    () => setLook(layer, c), true, layer === "rgba" ? c.toUpperCase() : undefined]);
+            });
         }
-        layerSel.value = st.layer;
-        layerSel.style.display = want.length > 1 ? "" : "none";
+        return items;
     }
+    /** What the picture on show has, for the channel menu (each draw). */
+    function fillLook(chans) { lastChans = chans; paintLook(); }
     function renderBar() {
         bar.replaceChildren();
         const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
@@ -630,11 +684,23 @@ export function createCompEditor(host, opts = {}) {
             disp.title = `How the picture is shown: plain sRGB, or a display and view of the OCIO config (${st.ocio.source}; working space ${st.ocio.working})`;
             disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); };
         }
-        // The layer the picture shows: rgba, or a layer of extra channels of the node on show (filled at each draw).
-        layerSel = el(doc, "select", "mg-btn cp-layer");
-        layerSel.title = "The layer shown: rgba, or a layer of extra channels (one channel shows as grey)";
-        fillLayers(lastLayers);
-        layerSel.onchange = () => { st.layer = layerSel.value; queueRender(); };
+        // What the picture is looked at in: one menu, the layers and the channels in them.
+        chanBtn = btn("", "What the picture is looked at in: rgba, or a layer of extra channels, and one channel of "
+            + "it as grey (the R G B A keys on the picture pick rgba's)", () => popMenu(chanBtn, chanItems()), "cp-chan");
+        // Exposure, the comp's own: the viewer's element stays where it is (and is hidden over a comp).
+        const exp = el(doc, "div", "cp-exp");
+        exp.title = "Exposure (EV), also E + a drag on the picture. A click here is back to 0.";
+        exp.append(el(doc, "span", "cp-exp-l", "Exposure"));
+        expSlider = el(doc, "input", "cp-exp-s");
+        expSlider.type = "range"; expSlider.min = "-4"; expSlider.max = "4"; expSlider.step = "0.1";
+        expSlider.title = "Exposure (EV) - the picture is shown brighter or darker; the render never is";
+        expSlider.oninput = () => setEv(parseFloat(expSlider.value));
+        expValue = el(doc, "span", "cp-exp-v");
+        exp.append(expSlider, expValue);
+        exp.onclick = (e) => { if (e.target !== expSlider) setEv(0); };
+        exp.oncontextmenu = (e) => { e.preventDefault(); setEv(0); };
+        for (const t of ["pointerdown", "wheel", "dblclick"]) exp.addEventListener(t, (e) => e.stopPropagation());
+        paintLook();
         const ib = (icon, title, fn, cls = "") => {
             const b = el(doc, "button", "mg-btn cp-ibtn " + cls);
             b.title = title; b.append(paintIcon(doc, icon));
@@ -671,7 +737,9 @@ export function createCompEditor(host, opts = {}) {
             t,
             el(doc, "span", "mg-sep"),
             btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
-            el(doc, "span", "mg-sep"), proxy, gpuBtn, ...(disp ? [disp] : []), layerSel, eyes, ...[o.barControl && o.barControl()].filter(Boolean),
+            // Everything that only changes how the picture is LOOKED AT, together on the right by Fit.
+            el(doc, "span", "mg-spacer"),
+            proxy, gpuBtn, ...(disp ? [disp] : []), chanBtn, exp, eyes,
             vtBtn,
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
@@ -800,8 +868,9 @@ export function createCompEditor(host, opts = {}) {
         const data = ctx.createImageData(img.w, img.h);
         const ds = displaySpec(), dl = ds && lutOf(ds);
         // Exposure and the channel are the viewer's, not the comp's: the render never sees them.
-        const layers = C.CH.layersOf(Object.keys(img.ch || {}));
-        fillLayers(layers);
+        const chNames = Object.keys(img.ch || {});
+        const layers = C.CH.layersOf(chNames);
+        fillLook(chNames);
         const layerOf = (p) => (layers.includes(st.layer) && C.CH.layersOf(Object.keys(p.ch || {})).includes(st.layer) ? C.CH.layerPicture(p, p.ch, st.layer) : p);
         // Compared with B (the viewer tools): B drawn with the same sources, then laid beside / over / against A.
         const bId = viewTools.bNeeded(id);
@@ -817,8 +886,8 @@ export function createCompEditor(host, opts = {}) {
         lastDrawEnd = performance.now();
         const v = G.flatNode(st.comp, id), vf = viewFmt();
         const size = vf.width !== fmt().width || vf.height !== fmt().height ? ` · ${vf.width}×${vf.height}` : "";
-        const lay = st.layer !== "rgba" ? (layers.includes(st.layer) ? ` · ${st.layer}` : ` · no ${st.layer} here: rgba`) : "";
-        const chan = lay + (st.channel === "rgb" ? "" : " · " + C.VIEW_CHANNELS.find((c) => c[0] === st.channel)[1].toLowerCase());
+        const look = lookLabel();
+        const chan = look === "rgba" ? "" : ` · ${look}`;
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
@@ -3442,14 +3511,11 @@ export function createCompEditor(host, opts = {}) {
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
         renderAhead: () => { if (ahead) { clearTimeout(ahead.t); ahead.stop = true; } const job = { stop: false, gen: renderGen, t: 0 }; ahead = job; return aheadRun(job); },
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
-        /** How the picture is looked at: {ev, channel} (either may be left out). */
-        stage,
-        barRefresh: () => renderBar(),
         /** How the picture is looked at: {ev, channel} (either may be left out) - only what is shown. */
         setViewing: (v) => { if (!v) return; let changed = false;
             if (v.ev !== undefined) { const ev = Math.max(-6, Math.min(6, Number(v.ev) || 0)); changed = changed || ev !== st.ev; st.ev = ev; }
             if (v.channel !== undefined) { const c = C.VIEW_CHANNELS.some((x) => x[0] === v.channel) ? v.channel : "rgb"; changed = changed || c !== st.channel; st.channel = c; }
-            if (changed) queueRender(); },
+            if (changed) { paintLook(); queueRender(); } },
         load(raw, path) {
             const { comp: c, errors } = C.normalizeComp(raw);
             st.comp = c; st.path = path || ""; st.dirty = false; st.hist = new Mo.History(); st.sel = []; st.view = null;

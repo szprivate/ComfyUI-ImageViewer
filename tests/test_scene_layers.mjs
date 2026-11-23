@@ -198,7 +198,8 @@ test("namespaces and removing a reference", () => {
     assert.ok(L.referencedItems(shot, ref.id).every((it) => it.name.startsWith("villain:")));
     const n = L.removeReference(shot, ref.id);
     assert.equal(n, file.items.length);
-    assert.equal(shot.items.length, 1);
+    // What stays is the box - and the scene's default view cameras.
+    assert.equal(shot.items.filter((i) => !i.view).length, 1);
     assert.deepEqual(shot.displayLayers[0].members, []);
     assert.equal(shot.references, undefined);
     assert.equal(L.versionOf("a/b/hero_v012.json"), 12);

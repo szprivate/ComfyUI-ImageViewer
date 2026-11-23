@@ -43,7 +43,7 @@ test("a fully locked vector and a locked lone number are not written at all", ()
 test("unlocking gives the channel back and the lock survives a save", () => {
     const { sc, it } = scene();
     S.setChannelsLocked(it, ["scale.0", "position.2"], true);
-    const back = S.parseScene(JSON.stringify(sc)).items[0];
+    const back = S.parseScene(JSON.stringify(sc)).items.find((x) => x.id === it.id);
     assert.deepEqual(back.locked, ["position.2", "scale.0"]);
     S.setChannelsLocked(it, ["scale.0", "position.2"], false);
     assert.equal(it.locked, undefined);

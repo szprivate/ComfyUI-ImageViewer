@@ -129,6 +129,33 @@ test("selections convert between modes, grow and invert", () => {
     assert.deepEqual(M.selCentroid(m, "face", [top]), [0, 0.5, 0]);
 });
 
+test("a selection's normal is its face's, or the mean of the faces round an edge or a vertex", () => {
+    const m = box();
+    const unit = (n) => { assert.equal(n.length, 3); close(Math.hypot(n[0], n[1], n[2]), 1, 1e-9); };
+    const top = m.f.findIndex((face) => M.faceNormal(m, face)[1] > 0.99);
+
+    // A face: its own normal — straight up for the top of the box.
+    const nf = M.selNormal(m, "face", [top]);
+    unit(nf);
+    close(nf[0], 0); close(nf[1], 1); close(nf[2], 0);
+
+    // A top edge: the mean of the top (+Y) and the side it meets, so it leans 45° off up.
+    const ne = M.selNormal(m, "edge", [M.convertSel(m, "face", "edge", [top])[0]]);
+    unit(ne);
+    close(ne[1], Math.SQRT1_2, 1e-9);
+    close(Math.hypot(ne[0], ne[2]), Math.SQRT1_2, 1e-9);
+
+    // A top corner: the mean of the top and the two sides through it, so equal parts up and out.
+    const nv = M.selNormal(m, "vertex", [M.convertSel(m, "face", "vertex", [top])[0]]);
+    unit(nv);
+    assert.ok(nv[1] > 0);
+    for (const c of nv) close(Math.abs(c), 1 / Math.sqrt(3), 1e-9);
+
+    // Nothing selected, or a whole closed shell whose normals cancel: none.
+    assert.equal(M.selNormal(m, "face", []), null);
+    assert.equal(M.selNormal(m, "face", M.allOf(m, "face")), null);
+});
+
 test("merging welds vertices into one at their middle and drops the faces that close up", () => {
     const m = box();
     const top = m.f.findIndex((face) => M.faceNormal(m, face)[1] > 0.99);

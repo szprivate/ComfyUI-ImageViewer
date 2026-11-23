@@ -117,18 +117,26 @@ class MultiViewTests(unittest.TestCase):
                 const cams = s.views.map((k) => v._paneCamera(k));
                 return {{ views: s.views, persp: cams.map((c) => !!c.isPerspectiveCamera),
                          distinct: new Set(cams).size, labels: [...v.root.querySelectorAll('.model-pane-label')].map((b) => b.textContent),
-                         pos: cams.map((c) => c.position.toArray().map((x) => +x.toFixed(3))) }}; }}""")
+                         pos: cams.map((c) => c.position.toArray().map((x) => +x.toFixed(3))),
+                         hidden: v.scene3d.items.filter((i) => i.view).map((i) => i.visible === false),
+                         items: Object.fromEntries(v.scene3d.items.filter((i) => i.view)
+                             .map((i) => [i.view, i.position.map((x) => +x.toFixed(3))])) }}; }}""")
             # Navigating one pane (it is active: a press there) leaves the others where they are.
             boxes = self._boxes(pg)
             x, y, w, h = boxes["0"]
             pg.mouse.move(x + w / 2, y + h / 2)
             pg.mouse.down(); pg.mouse.up()
-            moved = pg.evaluate(f"""() => {{ const v = {V}; v.lookAlongAxis('y'); const s = v._paneState();
-                v._paneSave(); return {{ active: v.paneActiveKind(), rotate: v.controls.enableRotate,
+            pg.evaluate(f"() => {{ const v = {V}; v.lookAlongAxis('y'); v._paneSave(); }}")
+            pg.wait_for_timeout(250)
+            moved = pg.evaluate(f"""() => {{ const v = {V}; const s = v._paneState();
+                return {{ active: v.paneActiveKind(), rotate: v.controls.enableRotate,
                   pos: s.views.map((k) => v._paneCamera(k).position.toArray().map((x) => +x.toFixed(3))),
+                  items: Object.fromEntries(v.scene3d.items.filter((i) => i.view)
+                      .map((i) => [i.view, i.position.map((x) => +x.toFixed(3))])),
                   kept: JSON.parse(localStorage.getItem('imageviewer.viewer.view3dPanes')).cams }}; }}""")
             self._shot(pg, "four-perspective-views.png")
-            # The pane menu lists the perspective views first, then the flat ones.
+            # The pane menu is the camera selector: views, the scene's cameras,
+            # "New camera…", then the flat views.
             pg.evaluate(f"() => {V}._paneMenu(1, {V}._paneEls[1].label)")
             pg.wait_for_timeout(100)
             items = pg.locator("button.previz-menu-item").all_inner_texts()
@@ -138,15 +146,93 @@ class MultiViewTests(unittest.TestCase):
         self.assertEqual(st["views"], ["persp2", "persp", "persp3", "persp4"])
         self.assertEqual(st["persp"], [True] * 4)
         self.assertEqual(st["distinct"], 4)
-        self.assertEqual(st["labels"], ["Persp 2 ▾", "Persp ▾", "Persp 3 ▾", "Persp 4 ▾"])
+        # The main view's label names the scene camera it looks through; the extra
+        # views keep cameras of their own and their old names.
+        self.assertEqual(st["labels"], ["Persp 2 ▾", "Perspective ▾", "Persp 3 ▾", "Persp 4 ▾"])
+        # The default cameras are hidden: furniture, not content.
+        self.assertEqual(st["hidden"], [True] * 7)
         self.assertEqual(moved["active"], "persp2")
         self.assertTrue(moved["rotate"])
+        # Navigating pane 0 moved its own viewer camera, kept in the viewer's
+        # state; the scene's default camera and the other panes stayed put.
         self.assertNotEqual(moved["pos"][0], st["pos"][0])
-        self.assertEqual(moved["pos"][1:], st["pos"][1:])
         self.assertEqual([round(v, 3) for v in moved["kept"]["persp2"]["position"]], moved["pos"][0])
-        self.assertEqual([t.replace("✓ ", "") for t in items[:4]], ["Perspective", "Perspective 2", "Perspective 3", "Perspective 4"])
-        self.assertIn("Look through", items)
+        self.assertEqual(moved["pos"][1:], st["pos"][1:])
+        self.assertEqual(moved["items"], st["items"])
+        # The pane menu's top block is the camera selector: the scene's one
+        # perspective camera (ticked: this pane looks through it), then
+        # "New camera…", then the flat views. No view names, no Look-through sub.
+        self.assertEqual([t.replace("✓ ", "") for t in items[:2]], ["Perspective", "New camera…"])
+        self.assertTrue(items[0].startswith("✓ "))
+        self.assertNotIn("Perspective 2", items)
+        self.assertIn("Top", items)
+        self.assertNotIn("Look through", items)
         self.assertIn("Shading", items)
+        self.assertEqual(self.errors, [])
+
+    def test_new_camera_from_the_pane_menu_is_looked_through(self):
+        pg = self._page()
+        try:
+            pg.evaluate(f"() => {V}.setPaneLayout('quad')")
+            pg.wait_for_timeout(200)
+            pg.evaluate(f"() => {V}._paneMenu(1, {V}._paneEls[1].label)")
+            pg.wait_for_timeout(100)
+            pg.get_by_text("New camera…", exact=True).click()
+            pg.wait_for_timeout(250)
+            st = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                const id = v.paneThroughId('persp');
+                return {{ id: id, active: s.activeCamera,
+                          cams: s.items.filter((i) => i.kind === 'camera').map((i) => [i.name, !!i.view, i.visible]) }}; }}""")
+            labels = pg.evaluate(f"""() => [...{V}.root.querySelectorAll('.model-pane-label')].map((b) => b.textContent)""")
+        finally:
+            pg.close()
+        # Made where the view looked, and the view looks through it at once.
+        self.assertTrue(st["id"])
+        self.assertEqual(st["active"], st["id"])
+        defaults = [[n, True, False] for n in
+                    ("Perspective", "Top", "Bottom", "Front", "Back", "Right", "Left")]
+        self.assertEqual(st["cams"], defaults + [["Camera", False, True]])
+        self.assertEqual(labels[1], "Camera ▾")
+        self.assertEqual(self.errors, [])
+
+    def test_a_flat_view_is_an_orthographic_scene_camera(self):
+        pg = self._page()
+        try:
+            pg.evaluate(f"() => {V}.setPaneLayout('2h')")
+            pg.evaluate(f"() => {V}.setPaneView(0, 'top')")
+            pg.wait_for_timeout(250)
+            st = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                const id = v.paneThroughId('top'); const item = s.items.find((i) => i.id === id);
+                const cam = v._paneCamera('top');
+                return {{ name: item && item.name, proj: item && item.projection, ortho: item && item.ortho,
+                          isOrtho: !!cam.isOrthographicCamera, visible: item && item.visible,
+                          label: v._paneEls[0].label.textContent }}; }}""")
+            # Zoom writes the picture's width, pan the camera's place - into the item.
+            boxes = self._boxes(pg)
+            x, y, w, h = boxes["0"]
+            pg.mouse.move(x + w / 2, y + h / 2)
+            pg.mouse.wheel(0, -240)
+            pg.wait_for_timeout(250)
+            zoomed = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                const item = s.items.find((i) => i.id === v.paneThroughId('top'));
+                return {{ ortho: item.ortho, pos: item.position.map((n) => +n.toFixed(3)) }}; }}""")
+            pg.mouse.move(x + w / 2, y + h / 2)
+            pg.keyboard.down("Alt")
+            pg.mouse.down(); pg.mouse.move(x + w / 2 + 60, y + h / 2 + 30); pg.mouse.up()
+            pg.keyboard.up("Alt")
+            pg.wait_for_timeout(250)
+            panned = pg.evaluate(f"""() => {{ const v = {V}; const s = v.scene3d;
+                return s.items.find((i) => i.id === v.paneThroughId('top')).position.map((n) => +n.toFixed(3)); }}""")
+            self._shot(pg, "flat-ortho-camera.png")
+        finally:
+            pg.close()
+        self.assertEqual(st["name"], "Top")
+        self.assertEqual(st["proj"], "orthographic")
+        self.assertTrue(st["isOrtho"])
+        self.assertEqual(st["visible"], False)
+        self.assertEqual(st["label"], "Top ▾")
+        self.assertNotEqual(zoomed["ortho"], st["ortho"])
+        self.assertNotEqual(panned, zoomed["pos"])
         self.assertEqual(self.errors, [])
 
     def test_a_camera_dragged_onto_a_pane_is_looked_through_there(self):
@@ -176,7 +262,7 @@ class MultiViewTests(unittest.TestCase):
             pg.wait_for_timeout(100)
             after = pg.evaluate(f"() => window.__panel.previzScene().items.find((i) => i.id === '{cam}').position.slice()")
             self._shot(pg, "camera-dropped-on-pane.png")
-            # Its own camera again from the pane menu's Look through.
+            # Its own camera again (what re-picking its view in the pane menu does).
             pg.evaluate(f"() => {V}.paneLookThrough(0, null)")
             free = pg.evaluate(f"() => {{ const v = {V}; return [v.paneThroughId(v._paneState().views[0]), v._paneEls[0].label.textContent]; }}")
         finally:
@@ -186,7 +272,7 @@ class MultiViewTests(unittest.TestCase):
         self.assertEqual(st["through"], cam)
         self.assertTrue(st["same"])
         self.assertTrue(st["label"].startswith("Camera"))
-        self.assertIsNone(st["sceneCam"])         # the main view still has the free camera
+        self.assertIsNone(st["sceneCam"])         # the main view keeps its default camera
         self.assertEqual(st["marked"], 0)
         self.assertNotEqual(before, after)
         self.assertEqual(free, [None, "Persp 2 ▾"])
@@ -247,7 +333,14 @@ class MultiViewTests(unittest.TestCase):
             scaled = pg.evaluate(f"() => {V}._entries.get('{st['id']}').locator.scale.x")
             # A click on the cross selects it.
             pg.evaluate("() => window.__panel.previzSelect(null)")
-            pg.evaluate(f"""() => {{ const v = {V}; v.camera.position.set(0, 2, 12); v.controls.target.set(0, 0, 0); v.controls.update(); v.requestRender(); }}""")
+            # A known vantage for the click: the view's camera is a scene camera
+            # now, so it is the camera that gets put there.
+            pg.evaluate(f"""async () => {{ const P = window.__panel, v = {V};
+                const S = await import('/extensions/viewer/imageViewer_scene3d.js');
+                const def = P.previzScene().items.find((i) => i.view === 'persp');
+                P.previzApplyTransform(def.id, {{ position: [0, 2, 12],
+                    rotation: S.lookRotation([0, 2, 12], [0, 0, 0]) }}, ['position', 'rotation']);
+                v.requestRender(); }}""")
             pg.wait_for_timeout(200)
             pt = pg.evaluate(f"""() => {{ const v = {V}; const p = new v.libs.THREE.Vector3(0, 0.9, 0)
                 .applyMatrix4(v._entries.get('{st['id']}').locator.matrixWorld).project(v.activeCameraObject());

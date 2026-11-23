@@ -150,7 +150,7 @@ test("layers survive serialize / parse (undo, the node widget, a scene file)", (
     L.keyLayerWeight(layer, 0, 0.3);
     L.setLayer(scene, layer.id, { solo: true, lock: true });
     const back = S.parseScene(S.serializeScene(scene));
-    const b = back.items[0];
+    const b = back.items.find((i) => i.id === box.id);
     assert.equal(back.animLayers.length, 1);
     assert.equal(back.activeLayer, layer.id);
     assert.deepEqual({ ...back.animLayers[0], tracks: undefined }, { ...scene.animLayers[0], tracks: undefined });
@@ -160,8 +160,8 @@ test("layers survive serialize / parse (undo, the node widget, a scene file)", (
     assert.equal(S.editLayer(b).id, layer.id);
     // Keys on a layer the scene does not have are dropped.
     const raw = JSON.parse(S.serializeScene(scene));
-    raw.items[0].layerTracks.ghost = { position: [{ f: 0, v: [9, 9, 9] }] };
-    assert.deepEqual(Object.keys(S.parseScene(raw).items[0].layerTracks), [layer.id]);
+    raw.items.find((i) => i.id === box.id).layerTracks.ghost = { position: [{ f: 0, v: [9, 9, 9] }] };
+    assert.deepEqual(Object.keys(S.parseScene(raw).items.find((i) => i.id === box.id).layerTracks), [layer.id]);
 });
 
 test("merge down bakes what the two show into the lower layer, and the picture stays", () => {

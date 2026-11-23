@@ -511,23 +511,29 @@ export class Model3DView {
             const id = this.paneThroughId();
             if (!id || !this.hooks.onCameraMoved) return;
             const entry = this._entries.get(id);
+            if (!entry || !entry.camera) return;
             this.hooks.onCameraMoved(id, this._aimReported(id, this.readTransform(this.activeCameraObject(),
-                                                            entry && entry.item)), live);
+                                                            entry.item)), live);
         };
         this._reportCamera = reportCamera;
         controls.addEventListener("change", () => {
             // The controls looked at their centre: a scene camera's roll goes back on.
-            if (this._navigating) { this._aimNavChange(); reportCamera(true); }
+            if (this._navigating) { this._navMoved = true; this._aimNavChange(); reportCamera(true); }
             this.requestRender();
         });
         controls.addEventListener("start", () => {
             this._navigating = true;
+            this._navMoved = false;
             // Their centre onto the camera's view axis, or its target (imageViewer_cameraAim3d.js).
             this._aimNavStart();
         });
         controls.addEventListener("end", () => {
             this._navigating = false;
-            reportCamera(false);
+            // A gesture that moved nothing (a click, a gizmo drag the orbit
+            // controls only touched) reports nothing: a snapshot for nothing
+            // would sit in the undo line in front of the edit the user means.
+            if (this._navMoved) reportCamera(false);
+            this._navMoved = false;
             if (this._paneCamMoved) this._paneCamMoved();
         });
         controls.update();
@@ -887,7 +893,10 @@ export class Model3DView {
         // A scene camera's lens depends on the viewport too, when you are
         // looking through it: the gate is fitted inside, and the view around it.
         for (const entry of this._entries.values()) {
-            if (entry.camera) this._applyLens(entry, evaluateIn(this.scene3d, entry.item, this.sceneFrame).fov);
+            if (entry.camera) {
+                const at0 = evaluateIn(this.scene3d, entry.item, this.sceneFrame);
+                this._applyLens(entry, at0.fov, at0.ortho);
+            }
         }
         this._syncGate();
         this._panePlace();
@@ -972,9 +981,20 @@ export class Model3DView {
         return this.scene3d.activeCamera || null;
     }
 
+    /**
+     * The scene camera the main perspective draws through: the one looked through,
+     * else the view's own default camera (a scene camera like any other), else
+     * null - a view whose default was deleted draws through the free camera.
+     * Everything that has to agree with what is on screen reads this: the drawn
+     * camera, the gate, the lens, the gizmo, the aim target (imageViewer_view3dPanes.js).
+     */
+    _mainThroughId() {
+        return this.paneThroughId ? this.paneThroughId("persp") : this._throughCam();
+    }
+
     _perspCameraObject() {
         if (this._walk) return this.camera;
-        const id = this._throughCam();
+        const id = this._mainThroughId();
         const entry = id ? this._entries.get(id) : null;
         return (entry && entry.camera) || this.camera;
     }
@@ -1394,6 +1414,11 @@ export class Model3DView {
                 this._disposeEntry(entry, false);
                 entry.oversKey = null;
                 pending.push(this._tracked(this._loadEntry(entry, item)));
+            } else if (item.kind === "camera" && entry.cameraType !== (item.projection || "perspective")) {
+                // The projection switched: the three camera is the other kind now.
+                this._disposeEntry(entry, false);
+                this._entries.delete(item.id);
+                pending.push(this._tracked(this._addEntry(item)));
             } else if (item.kind === "model") {
                 this.usdSyncOvers(entry, item);
             } else if (item.kind === "imageplane" && entry.key !== this._srcKey(item.src)) {
@@ -1560,12 +1585,17 @@ export class Model3DView {
         // A camera IS its own root, so the gizmo and the orbit controls move the
         // camera itself and its transform is the one the scene stores.
         const root = item.kind === "camera"
-            ? new THREE.PerspectiveCamera(item.fov || 35, this._aspect(), 0.1, 10000)
+            ? (item.projection === "orthographic"
+                ? new THREE.OrthographicCamera(-2, 2, 2, -2, 0.01, 10000)
+                : new THREE.PerspectiveCamera(item.fov || 35, this._aspect(), 0.1, 10000))
             : new THREE.Group();
         root.name = item.name;
         root.userData.imageViewerItemId = item.id;
         this.scene.add(root);
-        const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null };
+        const entry = { item, root, key: "", mixer: null, clips: [], camera: null, helper: null, stats: null,
+                        // A camera's three object is its projection's kind; switching
+                        // the projection in the Channel Box rebuilds the entry.
+                        cameraType: item.kind === "camera" ? (item.projection || "perspective") : null };
         if (item.kind === "control") {
             // Its rest matrix sits ABOVE its channels: the gizmo moves the root
             // inside this node, so the channels it writes read zero at rest.
@@ -1944,7 +1974,7 @@ export class Model3DView {
         this._syncControlsCamera();
         const { THREE } = this.libs;
         const D = Math.PI / 180;
-        const activeId = this._throughCam();
+        const activeId = this._mainThroughId();
         const fps = this.scene3d.fps || 24;
         // Display layers (imageViewer_sceneLayers.js): hidden, template, reference.
         const layers = displayStates(this.scene3d);
@@ -1992,7 +2022,7 @@ export class Model3DView {
             const shownByLayer = !(layers.get(item.id) && !layers.get(item.id).visible);
             entry.root.visible = item.visible !== false && this._visibleInTree(item) && shownByLayer;
             if (entry.camera) {
-                this._applyLens(entry, at.fov);
+                this._applyLens(entry, at.fov, at.ortho);
                 // Drawing the camera you are looking through would put its own
                 // frustum lines across the shot.
                 const active = item.id === activeId;
@@ -2094,13 +2124,41 @@ export class Model3DView {
      *     it in the scene is the shot's.
      * Rendering sets its own lens (renderToDataURL).
      */
-    _applyLens(entry, fov) {
+    _applyLens(entry, fov, ortho) {
         const cam = entry.camera;
         if (!cam || this._sizeBackup) return;
         const item = entry.item;
         const f = fov || 35;
-        const active = this._throughCam() === item.id;
+        const active = this._mainThroughId() === item.id;
         let share = [1, 1];
+        if (cam.isOrthographicCamera) {
+            // An orthographic camera's `ortho` is the width of its picture in world
+            // units; the view around it widens that by the overscan, as it widens a
+            // lens's field - and off the gate it keeps the picture's own shape.
+            const w = Number(ortho) > 0 ? Number(ortho) : 4;
+            let halfW = w / 2, aspect = 16 / 9;
+            if (active) {
+                const g = this._gateRect(item);
+                share = [g.w / g.vw, g.h / g.vh];
+                halfW = (w / 2) / share[0];
+                aspect = g.vw / g.vh;
+            } else {
+                const [rw, rh] = cameraResolution(item);
+                aspect = rw / rh;
+            }
+            const halfH = halfW / aspect;
+            cam.left = -halfW; cam.right = halfW; cam.top = halfH; cam.bottom = -halfH;
+            // The wheel zooms an orthographic camera through cam.zoom; the scene
+            // keeps the width, so the item's own width rides along for the report
+            // that turns a zoom back into an `ortho` (readTransform).
+            cam.userData.orthoItem = w;
+            cam.zoom = 1;
+            const [cn, cf] = clipOf(item);
+            cam.near = cn; cam.far = cf;
+            cam.updateProjectionMatrix();
+            if (entry.helper) entry.helper.update();
+            return;
+        }
         if (active) {
             const g = this._gateRect(item);
             share = [g.w / g.vw, g.h / g.vh];
@@ -2118,6 +2176,21 @@ export class Model3DView {
         cam.far = far;
         this._lensProject(cam, item, share[0], share[1]);
         if (entry.helper) entry.helper.update();
+    }
+
+    /**
+     * An orthographic scene camera rendering its picture at W x H: the width is
+     * the item's `ortho`, the height follows the picture's shape - no overscan,
+     * a render is exactly the shot.
+     */
+    _renderOrtho(cam, item, W, H) {
+        const ortho = Number(evaluateIn(this.scene3d, item, this.sceneFrame).ortho) || 4;
+        const halfW = ortho / 2, halfH = halfW * (H / W);
+        cam.left = -halfW; cam.right = halfW; cam.top = halfH; cam.bottom = -halfH;
+        const [n, f] = clipOf(item);
+        cam.near = n; cam.far = f;
+        cam.zoom = 1;
+        cam.updateProjectionMatrix();
     }
 
     /**
@@ -2144,7 +2217,7 @@ export class Model3DView {
     _syncGate() {
         const ui = this.ui;
         if (!ui || !ui.gate) return;
-        const id = this._throughCam();
+        const id = this._mainThroughId();
         const entry = id && !this._walk ? this._entries.get(id) : null;
         // The gate is drawn over the whole stage: only with one perspective view on it.
         if (!entry || !entry.camera || !this._panePlain()) {
@@ -2523,11 +2596,15 @@ export class Model3DView {
     /**
      * Whether the gizmo's handles follow the world axes or the item's own.
      * three always scales along the item's axes, so "world" there is a no-op —
-     * the same as every other 3D app.
+     * the same as every other 3D app. Editing a mesh, "local" (the item's own)
+     * is the selection's normal instead (imageViewer_view3dMeshEdit.js).
      */
     setGizmoSpace(space) {
         this.gizmoSpace = space === "world" ? "world" : "local";
         if (this.gizmo) this.gizmo.setSpace(this.gizmoSpace);
+        // Editing a mesh: the handle's turn depends on the space, so work out
+        // where the gizmo goes again rather than wait for the next selection.
+        if (this._me) this._syncSelection();
         this._syncToolbar();
         this.requestRender();
     }
@@ -2660,7 +2737,7 @@ export class Model3DView {
         if (this._me && this._meSyncGizmo()) { this._aimSync(); return; }
         // You cannot drag the camera you are looking through — there would be
         // no handles on screen to grab.
-        if (entry.item.kind === "camera" && entry.item.id === this._throughCam()) this.gizmo.detach();
+        if (entry.item.kind === "camera" && entry.item.id === this._mainThroughId()) this.gizmo.detach();
         else if (this.gizmoMode === "select" || this._msOn) this.gizmo.detach();
         else if (this.pivotMode && entry.body) {
             // A stand-in at the pivot point: dragging the item's own root would
@@ -2695,17 +2772,24 @@ export class Model3DView {
     /** The transform of a three object, in the scene's own units (degrees). */
     readTransform(object, item = null) {
         const R = 180 / Math.PI;
+        // An orthographic camera's zoom IS its width in world units (the wheel
+        // writes zoom; the scene keeps `ortho`), taken back out of the frustum
+        // _applyLens / _paneFitCam set from the item.
+        const ortho = object.isOrthographicCamera
+            ? (object.userData && object.userData.orthoItem ? object.userData.orthoItem : (object.right - object.left))
+              / (object.zoom || 1) : undefined;
+        const withOrtho = (t) => (ortho === undefined ? t : { ...t, ortho });
         // The root sits at position+pivot (see applyFrame), so what the scene
         // stores is what the gizmo left MINUS the pivot. Without this the item
         // jumps by its pivot the moment anything is dragged.
         const entry = item ? this._entries.get(item.id) : null;
         if (entry && entry.body && object === entry.root) {
             const pv = evaluateIn(this.scene3d, item, this.sceneFrame).pivot || [0, 0, 0];
-            return {
+            return withOrtho({
                 position: [object.position.x - pv[0], object.position.y - pv[1], object.position.z - pv[2]],
                 rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],
                 scale: object.scale.toArray(),
-            };
+            });
         }
         // A camera inside a group is driven in world space (see _reparent), so
         // what the scene stores has to be taken back out of its parent.
@@ -2718,17 +2802,17 @@ export class Model3DView {
             const p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
             local.decompose(p, q, s);
             const e = new THREE.Euler().setFromQuaternion(q, "XYZ");
-            return {
+            return withOrtho({
                 position: p.toArray(),
                 rotation: [e.x * R, e.y * R, e.z * R],
                 scale: s.toArray(),
-            };
+            });
         }
-        return {
+        return withOrtho({
             position: object.position.toArray(),
             rotation: [object.rotation.x * R, object.rotation.y * R, object.rotation.z * R],
             scale: object.scale.toArray(),
-        };
+        });
     }
 
     /** The point the view is looking at — where a new shape should land. */
@@ -2912,10 +2996,11 @@ export class Model3DView {
         this.renderer.setPixelRatio(1);
         this.renderer.setSize(W, H, false);
         cam.aspect = width / height;
-        // A scene camera renders its gate: its own fov, not the overscanned
-        // one the viewport shows around it.
-        if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
+        // A scene camera renders its gate: its own lens or width, not the
+        // overscanned one the viewport shows around it.
+        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, W, H);
+        else if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
+        if (r.item && !cam.isOrthographicCamera) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
         // Rendered as the viewport draws it: bloom and tone mapping included.
         this._worldResize(W, H);
         this._worldRender(cam);
@@ -2951,8 +3036,9 @@ export class Model3DView {
         const cam = r.cam;
         const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
         cam.aspect = W / H;
-        if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
-        if (r.item) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
+        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, W, H);
+        else if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
+        if (r.item && !cam.isOrthographicCamera) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
 
         // A world shown as points is measured by its meshes.
         const atlasBack = this._atlasDepthBegin();

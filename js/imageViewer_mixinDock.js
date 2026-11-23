@@ -364,7 +364,7 @@ export const DockMixin = {
             if (k === 0 || sizesOnly) return;
             const prev = flex[k - 1];
             // A folded panel has no room to give or take.
-            if (DT.allFolded(f.node) || DT.allFolded(prev.node)) return;
+            if (DT.foldedAlong(n, f.node) || DT.foldedAlong(n, prev.node)) return;
             const sp = el.ownerDocument.createElement("div");
             sp.className = row ? "stack-splitter horizontal" : "stack-splitter";
             sp.style.order = String(n.children.indexOf(f.node) * 2 - 1);
@@ -916,12 +916,14 @@ export const DockMixin = {
             max.className = "pt-btn pt-max";
             max.id = `${id}-max-btn`;
             this._dockBarIcons(id, fold, max);
+            const add = this._dockAddButton(id, doc);
 
-            bar.append(grip, name, fold, max, hide);
+            bar.append(grip, name, add, fold, max, hide);
             el.insertBefore(bar, el.firstChild);
 
-            for (const b of [fold, max, grip]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+            for (const b of [fold, max, grip, add]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
             grip.addEventListener("click", (e) => { e.stopPropagation(); this._dockSwitchMenu(id, grip); });
+            add.addEventListener("click", (e) => { e.stopPropagation(); this._dockAddMenu(id, add); });
             fold.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleCollapsed(id); });
             max.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleMaximized(id); });
             bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button, select, input, a")) this.dockToggleCollapsed(id); });
@@ -961,12 +963,14 @@ export const DockMixin = {
         max.className = "pt-btn pt-max";
         max.id = "view-max-btn";
         const fold = doc.createElement("button");      // only for _dockBarIcons; never shown
-        bar.append(grip, name, max);
+        const add = this._dockAddButton(VIEW_ID, doc);
+        bar.append(grip, name, add, max);
         el.insertBefore(bar, el.firstChild);
         this._dockViewFold = fold;
         this._dockBarIcons(VIEW_ID, fold, max);
-        for (const b of [max, grip]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
+        for (const b of [max, grip, add]) b.addEventListener("pointerdown", (e) => e.stopPropagation());
         grip.addEventListener("click", (e) => { e.stopPropagation(); this._dockViewMenu(grip); });
+        add.addEventListener("click", (e) => { e.stopPropagation(); this._dockAddMenu(VIEW_ID, add); });
         max.addEventListener("click", (e) => { e.stopPropagation(); this.dockToggleMaximized(VIEW_ID); });
         bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button")) this.dockToggleMaximized(VIEW_ID); });
         bar.addEventListener("pointerdown", (e) => this._onDockHeaderDown(VIEW_ID, bar, e));
@@ -1142,6 +1146,76 @@ export const DockMixin = {
         const win = btn.ownerDocument.defaultView || window;
         const off = () => { if (!menu.isConnected) { btn.classList.remove("open"); this._dockSwitchOpen = null; } else win.requestAnimationFrame(off); };
         win.requestAnimationFrame(off);
+    },
+
+    // ── Adding a panel underneath (the + in a title bar) ─────────────────────
+
+    _dockAddButton(id, doc) {
+        const btn = doc.createElement("button");
+        btn.className = "pt-btn pt-add";
+        btn.id = `${id === VIEW_ID ? "view" : id}-add-btn`;
+        btn.title = "Add a panel underneath";
+        btn.setAttribute("aria-haspopup", "menu");
+        const NS = "http://www.w3.org/2000/svg";
+        const s = doc.createElementNS(NS, "svg");
+        s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+        s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+        // Lucide's plus (as shapes, ISC licence).
+        for (const d of ["M5 12h14", "M12 5v14"]) { const p = doc.createElementNS(NS, "path"); p.setAttribute("d", d); s.append(p); }
+        btn.append(s);
+        return btn;
+    },
+
+    /** The + menu: every panel of the space; the one picked comes up under this place (moved here if open elsewhere). */
+    _dockAddMenu(id, btn) {
+        const key = "add:" + id;
+        if (this._previzAddMenu) { const was = this._dockSwitchOpen; this._previzCloseAddMenu(); if (was === key) return; }
+        const self = id === VIEW_ID ? null : _dockId(id);
+        const entries = [];
+        for (const g of this._dockSwitchGroups()) {
+            const items = g.items.filter((it) => it.id !== self);
+            if (!items.length) continue;
+            if (entries.length) entries.push("-");
+            entries.push({ head: g.title });
+            for (const it of items) {
+                const open = this.isPanelDocked(it.id);
+                entries.push({
+                    label: it.label,
+                    title: open ? "Open in another place: it moves under this one" : "Add it under this panel",
+                    run: () => this.dockPanelUnder(it.id, id),
+                });
+            }
+        }
+        if (!entries.length) return;
+        const r = btn.getBoundingClientRect();
+        const menu = this._previzOpenMenu && this._previzOpenMenu(entries, r.left, r.bottom + 3, btn);
+        if (!menu) return;
+        menu.classList.add("bar-menu", "pt-switch-menu", "pt-add-menu");
+        this._dockSwitchOpen = key;
+        btn.classList.add("open");
+        const win = btn.ownerDocument.defaultView || window;
+        const off = () => { if (!menu.isConnected) { btn.classList.remove("open"); if (this._dockSwitchOpen === key) this._dockSwitchOpen = null; } else win.requestAnimationFrame(off); };
+        win.requestAnimationFrame(off);
+    },
+
+    /** Put panel `newId` under the place `underId` holds (a panel's id, or the main view's): that place splits in two. */
+    dockPanelUnder(newId, underId) {
+        newId = _dockId(newId);
+        if (!DOCK_PANELS[newId] || !this._dockPanelEl(newId)) return false;
+        const ref = underId === VIEW_ID ? { kind: "view" } : { kind: "panel", id: _dockId(underId) };
+        if (ref.id === newId) return false;
+        // A folded place opens, so the newcomer is not squeezed under a title bar.
+        if (ref.kind === "panel" && this.isPanelCollapsed(ref.id)) {
+            const e = this._dockEntryOf(ref.id);
+            if (e) delete e.collapsed;
+        }
+        const ok = this.dockPanelBeside(newId, ref, "bottom");
+        if (ok) {
+            const e = this._dockEntryOf(newId);
+            if (e && e.collapsed) { delete e.collapsed; this.applyDockLayout(); }
+            if (this.barGroupsSync) this.barGroupsSync();
+        }
+        return ok;
     },
 
     /**
@@ -1555,6 +1629,24 @@ export const DockMixin = {
         }
         this.queuePersistViewerState && this.queuePersistViewerState();
         return space;
+    },
+
+    /**
+     * The Viewer space's own layout (Sebastian 2026-11-22): the picture in the middle, the History on the left,
+     * the File browser and the Parameters panel on the right — what every other space has as its preset, and the
+     * one thing the Viewer space had no way to ask for. A panel already on the side the preset wants keeps the
+     * place the user gave it; every other panel is left as it is.
+     */
+    dockViewerPreset() {
+        if (!this.dockPanelTo || !this.setPanelDocked) return false;
+        // The picture in the middle, even where the user dropped it as a tab behind a panel.
+        if (this.isViewBehind && this.isViewBehind()) this.dockViewFront();
+        for (const [id, side] of [["history", "left"], ["browser", "right"], ["params", "right"]]) {
+            if (this._dockSideOf(id) !== side) this.dockPanelTo(id, side);
+            if (!this.isPanelDocked(id)) this.setPanelDocked(id, true);
+        }
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        return true;
     },
 
     // ── Persistence ──────────────────────────────────────────────────────────

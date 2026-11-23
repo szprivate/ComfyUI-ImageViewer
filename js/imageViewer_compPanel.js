@@ -333,7 +333,6 @@ export const CompPanelMixin = {
         const endEl = this.container.querySelector("#total-f");
         if (endEl) { endEl.readOnly = true; endEl.classList.remove("editable"); endEl.title = "Last frame"; }
         this.viewport.classList.remove("comp-mode");
-        this._cpExposureHome();
         if (st.host) st.host.style.display = "none";
         this._cpSeatBottom(null);
         this._cpRotoUnmount();
@@ -423,27 +422,9 @@ export const CompPanelMixin = {
         }
     },
 
-    // The viewer's own exposure bar (#exposure-control: the same element, its handlers, E + drag) in the comp's
-    // bar after the display menu (`o.barControl`, so a rebuilt bar keeps it); put back where it was when Comp is left.
-    _cpExposureSeat(rec) {
-        const ctl = this.exposureControl;
-        if (!ctl || !rec || !rec.editor || !rec.editor.barRefresh) return;
-        if (!this._cpExpHome) {
-            this._cpExpHome = { parent: ctl.parentNode, next: ctl.nextSibling };
-            // The comp's keys and picture stay out of it.
-            for (const t of ["pointerdown", "wheel", "dblclick"]) ctl.addEventListener(t, (e) => { if (this._cpOn) e.stopPropagation(); });
-        }
-        rec.editor.barRefresh();
-        this.compViewSync();
-    },
-    _cpExposureHome() {
-        const h = this._cpExpHome, ctl = this.exposureControl;
-        if (!h || !ctl || ctl.parentNode === h.parent) return;
-        h.parent.insertBefore(ctl, h.next && h.next.parentNode === h.parent ? h.next : null);
-    },
-
     _cpSeat(rec) {
-        this._cpExposureSeat(rec);
+        // A comp draws its own picture: hand it the exposure and channel the viewer is on.
+        if (this._cpOn && rec && rec.editor) this.compViewSync();
         for (const [id, part] of Object.entries(COMP_PANELS).concat([["params", "props"]])) {
             const slot = this._cpSlot(id);
             if (!slot) continue;
@@ -572,7 +553,7 @@ export const CompPanelMixin = {
             onDisplay: (v) => { try { localStorage.setItem("imageviewer.comp.display", v || ""); } catch (_) { /* not kept */ } },
             setChannel: (c) => this.setChannelView(VIEW_CHANNEL[c] || "all"),
             exposureHeld: () => !!this.isExposureModifierActive,
-            barControl: () => (this._cpOn && this.activeTab === key && this._cpExpHome ? this.exposureControl : null),
+            setExposure: (v) => this.setExposure(v),
             nudgeExposure: (d) => this.setExposure((this.exposure || 0) + d),
             sourceInfo: (node) => this._cpSourceInfo(rec, node),
             pickFile: (cb) => this._cpPickFootage(cb),

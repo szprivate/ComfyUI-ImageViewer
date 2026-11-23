@@ -336,6 +336,31 @@ export function selFaces(mesh, mode, ids) {
     return mode === "face" ? pruneSel(mesh, "face", ids) : convertSel(mesh, mode, "face", ids);
 }
 
+/**
+ * The averaged normal of a selection, in the mesh's own space (a unit [x, y, z]),
+ * or null when it has none — nothing selected, or the normals cancel out. A face
+ * uses its own normal; an edge or a vertex the mean of the faces around it,
+ * area-weighted as faceNormalRaw is. This is a component's normal: what a gizmo
+ * turned to the selection points along.
+ */
+export function selNormal(mesh, mode, ids) {
+    const n = [0, 0, 0];
+    let any = false;
+    const add = (fi) => {
+        const face = mesh.f[fi];
+        if (!face) return;
+        const r = faceNormalRaw(mesh, face);
+        n[0] += r[0]; n[1] += r[1]; n[2] += r[2];
+        any = true;
+    };
+    if (mode === "face") for (const fi of ids) add(fi);
+    else if (mode === "edge") { const ef = edgeFaces(mesh); for (const key of ids) for (const fi of ef.get(key) || []) add(fi); }
+    else { const vf = vertexFaces(mesh); for (const i of ids) for (const fi of vf[i] || []) add(fi); }
+    if (!any) return null;
+    const out = norm(n);
+    return out[0] || out[1] || out[2] ? out : null;
+}
+
 // ── Taking things away ──────────────────────────────────────────────────────
 
 /** Vertices no face uses are dropped, and the faces renumbered. Returns the old -> new map too. */

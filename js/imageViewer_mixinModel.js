@@ -63,7 +63,9 @@ export const ModelMixin = {
                 // A camera's look-at target dragged in the canvas (imageViewer_cameraAim3d.js).
                 onAimTarget: (id, target, live) => this.previzSetAimTarget(id, target, { live }),
                 onCameraMoved: (id, transform, live) =>
-                    this.previzApplyTransform(id, transform, ["position", "rotation"], { live }),
+                    this.previzApplyTransform(id, transform, ["position", "rotation", "ortho"], { live, solo: true }),
+                // "New camera…" in a pane's menu: made where the pane looks, then looked through.
+                onNewCamera: () => this.previzAddCamera(),
                 onPanelToggle: (id) => this.togglePanelDocked(id),
                 // The pivot mode is the tab's (previzTogglePivotMode keeps it and tells the view).
                 onPivotMode: () => this.previzTogglePivotMode(),

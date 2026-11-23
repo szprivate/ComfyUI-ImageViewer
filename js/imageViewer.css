@@ -240,9 +240,6 @@
     white-space: nowrap;
 }
 
-/* In the Comp bar (imageViewer_compPanel.js): the same bar, in line with the bar's buttons. */
-.mg-bar #exposure-control { position: static; transform: none; flex: 0 0 auto; padding: 2px 8px; }
-
 #rgb-channel-sel,
 #color-in-sel {
     background: #111;
@@ -756,7 +753,8 @@ textarea.param-input {
 /* A narrow panel (the History strip at its thumbnail width): the bar keeps the switch and the close
    button, the name and the rest step aside in that order. */
 .panel-titlebar { container-type: inline-size; }
-@container (max-width: 130px) { .pt-max, .pt-switch > svg.pt-caret { display: none; } }
+@container (max-width: 130px) { .pt-max, .pt-add, .pt-switch > svg.pt-caret { display: none; } }
+.pt-add.open { color: #fff; background: rgba(255,255,255,0.08); }
 @container (max-width: 100px) { .pt-fold, .pt-name { display: none; } .pt-close { margin-left: auto; } }
 .pt-btn:disabled { opacity: 0.35; cursor: default; }
 /* Folded: the title bar alone. Maximised: over the viewer, between its tab bar and its transport. */
@@ -1973,8 +1971,9 @@ textarea.param-input {
 /* Comp (imageViewer_compPanel.js): the same shape as Motion. */
 .comp-view { position: absolute; inset: 0; z-index: 8; display: none; background: #0f0f12; cursor: default; }
 .comp-tab, .comp-stage { position: absolute; inset: 0; }
+/* Comp draws its own picture and has its own exposure and channel menu in its bar (imageViewer_compEditor.js). */
 .viewport.motion-mode #exposure-control,
-.viewport.comp-mode #color-in-sel,
+.viewport.comp-mode #exposure-control,
 .viewport.view-mode #exposure-control,
 .viewport.view-mode #contact-container,
 .viewport.view-mode #img-frame,

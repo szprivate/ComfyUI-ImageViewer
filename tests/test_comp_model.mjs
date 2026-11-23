@@ -553,6 +553,14 @@ test("channel rules: names, lists, a write into one channel or a layer, the Roto
     assert.deepEqual(CH.parseChannels("mask.a, depth.z;; bad! rgb"), ["mask.a", "depth.z", "rgb"]);
     assert.deepEqual(CH.expandChannels(["mask"], [], true), ["mask.r", "mask.g", "mask.b", "mask.a"]);
     assert.deepEqual(CH.expandChannels(["depth"], ["depth.z"], true), ["depth.z"]);
+    // What the channel menu offers is what layerPicture puts in r g b a, by name.
+    assert.deepEqual(CH.viewChannels([], "rgba"), ["r", "g", "b", "a"]);
+    assert.deepEqual(CH.viewChannels(["m.r", "m.b"], "m"), ["m.r", null, "m.b", null]);
+    assert.deepEqual(CH.viewChannels(["depth.z"], "depth"), ["depth.z", "depth.z", "depth.z", null], "one channel is shown grey");
+    const two = { "norm.X": Float32Array.from([0.1]), "norm.Y": Float32Array.from([0.2]) };
+    assert.deepEqual(CH.viewChannels(Object.keys(two), "norm"), ["norm.X", "norm.Y", null, null]);
+    assert.deepEqual(Array.from(CH.layerPicture({ w: 1, h: 1, data: Float32Array.from([1, 1, 1, 1]) }, two, "norm").data)
+        .map((v) => +v.toFixed(3)), [0.1, 0.2, 0, 1]);
     const P = { w: 1, h: 1, data: Float32Array.from([0.1, 0.2, 0.3, 0.4]) };
     const base = { w: 1, h: 1, data: Float32Array.from([1, 1, 1, 1]) };
     let [img, ex] = CH.writeTarget(base, {}, P, "a");

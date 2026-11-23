@@ -43,6 +43,7 @@ export const MG_CSS = `
 .mg-btn:hover{background:#35353d}.mg-btn[disabled]{opacity:.4;cursor:default}.mg-btn.on{background:#ff6a1a;border-color:#ff6a1a;color:#111}
 .mg-info{opacity:.6;white-space:nowrap}
 .mg-sep{width:1px;height:16px;background:#3a3a42;margin:0 3px}
+.mg-spacer{flex:1 1 8px;min-width:8px}
 .mg-main{display:flex;flex:1;min-height:0}
 .mg-ic{width:16px;text-align:center;opacity:.55;cursor:pointer;flex:none;user-select:none}.mg-ic.on{opacity:1}
 .mg-type{font-size:10px;opacity:.5;width:14px;text-align:center;flex:none}

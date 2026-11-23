@@ -229,7 +229,10 @@ export const PrevizMenuBarMixin = {
     _previzViewMenuEntries() {
         const view = this._modelView();
         const scene = this.previzScene();
-        const cams = (scene && scene.items || []).filter((it) => it.kind === "camera");
+        // The main view's default camera is the first entry below, not a row of
+        // its own: with nothing chosen the view looks through it (scene3d.js).
+        const defCam = (scene && scene.items || []).find((it) => it.kind === "camera" && it.view === "persp");
+        const cams = (scene && scene.items || []).filter((it) => it.kind === "camera" && it !== defCam);
         const pane = view._paneState ? view._paneState() : null;
         const kind = view.paneActiveKind ? view.paneActiveKind() : "persp";
         return [
@@ -267,7 +270,7 @@ export const PrevizMenuBarMixin = {
                   run: () => view.togglePaneMaximised() },
             ] : []),
             { label: "Look through", sub: [
-                { label: tick(!scene || !scene.activeCamera, "Free camera"),
+                { label: tick(!scene || !scene.activeCamera, (defCam && defCam.name) || "Free camera"),
                   run: () => scene && scene.activeCamera && this.previzLookThrough(scene.activeCamera) },
                 ...cams.map((c) => ({ label: tick(scene.activeCamera === c.id, c.name),
                                       run: () => { if (scene.activeCamera !== c.id) this.previzLookThrough(c.id); } })),

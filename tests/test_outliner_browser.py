@@ -159,11 +159,12 @@ class OutlinerTests(unittest.TestCase):
             pg.wait_for_timeout(100)
             menu_gone = pg.evaluate("() => !window.__panel._olMenu")
             # Shift+click on the top group's arrow folds the whole branch; a plain click opens only it.
-            arrow = pg.evaluate_handle("() => window.__panel.previzPanel.querySelector('.previz-list > .previz-item .previz-twisty')").as_element()
+            # (The scene's hidden default camera is a top row too, with no arrow of its own.)
+            arrow = pg.evaluate_handle("() => window.__panel.previzPanel.querySelector('.previz-list > .previz-item .previz-twisty:not(.empty)')").as_element()
             arrow.click(modifiers=["Shift"])
             pg.wait_for_timeout(100)
             rows_folded = pg.evaluate(ROWS)
-            pg.evaluate_handle("() => window.__panel.previzPanel.querySelector('.previz-list > .previz-item .previz-twisty')").as_element().click()
+            pg.evaluate_handle("() => window.__panel.previzPanel.querySelector('.previz-list > .previz-item .previz-twisty:not(.empty)')").as_element().click()
             pg.wait_for_timeout(100)
             rows_one = pg.evaluate(ROWS)
             pg.evaluate("() => window.__panel.previzOutlinerFoldAll(true)")
@@ -171,11 +172,13 @@ class OutlinerTests(unittest.TestCase):
         finally:
             pg.close()
         names0 = [r["name"] for r in rows0]
-        self.assertEqual(names0[:6], ["Set dressing", "Crate", "Boulder", "Props", "Table", "shotCam"])
-        self.assertEqual([r["depth"] for r in rows0[:5]], [0, 1, 1, 1, 2])
-        self.assertTrue(rows0[0]["open"])
-        self.assertEqual(rows0[1]["kind"], "primitive")
-        self.assertTrue(rows0[1]["selected"])
+        # The scene's hidden default view cameras are the first top-level rows.
+        defaults = ["Perspective", "Top", "Bottom", "Front", "Back", "Right", "Left"]
+        self.assertEqual(names0[:13], defaults + ["Set dressing", "Crate", "Boulder", "Props", "Table", "shotCam"])
+        self.assertEqual([r["depth"] for r in rows0[:5]], [0, 0, 0, 0, 0])
+        self.assertTrue(rows0[7]["open"])
+        self.assertEqual(rows0[8]["kind"], "primitive")
+        self.assertTrue(rows0[8]["selected"])
         self.assertEqual([r["name"] for r in rows_search], ["Set dressing", "Props", "Table"])
         self.assertEqual([r["context"] for r in rows_search], [True, True, False])
         self.assertEqual(hit, ["Tab"])
@@ -189,8 +192,9 @@ class OutlinerTests(unittest.TestCase):
         self.assertTrue(lit)
         self.assertEqual(sorted(kept["hidden"]), ["camera", "group"])
         self.assertTrue(menu_gone)
-        self.assertEqual([r["name"] for r in rows_folded][:2], ["Set dressing", "shotCam"])
-        self.assertEqual([r["name"] for r in rows_one][:5], ["Set dressing", "Crate", "Boulder", "Props", "shotCam"])
+        self.assertEqual([r["name"] for r in rows_folded], defaults + ["Set dressing", "shotCam", "Lamp"])
+        self.assertEqual([r["name"] for r in rows_one],
+                         defaults + ["Set dressing", "Crate", "Boulder", "Props", "shotCam", "Lamp"])
         self.assertFalse([r for r in rows_one if r["name"] == "Props"][0]["open"])
         self.assertIn("Table", [r["name"] for r in rows_all])
         self.assertEqual(self.errors, [])

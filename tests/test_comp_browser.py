@@ -136,6 +136,28 @@ class CompBrowserTests(unittest.TestCase):
         return pg.evaluate(f"""([fx, fy]) => {{ const c = {self.ED}.canvas; const x = Math.floor(c.width * fx), y = Math.floor(c.height * fy);
             return Array.from(c.getContext('2d').getImageData(x, y, 1, 1).data); }}""", [fx, fy])
 
+    # The bar's channel menu: what the picture is looked at in, one choice of a layer or of a channel in it.
+    CHAN = ".mg-bar .cp-chan"
+    CHAN_ROWS = ".cp-root .cp-pop div"
+
+    def chan_menu(self, pg):
+        """Open the channel menu (as a click on it does); its rows' labels, ticks and key hints left out."""
+        pg.locator(self.CHAN).click()
+        rows = pg.locator(self.CHAN_ROWS)
+        rows.first.wait_for(timeout=3000)
+        # Read through the locators: the viewer is in a shadow root, which document.querySelectorAll misses.
+        return [rows.nth(i).evaluate("""(d) => { const k = d.querySelector('.cp-k'), t = d.textContent;
+                return (k ? t.slice(0, t.length - k.textContent.length) : t).replace(/[\\u00a0✓]/g, ' ').trim(); }""")
+                for i in range(rows.count())]
+
+    def pick_chan(self, pg, label):
+        """Pick a row of the channel menu by its label ("rgba", "mask", "red" ...); returns what it offered."""
+        rows = self.chan_menu(pg)
+        self.assertIn(label, rows)
+        pg.locator(self.CHAN_ROWS).nth(rows.index(label)).click()
+        pg.wait_for_timeout(300)
+        return rows
+
     def test_comp_space_graph_picture_time_layers_and_render(self):
         pg = self.page()
         path = self.new_comp(pg)
@@ -805,13 +827,14 @@ class CompBrowserTests(unittest.TestCase):
         pg.wait_for_timeout(500)
         px = self.pixel(pg, 0.5, 0.5)
         self.assertGreater(px[0], 200); self.assertGreater(px[1], 120); self.assertLess(px[2], 30)
-        # The layer menu offers the extra layer; it shows as grey.
+        # The channel menu offers the extra layer and the one channel in it; the layer shows as grey.
         pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{sh}'); n.route = Object.assign({{}}, n.route, {{ g: 'B:g' }}); e.refresh(); }}")
         pg.wait_for_timeout(400)
-        sel = pg.locator(".cp-layer")
-        self.assertIn("mask", sel.evaluate("(s) => [...s.options].map((o) => o.value)"))
-        sel.select_option("mask")
-        pg.wait_for_timeout(400)
+        rows = self.pick_chan(pg, "mask")
+        self.assertEqual(rows[:5], ["rgba", "red", "green", "blue", "alpha"], rows)
+        self.assertEqual(rows[5:], ["mask", "a"], rows)
+        self.assertIn("mask", pg.locator(self.CHAN).inner_text())      # the button says what is on show
+        pg.wait_for_timeout(200)
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
             pg.evaluate(f"() => {ED}.select(['{sh}'])")
@@ -819,7 +842,8 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-shuffle-layer-mask.png"))
         px = self.pixel(pg, 0.5, 0.5)
         self.assertTrue(abs(px[0] - px[1]) < 3 and abs(px[1] - px[2]) < 3 and 150 < px[0] < 220, px)
-        sel.select_option("rgba")
+        self.pick_chan(pg, "rgba")
+        self.assertIn("rgba", pg.locator(self.CHAN).inner_text())
         # Roto has the channel menu and the premult switch.
         rid = pg.evaluate(f"() => {{ const e = {ED}; const r = e.addNode('roto'); e.select([r.id]); return r.id; }}")
         fks = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first .mg-prop label')].map((l) => l.textContent)")
@@ -1378,46 +1402,67 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
         self.assertEqual(self.errors, [])
 
-    def test_the_viewers_exposure_bar_works_over_the_comp_picture(self):
+    def test_the_comp_bar_has_its_own_exposure_and_channel_menu(self):
         pg = self.page()
         self.new_comp(pg)
         pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.1, 0.2, 0.05, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(400)
         before = self.pixel(pg, 0.5, 0.5)
-        # The viewer's own bar (the same element) sits in the comp's bar, after the display menu; the input
-        # colourspace hidden; on one row with the bar's buttons.
-        st = pg.evaluate(f"""() => {{ const c = __panel.exposureControl, bar = c.parentNode, r = c.getBoundingClientRect(),
-                p = bar.querySelector('select.mg-btn').getBoundingClientRect();
-            return {{ inBar: bar.classList.contains('mg-bar') && bar.parentNode === {self.ED}.stage.parentNode, after: !!(c.previousElementSibling && c.previousElementSibling.tagName === 'SELECT'),
-                shown: getComputedStyle(c).display !== 'none', pos: getComputedStyle(c).position, row: Math.abs((r.top + r.bottom) / 2 - (p.top + p.bottom) / 2),
-                cs: getComputedStyle(__panel.colorInSel || c).display, chans: Array.from(__panel.rgbChannelSel.options).map((o) => o.text) }}; }}""")
-        self.assertTrue(st["inBar"] and st["after"] and st["shown"], st)
-        self.assertEqual(st["pos"], "static")
+        BAR = f"{self.ED}.stage.parentNode.querySelector('.mg-bar')"
+        # The bar's own exposure and channel menu, on one row with its buttons; the viewer's element stays where
+        # it is and is hidden while a comp is on show.
+        st = pg.evaluate(f"""() => {{ const bar = {BAR}, exp = bar.querySelector('.cp-exp'), r = exp.getBoundingClientRect(),
+                p = bar.querySelector('select.mg-btn').getBoundingClientRect(), c = __panel.exposureControl;
+            return {{ here: !!bar.querySelector('.cp-chan') && bar.parentNode === {self.ED}.stage.parentNode,
+                row: Math.abs((r.top + r.bottom) / 2 - (p.top + p.bottom) / 2),
+                readout: bar.querySelector('.cp-exp-v').textContent,
+                atHome: c.parentNode === __panel.viewport, hidden: getComputedStyle(c).display === 'none' }}; }}""")
+        self.assertTrue(st["here"] and st["atHome"] and st["hidden"], st)
         self.assertLess(st["row"], 3, st)
-        self.assertEqual(st["chans"], ["RGB", "Red", "Green", "Blue", "Alpha"])
-        if pg.evaluate("() => !!__panel.colorInSel"):
-            self.assertEqual(st["cs"], "none")
-        # A redraw of the bar (the comp marked changed) keeps it there.
-        pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes.find((n) => n.id === 'Constant1').name = 'Plate'; e.refresh(); }}")
-        self.assertTrue(pg.evaluate("() => __panel.exposureControl.parentNode.classList.contains('mg-bar')"))
-        # Its slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170); the label as the viewer writes it.
-        pg.evaluate("() => { const r = __panel.exposureSlider; r.value = '2'; r.dispatchEvent(new Event('input')); }")
+        self.assertEqual(st["readout"], "0.0 EV")
+        # What only changes how the picture is LOOKED AT is one group, right of the file group and by Fit.
+        pos = pg.evaluate(f"""() => {{ const kids = [...{BAR}.children]; const at = (s) => kids.findIndex((x) => x.matches(s));
+            return {{ title: at('.mg-title'), spacer: at('.mg-spacer'), gpu: at('.cp-gpu'), chan: at('.cp-chan'),
+                exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools'), info: at('.mg-info') }}; }}""")
+        self.assertTrue(-1 not in pos.values(), pos)
+        self.assertLess(pos["title"], pos["spacer"], pos)
+        self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")],
+                         sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")), pos)
+        # The bar's slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170). The value is the viewer's,
+        # so its exposure follows.
+        pg.evaluate(f"() => {{ const r = {BAR}.querySelector('.cp-exp-s'); r.value = '2'; r.dispatchEvent(new Event('input')); }}")
         pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; return c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data[0] > 160; }}", timeout=5000)
-        self.assertEqual(pg.evaluate("() => __panel.exposureValue.textContent"), "2.0 EV")
+        self.assertEqual(pg.evaluate("() => __panel.exposure"), 2)
+        self.assertEqual(pg.locator(".mg-bar .cp-exp-v").inner_text(), "2.0 EV")
         self.assertLess(abs(self.pixel(pg, 0.5, 0.5)[0] - 170), 3)
-        # Its channel menu: green as grey.
-        pg.evaluate("() => { const s = __panel.rgbChannelSel; s.value = 'green'; s.dispatchEvent(new Event('change')); }")
+        # A redraw of the bar (the comp marked changed) rebuilds it as it was.
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes.find((n) => n.id === 'Constant1').name = 'Plate'; e.refresh(); }}")
+        self.assertEqual(pg.locator(".mg-bar .cp-exp-v").inner_text(), "2.0 EV")
+        self.assertEqual(pg.locator(".mg-bar .cp-exp-s").input_value(), "2")
+        # ... and the other way: the viewer's own exposure reaches the bar's readout and the picture.
+        pg.evaluate("() => __panel.setExposure(-1)")
         pg.wait_for_timeout(300)
+        self.assertEqual(pg.locator(".mg-bar .cp-exp-v").inner_text(), "-1.0 EV")
+        self.assertEqual(pg.evaluate(f"() => {self.ED}.state.ev"), -1)
+        pg.evaluate("() => __panel.setExposure(2)")
+        pg.wait_for_timeout(300)
+        # The channel menu: green as grey, and the viewer's channel follows it.
+        rows = self.pick_chan(pg, "green")
+        self.assertEqual(rows, ["rgba", "red", "green", "blue", "alpha"], rows)
         px = self.pixel(pg, 0.5, 0.5)
         self.assertEqual(px[0], px[1]); self.assertEqual(px[1], px[2])
         self.assertGreater(px[0], 220, px)                        # 0.2 x 4 = 0.8
+        self.assertEqual(pg.evaluate("() => __panel.channelView"), "green")
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.green ▾")
         if SHOTS:
-            pg.evaluate("() => { const s = __panel.rgbChannelSel; s.value = 'all'; s.dispatchEvent(new Event('change')); }")
-            pg.wait_for_timeout(300)
+            os.makedirs(SHOTS, exist_ok=True)
+            self.pick_chan(pg, "rgba")
             pg.screenshot(path=os.path.join(SHOTS, "comp-exposure-channels.png"))
-        # A click on the bar (not the slider) sets it back to 0, as in the viewer; the picture does not pan.
+        else:
+            self.pick_chan(pg, "rgba")
+        # A click on the exposure (not its slider) sets it back to 0, as in the viewer; the picture does not pan.
         z = pg.evaluate(f"() => JSON.stringify({self.ED}.state.zoom)")
-        box = pg.evaluate("() => { const r = __panel.exposureValue.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        box = pg.evaluate(f"() => {{ const r = {BAR}.querySelector('.cp-exp-v').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }}")
         pg.mouse.click(box[0], box[1])
         pg.wait_for_timeout(300)
         self.assertEqual(pg.evaluate("() => __panel.exposure"), 0)
@@ -1429,20 +1474,24 @@ class CompBrowserTests(unittest.TestCase):
         pg.mouse.down(); pg.mouse.move(s[0] + 50, s[1], steps=5); pg.mouse.up()
         pg.keyboard.up("e")
         self.assertAlmostEqual(pg.evaluate("() => __panel.exposure"), 1.0, places=1)
+        self.assertEqual(pg.locator(".mg-bar .cp-exp-v").inner_text(), "1.0 EV")
         self.assertEqual(pg.evaluate(f"() => JSON.stringify({self.ED}.state.zoom)"), z)
-        # The R G B A keys on the picture pick the viewer's channel; again: all of them.
+        # The R G B A keys on the picture pick the channel, and the view button says so; again: all of them.
         pg.evaluate(f"() => {self.ED}.stage.closest('.cp-root').focus()")
         pg.keyboard.press("a")
         self.assertEqual(pg.evaluate("() => __panel.channelView"), "alpha")
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.alpha ▾")
         pg.keyboard.press("a")
         self.assertEqual(pg.evaluate("() => __panel.channelView"), "all")
-        # Leaving Comp puts the bar back in the viewer; the comp itself never changed.
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba ▾")
+        # Leaving Comp gives the viewport its own bar back; the comp itself never changed.
         pg.evaluate("() => __panel.resetExposure()")
         pg.wait_for_timeout(300)
         self.assertEqual(self.pixel(pg, 0.5, 0.5), before)
         self.assertEqual(pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.id === 'Constant1').color"), [0.1, 0.2, 0.05, 1])
         pg.evaluate("() => __panel.compTabLeave()")
         self.assertTrue(pg.evaluate("() => __panel.exposureControl.parentNode === __panel.viewport"))
+        self.assertTrue(pg.evaluate("() => getComputedStyle(__panel.exposureControl).display !== 'none'"))
         self.assertEqual(self.errors, [])
 
     def test_the_graph_in_comfyuis_bottom_panel(self):
@@ -1516,7 +1565,7 @@ class CompBrowserTests(unittest.TestCase):
         mid, corner = self.pixel(pg, 0.5, 0.5), self.pixel(pg, 0.03, 0.05)
         self.assertGreater(mid[1], 200); self.assertLess(mid[0], 40)
         self.assertLess(corner[1], 40)
-        # Stereo from the bar's view menu: the right eye sees the card further left than the left eye does.
+        # Stereo from the bar's Views menu: the right eye sees the card further left than the left eye does.
         pg.locator(".cp-views").select_option("\u0001")
         self.assertEqual(pg.evaluate(f"() => {ED}.comp().format.views"), ["left", "right"])
         edge = lambda: self.pixel(pg, 0.5 + (35 / 18) * 0.25 * 0.5 * 0.92, 0.5)[1]

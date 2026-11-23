@@ -35,12 +35,16 @@ export const PrevizRenderMixin = {
 
     // ── Settings ─────────────────────────────────────────────────────────────
 
-    /** The camera a render goes through: an item id, or "" for the free view. */
+    /** The camera a render goes through: an item id, or "" for the free view.
+     *  With nothing chosen: the scene's camera, else the view's own default
+     *  camera - what the screen shows - else the first camera there is. */
     _renderCameraId(st, scene) {
         const cams = S.cameras(scene);
         if (st.camera === "") return "";
         if (st.camera && cams.some((c) => c.id === st.camera)) return st.camera;
         if (scene.activeCamera && cams.some((c) => c.id === scene.activeCamera)) return scene.activeCamera;
+        const def = S.defaultViewCamera(scene, "persp");
+        if (def) return def.id;
         return cams.length ? cams[0].id : "";
     },
 

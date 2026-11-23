@@ -77,6 +77,16 @@ test("flex: fixed rooms stay fixed while something grows, shares under 1 are sca
     assert.deepEqual(T.flexOf(fixed).map((f) => [f.grow, f.basis]), [[100, 0], [300, 0]], "nothing to grow: by their sizes");
 });
 
+test("a pane of folded panels keeps its width across a row, and folds only down a column", () => {
+    const pane = { split: "col", px: 300, children: [{ id: "a", collapsed: true }, { id: "b", collapsed: true }] };
+    const row = { split: "row", children: [{ view: true }, pane] };
+    assert.deepEqual(T.flexOf(row).map((f) => [f.grow, f.basis]), [[1, 0], [0, 300]], "the pane keeps its 300 px");
+    assert.deepEqual(T.flexOf(pane).map((f) => f.basis), ["auto", "auto"], "the panels are their title bars");
+    const shares = { split: "row", children: [{ id: "a", size: 1, collapsed: true }, { id: "b", size: 1 }] };
+    assert.deepEqual(T.flexOf(shares).map((f) => f.grow), [1, 1], "a folded panel beside another in a row keeps its share");
+    assert.equal(T.minSize({ id: "a", collapsed: true }, "w", () => ({ w: 80, h: 60 })), 80, "no wider folded than open");
+});
+
 test("minimum sizes add up along a split and take the largest across it", () => {
     const minOf = (id) => ({ a: { w: 200, h: 100 }, b: { w: 150, h: 300 } })[id];
     const s = { split: "row", children: [{ id: "a" }, { id: "b" }] };
