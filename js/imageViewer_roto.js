@@ -11,6 +11,9 @@
 // border and visibly change the curve of the edges either side of it.
 //   layer = {
 //     id, name, visible, invert, feather, blur, dilate, opacity, closed:true,
+//     shape: bezier | bspline — bezier points carry their tangents (cin / cout);
+//       a bspline's points are control points the curve is pulled towards
+//       (imageViewer_maskShape.js, the shape every mask tool shares),
 //     mode: union | plus | minus | intersection | xor  — how it combines with
 //       the shapes before it in the list (Nuke's ChannelMerge; ROTO_MODES),
 //     transform:{tx,ty,rot,sx,sy,px,py},
@@ -26,6 +29,7 @@
 
 import { svgEl, toolHelp } from "./imageViewer_tools.js";
 import { readToolStore, writeToolStore, ROTO_WIDGET } from "./imageViewer_nodeTools.js";
+import * as MS from "./imageViewer_maskShape.js";
 
 const HIT = 9;             // screen-px hit radius
 
@@ -166,6 +170,7 @@ export const RotoMixin = {
             id: "l" + (_rotoIdSeq++),
             name: "Shape " + (this._roto.layers.length + 1),
             points: [],
+            shape: MS.preferredShape(),
         });
         this._roto.layers.push(layer);
         this._roto.selLayer = this._roto.layers.length - 1;
@@ -276,7 +281,7 @@ export const RotoMixin = {
         this._rotoPreviewCb = checkbox("Show mask preview", this._roto.showMask, (v) => { this._roto.showMask = v; this._toolRedraw(); });
         p.appendChild(this._rotoPreviewCb.row);
         p.appendChild(toolHelp("How to draw",
-            "<b>+ Shape</b>, then click to add points (drag to curve); click the first point to close. " +
+            "<b>+ Shape</b> (or just click on the picture), then: " + MS.DRAW_RULES + " " +
             "After closing: drag a vertex to move it, single-click shows its tangents, " +
             "<b>Ctrl+drag</b> a vertex pulls out the feather (an outer curve with its own " +
             "<span style='color:#c98aff;'>tangents</span> you can drag). Right-click a vertex deletes, " +
@@ -392,6 +397,12 @@ export const RotoMixin = {
         if (!box) return;
         box.innerHTML = "";
         const layer = this._rotoCurLayer();
+        // Bezier / B-spline: the selected shape is turned to it, and new shapes start as it.
+        const sw = MS.shapeSwitch(box.ownerDocument || document, layer ? layer.shape : MS.preferredShape(), (k) => {
+            if (layer) this._rotoSetShape(layer, k);
+        });
+        sw.classList.add("row", "roto-shape-switch");
+        box.appendChild(sw);
         if (!layer) return;
         box.appendChild(el("h4", "Shape matte"));
         box.appendChild(slider("Feather", 0, 100, layer.feather, (v) => { layer.feather = v; this._rotoSave(); this._toolRedraw(); }));
@@ -688,8 +699,11 @@ export const RotoMixin = {
             if (!layer.visible && li !== this._roto.selLayer) return;
             const dpts = this._rotoDisplayPoints(layer);
             const isSel = li === this._roto.selLayer;
-            const closed = !(this._roto.drawing === layer);
-            const d = this._rotoPathD(dpts, closed);
+            const drawingThis = this._roto.drawing === layer;
+            const closed = !drawingThis;
+            const bspline = MS.shapeKind(layer.shape) === "bspline";
+            const cpts = this._rotoCurve(layer, dpts, closed);
+            const d = this._rotoPathD(cpts, closed);
             if (d) draw.appendChild(svgEl("path", {
                 d, fill: "none",
                 stroke: isSel ? "#ff8a00" : "rgba(255,255,255,.55)",
@@ -698,9 +712,21 @@ export const RotoMixin = {
             }));
             if (!isSel) return;
 
+            // A B-spline's control polygon, and while drawing the tangents of the point
+            // just placed (and the one before it): the same guide every mask tool draws.
+            const scrOf = (p) => this._normToDraw(p.x, p.y);
+            const guide = { handles: [], polygon: null, closed };
+            if (bspline) guide.polygon = dpts.map(scrOf).filter(Boolean).map((s) => [s.x, s.y]);
+            else if (drawingThis && dpts.length) {
+                const sa = dpts.map((p) => { const s = scrOf(p); return s ? MS.fromRoto({ x: s.x, y: s.y,
+                    cin: p.cin && scrOf(p.cin), cout: p.cout && scrOf(p.cout) }) : null; });
+                guide.handles = MS.handleLines(sa, [dpts.length - 2, dpts.length - 1].filter((i) => i >= 0 && sa[i]));
+            }
+            MS.drawGuide(draw, guide);
+
             // Outer feather curve: the editable spline the soft edge blends out to.
-            if (dpts.some((p) => p.feather)) {
-                const fd = this._rotoPathD(this._rotoFeatherPts(dpts, 1), true);
+            if (cpts.some((p) => p.feather)) {
+                const fd = this._rotoPathD(this._rotoFeatherPts(cpts, 1), true);
                 if (fd) draw.appendChild(svgEl("path", {
                     d: fd, fill: "none", stroke: "#e6a9ff", "stroke-width": 1,
                     "stroke-dasharray": "4 3", opacity: 0.85,
@@ -709,7 +735,7 @@ export const RotoMixin = {
 
             // Tangent / feather handles only when a single point is selected, so a
             // click reveals its curve controls; a multi-selection shows the box.
-            const showHandles = this._roto.selPts.size < 2 && this._roto.drawing !== layer;
+            const showHandles = this._roto.selPts.size < 2 && !drawingThis;
 
             dpts.forEach((p, i) => {
                 const scr = this._normToDraw(p.x, p.y);
@@ -721,8 +747,8 @@ export const RotoMixin = {
                         if (!p[hk]) continue;
                         const hs = this._normToDraw(p[hk].x, p[hk].y);
                         if (!hs) continue;
-                        draw.appendChild(svgEl("line", { x1: scr.x, y1: scr.y, x2: hs.x, y2: hs.y, stroke: "#6cf", "stroke-width": 1 }));
-                        draw.appendChild(svgEl("circle", { cx: hs.x, cy: hs.y, r: 3.5, fill: "#6cf", stroke: "#000", "stroke-width": 1, "data-h": hk, "data-i": i }));
+                        draw.appendChild(svgEl("line", { x1: scr.x, y1: scr.y, x2: hs.x, y2: hs.y, stroke: MS.GUIDE_COLOR, "stroke-width": 1 }));
+                        draw.appendChild(svgEl("circle", { cx: hs.x, cy: hs.y, r: 3.5, fill: MS.GUIDE_COLOR, stroke: "#000", "stroke-width": 1, "data-h": hk, "data-i": i }));
                     }
                     if (p.feather) {
                         const fs = this._normToDraw(p.feather.x, p.feather.y);
@@ -854,7 +880,7 @@ export const RotoMixin = {
 
     /** One shape's matte as alpha (0..1, canvas pixels), or null when it draws nothing. */
     _rotoLayerAlpha(layer, sa, sb, k, spp, g) {
-        const dpts = this._rotoDisplayPoints(layer);
+        const dpts = this._rotoCurve(layer, this._rotoDisplayPoints(layer), true);
         const coreD = dpts.length >= 3 ? this._rotoPathD(dpts, true) : null;
         if (!coreD) return null;
         const core = new Path2D(coreD);
@@ -1106,15 +1132,12 @@ export const RotoMixin = {
         }
         const pts = layer.points;
 
-        // Close the shape by clicking near the first point.
+        // Close the shape by clicking near the first point, or with a double-click
+        // (the first click of it has placed the last point already).
+        const dbl = MS.isDoubleClick(this._roto, e, e.clientX, e.clientY);
         if (pts.length >= 3) {
             const first = this._rotoApplyTf(pts[0], layer.transform);
-            if (this._screenDist(n, first) <= HIT) {
-                this._roto.drawing = null;
-                this._rotoSetPivotToCenter(layer);
-                this._rotoSave(); this._rotoRefreshKfInfo(); this._toolRedraw();
-                return true;
-            }
+            if (this._screenDist(n, first) <= HIT || dbl) { this._rotoFinishDrawing(); return true; }
         }
 
         // Add a point; drag to pull out symmetric bezier handles. Coordinates are
@@ -1125,11 +1148,18 @@ export const RotoMixin = {
         pts.push(pt);
         this._toolRedraw();
 
+        // Bezier: the drag pulls out the point's tangents, shown as they are pulled.
+        // B-spline: a point has none, so the drag moves the point being placed.
+        const bspline = MS.shapeKind(layer.shape) === "bspline";
+        const s0 = this._normToDraw(n.x, n.y);
         this._toolDrag(
             (ev) => {
                 const m = this._eventToNorm(ev);
                 if (!m) return;
                 const rawM = this._rotoInvTf(m, layer.transform);
+                if (bspline) { pt.x = rawM.x; pt.y = rawM.y; this._toolRedraw(); return; }
+                const sm = this._normToDraw(m.x, m.y);
+                if (s0 && sm && Math.hypot(sm.x - s0.x, sm.y - s0.y) < 2) { delete pt.cin; delete pt.cout; this._toolRedraw(); return; }
                 pt.cout = { x: rawM.x, y: rawM.y };
                 pt.cin = { x: 2 * pt.x - rawM.x, y: 2 * pt.y - rawM.y }; // mirror
                 this._toolRedraw();
@@ -1226,7 +1256,7 @@ export const RotoMixin = {
 
         // 5) Alt+click on an edge inserts a point
         if (e.altKey) {
-            const seg = this._rotoNearestSegment(dpts, n);
+            const seg = this._rotoNearestSegment(this._rotoCurve(layer, dpts, true), n);
             if (seg && seg.dist <= HIT * 1.6) {
                 const rawInsert = this._rotoInvTf(seg.point, tf);
                 editPts.splice(seg.i + 1, 0, { x: rawInsert.x, y: rawInsert.y });
@@ -1562,16 +1592,100 @@ export const RotoMixin = {
         tf.py = (minY + maxY) / 2;
     },
 
+    // The nearest place on the shape's curve (cpts: the points the curve is drawn
+    // with, _rotoCurve), as { i: the segment from point i, point, dist }.
     _rotoNearestSegment(dpts, n) {
         if (dpts.length < 2) return null;
         let best = null;
+        const anch = dpts.map(MS.fromRoto);
         for (let i = 0; i < dpts.length; i++) {
-            const a = dpts[i], b = dpts[(i + 1) % dpts.length];
-            const cand = projectToSeg(n, a, b);
-            const dist = this._screenDist(n, cand);
-            if (!best || dist < best.dist) best = { i, point: cand, dist };
+            const a = anch[i], b = anch[(i + 1) % anch.length];
+            let prev = { x: a.x, y: a.y };
+            for (let k = 1; k <= 24; k++) {
+                const [x, y] = MS.bezierAt(a, b, k / 24);
+                const cur = { x, y };
+                const cand = projectToSeg(n, prev, cur);
+                const dist = this._screenDist(n, cand);
+                if (!best || dist < best.dist) best = { i, point: cand, dist };
+                prev = cur;
+            }
         }
         return best;
+    },
+
+    // The points the curve is drawn with: a Bezier shape's own, a B-spline's
+    // anchors and tangents worked out from its control points (feather points too,
+    // as a second B-spline). roto_raster.py's _bspline_points is the same.
+    _rotoCurve(layer, dpts, closed = true) {
+        if (MS.shapeKind(layer && layer.shape) !== "bspline" || dpts.length < 2) return dpts;
+        const core = MS.bsplineAnchors(dpts, closed);
+        const hasF = dpts.some((p) => p.feather);
+        const fan = hasF ? MS.bsplineAnchors(dpts.map((p) => (p.feather ? { x: p.feather.x, y: p.feather.y } : { x: p.x, y: p.y })), closed) : null;
+        return core.map((a, i) => {
+            const o = { x: a.x, y: a.y, cin: { x: a.ix, y: a.iy }, cout: { x: a.ox, y: a.oy } };
+            if (fan) { const f = fan[i]; o.feather = { x: f.x, y: f.y, cin: { x: f.ix, y: f.iy }, cout: { x: f.ox, y: f.oy } }; }
+            return o;
+        });
+    },
+
+    // Close the shape being drawn (it needs three points; fewer: it is dropped).
+    _rotoFinishDrawing() {
+        const layer = this._roto.drawing;
+        if (!layer) return;
+        this._roto.drawing = null;
+        if (layer.points.length < 3) { this._rotoDropDrawing(layer); return; }
+        this._rotoSetPivotToCenter(layer);
+        this._rotoSave(); this._rotoRefreshPanel(); this._rotoRefreshKfInfo(); this._toolRedraw();
+    },
+
+    _rotoDropDrawing(layer) {
+        const i = this._roto.layers.indexOf(layer);
+        this._roto.drawing = null;
+        if (i >= 0) this._roto.layers.splice(i, 1);
+        this._roto.selLayer = Math.min(this._roto.selLayer, this._roto.layers.length - 1);
+        this._roto.selPts = new Set();
+        this._rotoSave(); this._rotoRefreshPanel(); this._toolRedraw();
+    },
+
+    /** The keys every mask tool takes while a shape is drawn: Enter closes it,
+     *  Backspace takes the last point back, Esc drops it. True when taken. */
+    rotoKeyDown(e) {
+        if (!this._roto || !this._roto.drawing || !this._toolState || this._toolState.active !== "roto") return false;
+        const layer = this._roto.drawing, k = e.key;
+        if (k === "Enter") this._rotoFinishDrawing();
+        else if (k === "Escape") this._rotoDropDrawing(layer);
+        else if (k === "Backspace" || k === "Delete") {
+            layer.points.pop();
+            if (!layer.points.length) this._rotoDropDrawing(layer); else { this._rotoSave(); this._toolRedraw(); }
+        } else return false;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return true;
+    },
+
+    // A shape's kind changed (the Bezier / B-spline switch): its points, every
+    // key's too, turned so that a B-spline made Bezier keeps its exact curve.
+    _rotoSetShape(layer, kind) {
+        kind = MS.shapeKind(kind);
+        const from = MS.shapeKind(layer.shape);
+        if (from === kind) return;
+        const turn = (pts) => {
+            const hasF = pts.some((p) => p.feather);
+            const core = MS.convertShape(pts.map(MS.fromRoto), from, kind, true);
+            const fea = hasF ? MS.convertShape(pts.map((p) => MS.fromRoto(p.feather || { x: p.x, y: p.y })), from, kind, true) : null;
+            return core.map((a, i) => {
+                const o = MS.toRoto(a);
+                if (fea && (pts[i].feather || kind === "bezier")) {
+                    const f = MS.toRoto(fea[i]);
+                    o.feather = f;
+                }
+                return o;
+            });
+        };
+        layer.points = turn(layer.points);
+        if (layer.keyframes) for (const k of Object.keys(layer.keyframes)) layer.keyframes[k] = turn(layer.keyframes[k] || []);
+        layer.shape = kind;
+        this._rotoSave(); this._toolRedraw();
     },
 };
 
@@ -1598,6 +1712,7 @@ function normalizeLayer(l) {
         dilate: +l.dilate || 0,
         opacity: l.opacity == null ? 1 : +l.opacity,
         mode: ROTO_MODES.includes(l.mode) ? l.mode : "union",
+        shape: MS.shapeKind(l.shape),
         ease: Math.max(0, Math.min(1, +l.ease || 0)),
         closed: true,
         transform: Object.assign(DEF_TF(), l.transform || {}),

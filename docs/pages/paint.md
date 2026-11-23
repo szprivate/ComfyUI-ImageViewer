@@ -26,7 +26,7 @@ Panels (Paint tabs only): **Layers**, **History**, and **Properties**, **Tool op
 | <kbd>G</kbd> / <kbd>Shift</kbd>+<kbd>G</kbd> | Paint bucket / gradient |
 | <kbd>O</kbd> <kbd>R</kbd> <kbd>Shift</kbd>+<kbd>R</kbd> | Dodge, burn, sponge; smudge; blur brush |
 | <kbd>U</kbd> | Shapes (rectangle, rounded rectangle, ellipse, polygon, line) |
-| <kbd>P</kbd> <kbd>A</kbd> | Pen and path selection tools |
+| <kbd>P</kbd> <kbd>A</kbd> | Pen (Bezier or B-spline paths, drawn as [every mask tool](viewer.md#drawing-masks) draws) and path selection tools |
 | <kbd>I</kbd> <kbd>T</kbd> <kbd>H</kbd> | Eyedropper (drag to average an area), text, hand (or hold <kbd>Space</kbd>) |
 
 <kbd>X</kbd> swaps foreground and background colour, <kbd>D</kbd> resets them. Holding <kbd>B</kbd> while dragging on the canvas sets brush size (horizontal) and opacity (vertical, <kbd>Shift</kbd>: hardness). Related tools share one toolbar slot; right-click the slot for the others.

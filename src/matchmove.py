@@ -30,6 +30,7 @@ import numpy as np
 
 from . import comp_track as T
 from . import comp_warp as WP
+from . import mask_shape
 
 LUM = (0.2126, 0.7152, 0.0722)
 MAX_TRACKS = 2000
@@ -444,14 +445,16 @@ MASK_MODES = ("exclude", "object")
 
 
 def clean_mask(m):
-    """{id, name, mode, object, on, keys: [{f, pts: [[x, y], ...]}]} with at least 3 points a key, or None."""
+    """{id, name, mode, object, on, shape, keys: [{f, pts: [[x, y] | [x, y, ix, iy, ox, oy], ...]}]} with at least 3
+    points a key, or None. A point with six numbers carries its tangents (absolute); ``shape`` "bspline" makes the
+    points control points of a B-spline (mask_shape.py, the shape every mask tool shares)."""
     if not isinstance(m, dict):
         return None
     keys = []
     for k in (m.get("keys") or [])[:2000]:
         try:
             f = int(k["f"])
-            pts = [[float(p[0]), float(p[1])] for p in (k.get("pts") or [])[:500]]
+            pts = [[float(v) for v in (p[:6] if len(p) >= 6 else p[:2])] for p in (k.get("pts") or [])[:500]]
         except (TypeError, ValueError, KeyError, IndexError):
             continue
         if len(pts) >= 3 and all(math.isfinite(v) for p in pts for v in p):
@@ -464,6 +467,8 @@ def clean_mask(m):
     out = {"id": str(m.get("id") or ""), "name": str(m.get("name") or "Mask")[:80], "mode": mode,
            "object": str(m.get("object") or "") if mode == "object" else "", "on": m.get("on") is not False,
            "keys": keys}
+    if m.get("shape") == "bspline":
+        out["shape"] = "bspline"
     if matte:
         out["matte"] = matte
     return out
@@ -581,22 +586,34 @@ def matte_hit(matte, f, pts):
     return out
 
 
+def _pts6(pts):
+    """A key's points as [N, 6] (x, y, ix, iy, ox, oy): a corner's handles on the point."""
+    return np.asarray([mask_shape.from_arr(p) for p in pts], np.float64).reshape(-1, 6)
+
+
 def mask_at(mask, f):
-    """The polygon of a mask at frame f: held before its first key and after its last, straight in between (when
-    the two keys have as many points; else the earlier key's)."""
+    """The points of a mask at frame f ([N, 6]: each point and its tangents): held before its first key and after
+    its last, straight in between (when the two keys have as many points; else the earlier key's)."""
     ks = mask["keys"]
     if f <= ks[0]["f"]:
-        return np.asarray(ks[0]["pts"], np.float64)
+        return _pts6(ks[0]["pts"])
     if f >= ks[-1]["f"]:
-        return np.asarray(ks[-1]["pts"], np.float64)
+        return _pts6(ks[-1]["pts"])
     for a, b in zip(ks, ks[1:]):
         if a["f"] <= f <= b["f"]:
-            A = np.asarray(a["pts"], np.float64)
+            A = _pts6(a["pts"])
             if len(a["pts"]) != len(b["pts"]):
                 return A
             t = (f - a["f"]) / max(1, b["f"] - a["f"])
-            return A + (np.asarray(b["pts"], np.float64) - A) * t
-    return np.asarray(ks[-1]["pts"], np.float64)
+            return A + (_pts6(b["pts"]) - A) * t
+    return _pts6(ks[-1]["pts"])
+
+
+def mask_polygon(mask, f):
+    """The outline of a keyed mask at frame f as a polygon [M, 2]: its curve (Bezier tangents or a B-spline)
+    flattened as the page draws it (maskPolygon)."""
+    pts = mask_at(mask, f)
+    return np.asarray(mask_shape.shape_polygon([tuple(p) for p in pts], mask.get("shape"), True), np.float64).reshape(-1, 2)
 
 
 def inside(poly, pts):
@@ -617,7 +634,7 @@ def masks_state(masks, f, pts):
     for m in masks or []:
         if not m.get("on", True):
             continue
-        hit = matte_hit(m["matte"], f, pts) if m.get("matte") else inside(mask_at(m, f), pts)
+        hit = matte_hit(m["matte"], f, pts) if m.get("matte") else inside(mask_polygon(m, f), pts)
         if m["mode"] == "exclude":
             out[hit] = "exclude"
         else:

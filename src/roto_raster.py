@@ -45,6 +45,25 @@ except Exception:
     _ndimage = None
 
 
+def _load_mask_shape():
+    try:
+        from . import mask_shape
+        return mask_shape
+    except ImportError:  # loaded on its own, by its path (the tests): mask_shape.py beside it
+        import importlib.util
+        import sys
+        mod = sys.modules.get("mask_shape")
+        if mod is None:
+            spec = importlib.util.spec_from_file_location("mask_shape", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mask_shape.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sys.modules["mask_shape"] = mod
+        return mod
+
+
+mask_shape = _load_mask_shape()
+
+
 # ── small helpers ────────────────────────────────────────────────────────────
 
 # How a shape combines with everything below it in the list — the operations of
@@ -420,6 +439,27 @@ def _mean_feather_px(points, W, H):
     return (total / count) if count else 0.0
 
 
+def _bspline_points(points):
+    """A B-spline shape's control points as the anchors and tangents its curve is drawn with (the viewer's
+    _rotoCurve): feather points, when any point has one, as a second B-spline (a point without one counts
+    as its own feather point)."""
+    ctrl = [_pt(p) for p in points]
+    core = mask_shape.bspline_anchors(ctrl, True)
+    has_f = any(isinstance(p.get("feather"), dict) for p in points)
+    fan = None
+    if has_f:
+        fan = mask_shape.bspline_anchors([_pt(p["feather"], _pt(p)) if isinstance(p.get("feather"), dict) else _pt(p)
+                                          for p in points], True)
+    out = []
+    for i, a in enumerate(core):
+        d = {"x": a[0], "y": a[1], "cin": {"x": a[2], "y": a[3]}, "cout": {"x": a[4], "y": a[5]}}
+        if fan:
+            f = fan[i]
+            d["feather"] = {"x": f[0], "y": f[1], "cin": {"x": f[2], "y": f[3]}, "cout": {"x": f[4], "y": f[5]}}
+        out.append(d)
+    return out
+
+
 def _layer_plan(layer, W, H, frame):
     """Everything about one layer at one frame that decides its pixels — the
     outlines in frame pixels and the matte settings — or None when it draws
@@ -427,9 +467,10 @@ def _layer_plan(layer, W, H, frame):
     key: two frames with equal plans have equal mattes."""
     if not layer.get("visible", True):
         return None
-    points = _points_for_frame(layer, frame)
-    if not isinstance(points, list) or len(points) < 3:
+    raw = _points_for_frame(layer, frame)
+    if not isinstance(raw, list) or len(raw) < 3:
         return None
+    points = _bspline_points(raw) if mask_shape.shape_kind(layer.get("shape")) == "bspline" else raw
     tf = layer.get("transform")
     steps = 16
     shape_poly = _contour(points, W, H, tf, use_feather=False, steps=steps)
@@ -439,7 +480,7 @@ def _layer_plan(layer, W, H, frame):
     feather_poly, fpx = None, 0.0
     if any(isinstance(p.get("feather"), dict) for p in points):
         feather_poly = _contour(points, W, H, tf, use_feather=True, steps=steps)
-        fpx = _mean_feather_px(points, W, H) + per_shape_feather
+        fpx = _mean_feather_px(raw, W, H) + per_shape_feather
     return {
         "shape": shape_poly, "feather_poly": feather_poly, "fpx": fpx,
         "feather": per_shape_feather,

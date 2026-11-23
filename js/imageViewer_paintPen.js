@@ -9,6 +9,7 @@
 // other program's code.
 
 import * as D from "./imageViewer_paintData.js";
+import * as MS from "./imageViewer_maskShape.js";
 
 /** The tools that show and change paths (the pen and the ones beside it, imageViewer_paintPathTools.js). */
 const ON_PATHS = ["pen", "penadd", "pendel", "penconv", "pathsel", "pathdirect"];
@@ -29,7 +30,7 @@ export function splitSegment(a, b, t) {
 
 /** The segment of `path` within `tol` of (x, y): { i (from anchor i), t } or null. */
 export function segmentHit(path, x, y, tol) {
-    const pts = path.pts, segs = path.closed ? pts.length : pts.length - 1;
+    const pts = D.curvePoints(path), segs = path.closed ? pts.length : pts.length - 1;
     let best = null, bd = tol;
     for (let i = 0; i < segs; i++) {
         const a = pts[i], b = pts[(i + 1) % pts.length];
@@ -49,6 +50,32 @@ export function segmentHit(path, x, y, tol) {
     // Next to an anchor it is that anchor's, not a new one.
     const a = pts[best.i], b = pts[(best.i + 1) % pts.length], [hx, hy] = D.bezierAt(a, b, best.t);
     return Math.hypot(hx - a.x, hy - a.y) < tol || Math.hypot(hx - b.x, hy - b.y) < tol ? null : best;
+}
+
+/** The path's points with a new anchor on segment `sh` (segmentHit's): a Bezier segment split where it was hit,
+ *  keeping its curve; a B-spline gets a control point there between the two around it. -> [pts, its index] */
+export function insertAnchor(path, sh) {
+    const pts = path.pts.slice(), j = (sh.i + 1) % pts.length;
+    if (path.shape === "bspline") {
+        const C = D.curvePoints(path), [x, y] = D.bezierAt(C[sh.i], C[j], sh.t);
+        pts.splice(sh.i + 1, 0, { x, y, ix: x, iy: y, ox: x, oy: y, smooth: false });
+        return [pts, sh.i + 1];
+    }
+    const [a, m, b] = splitSegment(pts[sh.i], pts[j], sh.t);
+    pts[sh.i] = a; pts[j] = b;
+    pts.splice(sh.i + 1, 0, m);
+    return [pts, sh.i + 1];
+}
+
+/** A path turned to another kind (the Bezier / B-spline switch): a B-spline made Bezier keeps its exact curve. */
+export function setPathShape(path, kind) {
+    kind = MS.shapeKind(kind);
+    const from = MS.shapeKind(path.shape);
+    if (from === kind) return path;
+    const pts = MS.convertShape(path.pts, from, kind, !!path.closed).map((a) => ({ ...a, smooth: kind === "bezier" && MS.hasHandles(a) }));
+    const out = { ...path, pts };
+    if (kind === "bspline") out.shape = "bspline"; else delete out.shape;
+    return out;
 }
 
 export const PenMixin = {
@@ -74,6 +101,7 @@ export const PenMixin = {
         let n = this._paths().length + 1;
         while (names.has(`Path ${n}`)) n++;
         const P = { id: D.newId(), name: `Path ${n}`, closed: false, pts: [] };
+        if (MS.preferredShape() === "bspline") P.shape = "bspline";
         this.doc.paths.push(P);
         this.pathId = P.id;
         return P;
@@ -118,7 +146,21 @@ export const PenMixin = {
             this._drag = { kind: "pen", P, i: hit.i, part: "out", mirror: true, label: "Smooth anchor" };
             return;
         }
+        // While drawing, a press places an anchor and its drag pulls out the tangents (shown as they are pulled);
+        // a B-spline's points have none, so there the drag moves the point being placed.
+        const placeDrag = (P2) => (P2.shape === "bspline" ? { part: "a" } : { part: "out", mirror: true });
         if (this._penOpen && P && !P.closed) {
+            // A double-click closes the path (its first click placed the last anchor).
+            if (MS.isDoubleClick(this, e, e.clientX, e.clientY) && P.pts.length > 2) {
+                this.liveBegin();
+                P.closed = true;
+                this._penOpen = false;
+                this.pathPt = null;
+                this.liveEnd("Close path");
+                this.refreshProps();
+                this.drawOverlay();
+                return;
+            }
             if (hit && hit.part === "a" && hit.i === 0 && P.pts.length > 2) {
                 this.liveBegin();
                 P.closed = true;
@@ -130,7 +172,7 @@ export const PenMixin = {
             this.liveBegin();
             P.pts.push({ x: p.x, y: p.y, ix: p.x, iy: p.y, ox: p.x, oy: p.y, smooth: false });
             this.pathPt = P.pts.length - 1;
-            this._drag = { kind: "pen", P, i: this.pathPt, part: "out", mirror: true, label: "Add anchor", still: true, p0: p };
+            this._drag = { kind: "pen", P, i: this.pathPt, ...placeDrag(P), label: "Add anchor", still: true, p0: p };
             this.drawOverlay();
             return;
         }
@@ -154,14 +196,10 @@ export const PenMixin = {
             const sh = segmentHit(P, p.x, p.y, tol);
             if (sh) {
                 this.liveBegin();
-                const j = (sh.i + 1) % P.pts.length;
-                const [a, m, b] = splitSegment(P.pts[sh.i], P.pts[j], sh.t);
-                const pts = P.pts.slice();
-                pts[sh.i] = a; pts[j] = b;
-                pts.splice(sh.i + 1, 0, m);
+                const [pts, at] = insertAnchor(P, sh);
                 P.pts = pts;
-                this.pathPt = sh.i + 1;
-                this._drag = { kind: "pen", P, i: sh.i + 1, part: "a", label: "Add anchor" };
+                this.pathPt = at;
+                this._drag = { kind: "pen", P, i: at, part: "a", label: "Add anchor" };
                 this.drawOverlay();
                 return;
             }
@@ -172,7 +210,7 @@ export const PenMixin = {
         P.pts.push({ x: p.x, y: p.y, ix: p.x, iy: p.y, ox: p.x, oy: p.y, smooth: false });
         this.pathPt = 0;
         this._penOpen = true;
-        this._drag = { kind: "pen", P, i: 0, part: "out", mirror: true, label: "New path", still: true, p0: p };
+        this._drag = { kind: "pen", P, i: 0, ...placeDrag(P), label: "New path", still: true, p0: p };
         this.refreshProps();
         this.drawOverlay();
     },
@@ -298,27 +336,34 @@ export const PenMixin = {
         if (onPaths) {
             for (const Q of this._paths()) {
                 if (Q === P || !Q.pts.length) continue;
+                const QC = D.curvePoints(Q);
                 c.beginPath();
-                c.moveTo(X(Q.pts[0].x), Y(Q.pts[0].y));
-                const n = Q.closed ? Q.pts.length : Q.pts.length - 1;
-                for (let i = 0; i < n; i++) { const a = Q.pts[i], b = Q.pts[(i + 1) % Q.pts.length]; c.bezierCurveTo(X(a.ox), Y(a.oy), X(b.ix), Y(b.iy), X(b.x), Y(b.y)); }
+                c.moveTo(X(QC[0].x), Y(QC[0].y));
+                const n = Q.closed ? QC.length : QC.length - 1;
+                for (let i = 0; i < n; i++) { const a = QC[i], b = QC[(i + 1) % QC.length]; c.bezierCurveTo(X(a.ox), Y(a.oy), X(b.ix), Y(b.iy), X(b.x), Y(b.y)); }
                 c.lineWidth = 1; c.strokeStyle = "rgba(79,214,238,.55)"; c.stroke();
             }
         }
         if (!P || !P.pts.length) return;
-        const pts = P.pts, segs = P.closed ? pts.length : pts.length - 1;
+        const pts = P.pts, bspline = P.shape === "bspline";
+        // While drawing a B-spline: the curve as it would be with a point at the pointer.
+        const h = this._hover, drawingTo = this._penOpen && h && !this._drag && this.tool === "pen";
+        const C = bspline && drawingTo ? D.curvePoints({ ...P, pts: [...pts, MS.corner(h.x, h.y)] }) : D.curvePoints(P);
+        const segs = P.closed ? C.length : (bspline && drawingTo ? C.length - 1 : pts.length - 1);
         c.beginPath();
-        c.moveTo(X(pts[0].x), Y(pts[0].y));
+        c.moveTo(X(C[0].x), Y(C[0].y));
         for (let i = 0; i < segs; i++) {
-            const a = pts[i], b = pts[(i + 1) % pts.length];
+            const a = C[i], b = C[(i + 1) % C.length];
             c.bezierCurveTo(X(a.ox), Y(a.oy), X(b.ix), Y(b.iy), X(b.x), Y(b.y));
         }
         // While drawing: the next segment, to the pointer.
-        const h = this._hover, last = pts[pts.length - 1];
-        if (this._penOpen && h && !this._drag && this.tool === "pen") c.bezierCurveTo(X(last.ox), Y(last.oy), X(h.x), Y(h.y), X(h.x), Y(h.y));
+        const last = pts[pts.length - 1];
+        if (drawingTo && !bspline) c.bezierCurveTo(X(last.ox), Y(last.oy), X(h.x), Y(h.y), X(h.x), Y(h.y));
         c.lineWidth = 3; c.strokeStyle = "rgba(0,0,0,.6)"; c.stroke();
         c.lineWidth = 1.25; c.strokeStyle = "#4fd6ee"; c.stroke();
         if (!onPaths) return;
+        // A B-spline's control polygon: the same guide every mask tool draws (imageViewer_maskShape.js).
+        if (bspline) MS.drawGuide(c, { polygon: pts.map((a) => [X(a.x), Y(a.y)]), closed: P.closed });
         const near = new Set();
         const sel = this.pathPt != null ? this.pathPt : (this._penOpen ? pts.length - 1 : null);
         // Direct selection: every picked anchor (and its neighbours) shows its handles; Path selection: none, every anchor filled.
@@ -363,6 +408,20 @@ export const PenMixin = {
                 this._field(ts, "Name", nm);
             }
         }
+        // Bezier / B-spline: the picked path is turned to it, new paths start as it (every mask tool shares the choice).
+        const cur = this.curPath();
+        const sw = MS.shapeSwitch(ts.ownerDocument || document, cur ? cur.shape : MS.preferredShape(), (k) => {
+            const Q = this.curPath();
+            if (!Q || MS.shapeKind(Q.shape) === k) return;
+            this.change("Path shape", () => {
+                const T = setPathShape(Q, k);
+                Q.pts = T.pts;
+                if (T.shape) Q.shape = T.shape; else delete Q.shape;
+            });
+            this.drawOverlay();
+        }, { label: "" });
+        sw.classList.add("paint-shape-switch");
+        this._field(ts, bar ? "" : "Shape", sw);
         const how = this.el("select", "paint-pathhow");
         for (const [v, t] of [["replace", "New selection"], ["add", "Add to selection"], ["subtract", "Take from selection"], ["intersect", "Keep what both hold"]]) {
             how.append(this.el("option", "", { value: v, text: t }));
@@ -385,7 +444,8 @@ export const PenMixin = {
         if (!bar) b("Delete", "Delete the path", () => this.deletePath(), "pen-del");
         ts.append(row);
         const notes = {
-            pen: "Click: a corner. Drag: a smooth anchor. Click the first anchor to close, Enter to stop. "
+            pen: "Click: a corner. Drag: a smooth anchor, its tangents shown as they are pulled (a B-spline's points have none). "
+                 + "Click the first anchor or double-click to close, Enter to stop with the path open, Backspace takes the last anchor back. "
                  + "Click the path to add an anchor, an anchor to take it away. Ctrl+drag moves an anchor or handle, Alt+click turns an anchor corner / smooth, Alt+drag moves one handle alone. "
                  + "Right-click the pen's button for the other path tools.",
             penadd: "Click a path's curve: a new anchor there (drag to move it on).",

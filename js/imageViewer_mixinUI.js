@@ -77,6 +77,8 @@ export const UIMixin = {
         if (isTyping) return;
         // A modeling tool following the mouse: Enter keeps it, Esc drops it (imageViewer_view3dMeshTools.js).
         if (this._model3d && this._model3d.meshToolKey && this._model3d.meshToolKey(e)) { e.preventDefault(); return; }
+        // A roto shape being drawn: Enter closes it, Backspace takes a point back, Esc drops it (imageViewer_roto.js).
+        if (this.rotoKeyDown && this.rotoKeyDown(e)) return;
         // The Edit panel's keys, while it has the focus (imageViewer_editKeys.js).
         if (this.editTlKeyDown && this.editTlKeyDown(e)) return;
         // The Source viewer / timeline viewer - the active monitor's keys (imageViewer_editSource.js).

@@ -26,7 +26,7 @@ Workflows saved with the old `tab_name` field still load; its value is used as t
 
 **Image Viewer Roto** takes an `image` and outputs `roto_mask` (the matte you draw) and the `image`. **Image Viewer SAM3 Collector** takes an `image` and outputs positive and negative points and boxes, shaped for ComfyUI-SAM3.
 
-You draw with the viewer's Roto and SAM3 tools; the shapes are stored on the node and travel with the workflow. The tool works on the node selected on the graph. With none, pressing the tool's button adds one, wired to the selected node or to the picture on screen.
+You draw with the viewer's Roto and SAM3 tools (Roto shapes are Bezier or B-spline, see [Drawing masks](viewer.md#drawing-masks)); the shapes are stored on the node and travel with the workflow. The tool works on the node selected on the graph. With none, pressing the tool's button adds one, wired to the selected node or to the picture on screen.
 
 ## Image Viewer 3D Scene (Previz)
 

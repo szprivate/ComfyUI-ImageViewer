@@ -59,3 +59,13 @@ Audio files show their waveform; click it to seek.
 ## Drawing tools
 
 The toolbar at the top left of the image holds **Roto** (writes mattes to a Roto node), **SAM3 points / boxes** (writes prompts to a SAM3 Collector node) and **Annotate** (text, arrows, boxes and strokes, stored next to the file as `<name>.annotations.json`). Tool options appear in the Parameters panel. See [Nodes](nodes.md#roto-and-sam3-collector).
+
+### Drawing masks
+
+Roto (in the viewer and in Comp's Roto node), Paint's pen and Matchmove's plate masks all draw shapes the same way:
+
+- Click to place a point. Drag while placing it to pull out its tangents; they show as you drag and stay up for the last points while the shape is open.
+- Click the first point, double-click or press <kbd>Enter</kbd> to close the shape. <kbd>Backspace</kbd> takes the last point back, <kbd>Esc</kbd> drops the shape.
+- <kbd>Alt</kbd>+click an edge to add a point, right-click a point to remove it.
+
+Each shape is **Bezier** (the curve passes through its points, shaped by their tangents) or **B-spline** (the points are control points that pull a smooth curve towards them; no tangents to manage). The switch sits with each tool's options. It turns the selected shape, and new shapes in every tool start as the kind picked last. Turning a B-spline into a Bezier keeps the curve exactly; the other way round the points become control points and the curve gets smoother. Masks render as drawn.

@@ -10,7 +10,7 @@
 // any other program's code.
 
 import * as D from "./imageViewer_paintData.js";
-import { segmentHit, splitSegment } from "./imageViewer_paintPen.js";
+import { segmentHit, insertAnchor } from "./imageViewer_paintPen.js";
 import { paintIcon } from "./imageViewer_paintIcons.js";
 
 /** The tools that work on paths (the pen first); every one shows the paths and takes the pen's Properties. */
@@ -122,14 +122,10 @@ export const PathToolsMixin = {
         const sh = segmentHit(P, p.x, p.y, tol);
         if (!sh) { this.drawOverlay(); return; }
         this.liveBegin();
-        const j = (sh.i + 1) % P.pts.length;
-        const [a, m, b] = splitSegment(P.pts[sh.i], P.pts[j], sh.t);
-        const pts = P.pts.slice();
-        pts[sh.i] = a; pts[j] = b;
-        pts.splice(sh.i + 1, 0, m);
+        const [pts, at] = insertAnchor(P, sh);
         P.pts = pts;
-        this._setPathPicked([sh.i + 1]);
-        this._drag = { kind: "pen", P, i: sh.i + 1, part: "a", label: "Add anchor" };
+        this._setPathPicked([at]);
+        this._drag = { kind: "pen", P, i: at, part: "a", label: "Add anchor" };
         this.drawOverlay();
     },
 
