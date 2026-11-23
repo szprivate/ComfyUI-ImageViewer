@@ -276,7 +276,9 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
                                  timeout=20000)
 
-            # The Matchmove menu opens from the 3D menu bar and lists the steps.
+            # The Matchmove menu opens from the 3D menu bar and lists the steps (the 3D view's tab in front: the plate opened over it).
+            pg.evaluate("() => window.__panel.dockViewFront()")
+            pg.wait_for_timeout(100)
             pg.evaluate_handle("() => window.__panel._modelView().root.querySelector('[data-menu=matchmove]')").as_element().click()
             pg.wait_for_timeout(150)
             items = pg.locator("button.previz-menu-item").all_inner_texts()
@@ -318,8 +320,8 @@ class MatchmoveBrowserTests(unittest.TestCase):
             pg.evaluate("() => window.__panel.dockToggleMaximized('mmGuide')")
             n = pg.evaluate("() => window.__panel._mmCur().mm.tracks.length")
 
-            # A track picked and deleted with its key, from the Plate panel.
-            pg.evaluate("""() => { const P = window.__panel; const st = P._mmCur();
+            # A track picked and deleted with its key, from the Plate panel (its tab brought to the front).
+            pg.evaluate("""() => { const P = window.__panel; P.matchmovePlateMain(true); const st = P._mmCur();
                 st.sel = new Set([st.mm.tracks[0].id]); P._mmUI.stage.focus(); P._mmFocused = true; }""")
             pg.keyboard.press("Delete")
             after = pg.evaluate("() => window.__panel._mmCur().mm.tracks.length")

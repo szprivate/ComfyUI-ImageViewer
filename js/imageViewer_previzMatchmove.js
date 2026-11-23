@@ -1447,6 +1447,8 @@ export const PrevizMatchmoveMixin = {
         const scene = this.previzScene(st.key);
         if (!scene) return;
         this.previzSnapshot("matchmove into the scene");
+        // what is built is seen in the 3D view: bring it up over the plate
+        if (this._mmPlateMainShown()) this.matchmovePlateMain(false);
         this._mmRemoveBuilt(scene, mm.scene.group);
         const p = mm.plate;
         const group = S.makeGroupItem(S.uniqueName(scene, "Matchmove"));
