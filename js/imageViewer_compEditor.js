@@ -41,6 +41,20 @@ const G = C.G, E = C.E;
 // What Ctrl+C took: one for the page, so nodes go from one comp (or group) into another. `n` counts the pastes.
 const clipboard = { frag: null, n: 0 };
 const parseLink = E.parseLink;
+// The viewer bar's own icons (Lucide shapes, ISC), as SVG text.
+const BAR_ICONS = {
+    cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+    box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+    columns: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
+    scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M12 7v10"/>',
+    fit: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>',
+    undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
+    redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/>',
+    region: '<path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+    left: '<path d="m15 18-6-6 6-6"/>',
+    right: '<path d="m9 18 6-6-6-6"/>',
+};
+const svgIcon = (name) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${BAR_ICONS[name] || ""}</svg>`;
 
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
@@ -91,11 +105,61 @@ const CSS = `
 .cp-ibtn.dirty{color:#ff6a1a;border-color:#ff6a1a}
 .cp-display{max-width:13em;text-overflow:ellipsis}
 .cp-chan{max-width:15em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cp-exp{display:inline-flex;align-items:center;gap:6px;padding:1px 7px;background:#2b2b31;border:1px solid #3a3a42;border-radius:3px;cursor:pointer}
-.cp-exp:hover{background:#35353d}
-.cp-exp-l,.cp-exp-v{font:11px/1.5 ui-monospace,Menlo,Consolas,monospace;white-space:nowrap}
-.cp-exp-l{color:#9a9aa2}.cp-exp-v{color:#d8d8dc;min-width:4.5em;text-align:right}
-.cp-exp-s{width:104px;margin:0;accent-color:#ff6a1a;cursor:ew-resize}
+/* The comp's viewer bar: flat and dense - one strip of small dropdowns, icon toggles and a thin exposure scale,
+   groups parted by hairlines. Greys are white over the panel's ground, so the colour presets carry it. */
+.cp-root{container-type:inline-size}
+.cp-bar>*{flex:none}.cp-bar>.mg-spacer{flex:1 1 8px}
+.cp-root>.mg-bar.cp-bar{flex-wrap:nowrap;gap:2px;padding:3px 6px;min-height:30px;background:#ffffff08;border-bottom:1px solid #00000066;box-shadow:inset 0 -1px 0 #ffffff0a;row-gap:3px}
+.cp-bar .mg-btn,.cp-bar select.mg-btn{height:22px;padding:0 6px;border:1px solid transparent;border-radius:2px;background:transparent;color:#c8c8cc;
+  font:12px/20px system-ui,Segoe UI,sans-serif;display:inline-flex;align-items:center;gap:4px;white-space:nowrap;box-shadow:none;min-height:0;transition:none}
+.cp-bar .mg-btn:hover{background:#ffffff14;border-color:transparent;color:#ececef}
+.cp-bar .mg-btn:focus-visible{outline:1px solid #ff6600;outline-offset:-1px}
+.cp-bar .mg-btn.on{background:#ff660024;border-color:transparent;color:#ff6600}
+.cp-bar .mg-btn.on:hover{background:#ff660036}
+.cp-bar .cp-ibtn,.cp-bar .cp-tbtn{padding:0;width:24px;justify-content:center}
+.cp-bar .cp-ibtn svg,.cp-bar .cp-tbtn svg{width:15px;height:15px;flex:none}
+.cp-bar .cp-tbtn.cp-wide{width:auto;padding:0 6px 0 5px}
+.cp-bar .cp-ibtn.dirty{color:#ff6600;border-color:transparent;position:relative}
+.cp-bar .cp-ibtn.dirty:after{content:"";position:absolute;right:3px;top:3px;width:5px;height:5px;border-radius:50%;background:#ff6600}
+/* dropdowns: a flat well with a small caret, as wide as their words */
+.cp-bar select.mg-btn,.cp-bar .cp-dd{background:#00000040 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0h8L4 5z' fill='%239a9aa2'/%3E%3C/svg%3E") no-repeat right 6px center;border:1px solid #ffffff12;padding:0 18px 0 6px;-webkit-appearance:none;appearance:none;field-sizing:content}
+.cp-bar select.mg-btn:hover,.cp-bar .cp-dd:hover{background-color:#ffffff10;border-color:#ffffff22}
+.cp-bar select.mg-btn option{background:#202024;color:#d8d8dc}
+.cp-bar .cp-dd.on{color:#ff6600;background-color:#ff660018}
+.cp-bar .cp-proxy{min-width:0}
+.cp-bar .cp-chan{max-width:16em}
+.cp-bar .cp-display{max-width:14em}
+.cp-bar .cp-views{max-width:9.5em;text-overflow:ellipsis}
+.cp-bar .cp-mini-caret{font-size:9px;color:#8a8a92;margin-left:-1px}
+.cp-bar .mg-sep{width:1px;height:18px;background:#ffffff1a;margin:0 3px}
+.cp-bar>.mg-title{font-weight:500;color:#c8c8cc;margin:0 2px 0 4px;font-size:12px;flex:0 1 auto;min-width:3em}
+@container (max-width:900px){.cp-root>.mg-bar.cp-bar{flex-wrap:wrap}.cp-bar>.mg-spacer{flex:1 0 100%;height:0;margin:-2px 0;order:2}
+  .cp-bar>.mg-spacer~*{order:3}}
+/* exposure: arrows step a stop, the readout (a click: back to 0), a thin track over a scale of stops */
+.cp-exp{display:inline-flex;align-items:center;gap:1px;height:24px;padding:0 6px 0 2px;cursor:default;user-select:none}
+.cp-exp-step{width:14px;height:20px;min-height:0;padding:0;border:0;background:transparent;color:#8a8a92;cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.cp-exp-step:hover{color:#ececef;background:transparent;border:0}
+.cp-exp-step svg{width:11px;height:11px}
+.cp-exp-v{font:11px/20px ui-monospace,Menlo,Consolas,monospace;color:#e0e0e4;min-width:5.2em;text-align:right;padding:0 5px;height:20px;
+  background:#00000040;border:1px solid #ffffff12;border-radius:2px;cursor:pointer;white-space:nowrap}
+.cp-exp-v.moved{color:#ff6600}
+.cp-exp-t{position:relative;width:120px;height:24px;margin-left:6px;flex:none}
+.cp-exp-s{position:absolute;left:0;right:0;top:2px;width:100%;height:12px;margin:0;background:transparent;-webkit-appearance:none;appearance:none;cursor:ew-resize;z-index:1}
+.cp-exp-s::-webkit-slider-runnable-track{height:1px;background:#ffffff40}
+.cp-exp-s::-moz-range-track{height:1px;background:#ffffff40}
+.cp-exp-s::-webkit-slider-thumb{-webkit-appearance:none;width:6px;height:11px;margin-top:-5px;border-radius:1px;background:#1c1c20;border:1px solid #ff6600}
+.cp-exp-s::-moz-range-thumb{width:4px;height:10px;border-radius:1px;background:#1c1c20;border:1px solid #ff6600}
+.cp-exp-sc{position:absolute;left:3px;right:3px;top:10px;height:15px;pointer-events:none}
+.cp-exp-tk{position:absolute;top:0;width:1px;height:3px;background:#ffffff38}
+.cp-exp-tk.major{height:5px;background:#ffffff66}
+.cp-exp-n{position:absolute;top:6px;transform:translateX(-50%);font:9px/9px ui-monospace,Menlo,Consolas,monospace;color:#7a7a82}
+.cp-over .cp-rg-line{fill:none;stroke:#ff6600;stroke-width:1px;stroke-dasharray:5 3;vector-effect:non-scaling-stroke}
+.cp-over .cp-rg-line.solid{stroke-dasharray:none}
+.cp-over .cp-rg-sq{fill:#0009;stroke:#ff6600;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all}
+.cp-over .cp-rg-sq:hover{stroke:#fff}
+.cp-over .cp-rg-sq[data-crop=tl],.cp-over .cp-rg-sq[data-crop=br]{cursor:nwse-resize}
+.cp-over .cp-rg-sq[data-crop=tr],.cp-over .cp-rg-sq[data-crop=bl]{cursor:nesw-resize}
+.cp-over .cp-rg-move{fill:transparent;pointer-events:all;cursor:move}
 .cp-pop{position:absolute;z-index:40}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
@@ -352,6 +416,46 @@ export function createCompEditor(host, opts = {}) {
         return gpu;
     }
     /** The part of the picture on screen (pixels of the picture at `scale`), or null when most of it shows. */
+    // ── the render region (the bar's region button, Alt+W): only a box of the picture is worked ──
+    // Kept per viewer as shares of the picture on show (left, top, right, bottom; y down), so it fits any size.
+    const REGION_KEY = "imageviewer.comp.region";
+    st.region = (() => {
+        try {
+            const r = JSON.parse(localStorage.getItem(REGION_KEY) || "null");
+            if (r && Array.isArray(r.box) && r.box.length === 4 && r.box.every(Number.isFinite)) return { on: !!r.on, box: r.box };
+        } catch (_) { /* not kept */ }
+        return { on: false, box: [0.25, 0.25, 0.75, 0.75] };
+    })();
+    const keepRegion = () => { try { localStorage.setItem(REGION_KEY, JSON.stringify(st.region)); } catch (_) { /* not kept */ } };
+    function setRegion(on, box) {
+        if (box) st.region.box = cleanRegion(box);
+        st.region.on = !!on;
+        keepRegion(); renderBar(); renderOverlay(); queueRender();
+    }
+    /** A box of shares held inside the picture, at least 2 % each way, its corners in order. */
+    function cleanRegion(b) {
+        const cl = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+        let [x0, y0, x1, y1] = b.map(cl);
+        if (x1 < x0) [x0, x1] = [x1, x0];
+        if (y1 < y0) [y0, y1] = [y1, y0];
+        if (x1 - x0 < 0.02) { x1 = Math.min(1, x0 + 0.02); x0 = x1 - 0.02; }
+        if (y1 - y0 < 0.02) { y1 = Math.min(1, y0 + 0.02); y0 = y1 - 0.02; }
+        return [x0, y0, x1, y1];
+    }
+    /** The region in pixels of a picture at `scale` ([x0, y0, x1, y1], y down), or null while it is off. */
+    function regionPx(scale) {
+        if (!st.region.on) return null;
+        const vf = viewFmt(), b = st.region.box;
+        return [Math.floor(b[0] * vf.width * scale), Math.floor(b[1] * vf.height * scale), Math.ceil(b[2] * vf.width * scale), Math.ceil(b[3] * vf.height * scale)];
+    }
+    /** What is worked of the picture: the part on screen, and of it only the region when that is on. */
+    function workRegion(scale) {
+        const vis = visibleRegion(scale), rg = regionPx(scale);
+        if (!rg) return vis;
+        if (!vis) return rg;
+        const r = [Math.max(vis[0], rg[0]), Math.max(vis[1], rg[1]), Math.min(vis[2], rg[2]), Math.min(vis[3], rg[3])];
+        return r[2] > r[0] && r[3] > r[1] ? r : [0, 0, 0, 0];
+    }
     function visibleRegion(scale) {
         if (st.zoom.fit) return null;
         const vf = viewFmt(), Wd = stage.clientWidth || 1, Hd = stage.clientHeight || 1;
@@ -401,7 +505,7 @@ export function createCompEditor(host, opts = {}) {
     // ── skeleton ─────────────────────────────────────────────────────────────
     host.replaceChildren();
     const root = el(doc, "div", "cp-root"); root.tabIndex = 0;
-    const bar = el(doc, "div", "mg-bar");
+    const bar = el(doc, "div", "mg-bar cp-bar");
     const stage = el(doc, "div", "cp-stage");
     const canvas = el(doc, "canvas", "cp-canvas");
     const info = el(doc, "div", "cp-info");
@@ -480,6 +584,13 @@ export function createCompEditor(host, opts = {}) {
     }
 
     const btn = (label, title, fn, cls = "") => { const b = el(doc, "button", "mg-btn " + cls, label); b.title = title; b.onclick = fn; return b; };
+    /** A button of the viewer bar: an icon, and words after it when given. */
+    const tb = (icon, label, title, fn, cls = "") => {
+        const b = el(doc, "button", "mg-btn cp-tbtn " + cls);
+        b.title = title; b.onclick = fn; b.innerHTML = svgIcon(icon);
+        if (label) b.append(el(doc, "span", "", label));
+        return b;
+    };
     const toast = (m, sev) => { try { o.notify(m, sev); } catch (_) { /* no toasts */ } };
     const comp = () => st.comp;
     const fmt = () => st.comp.format;
@@ -662,8 +773,8 @@ export function createCompEditor(host, opts = {}) {
     /** What the picture is looked at in now: the channel button's label and the exposure readout. */
     function paintLook() {
         if (expSlider && Number(expSlider.value) !== st.ev) expSlider.value = String(st.ev);
-        if (expValue) expValue.textContent = `${st.ev.toFixed(1)} EV`;
-        if (chanBtn) chanBtn.textContent = lookLabel() + " ▾";
+        if (expValue) { expValue.textContent = `${st.ev.toFixed(1)} EV`; expValue.classList.toggle("moved", st.ev !== 0); }
+        if (chanBtn) chanBtn.textContent = lookLabel();   // the caret is drawn (.cp-dd)
     }
     const tick = (on, s) => (on ? "✓" : "\u00a0") + "\u00a0" + s;
     /** The channel menu: every layer of the picture on show, and under it the channels of it that are there. */
@@ -689,8 +800,8 @@ export function createCompEditor(host, opts = {}) {
         bar.replaceChildren();
         const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
         t.title = st.path || "";
-        const proxy = el(doc, "select", "mg-btn");
-        for (const [v, label] of [["auto", "Proxy: auto"], ["1", "Full"], ["0.5", "1/2"], ["0.25", "1/4"]]) proxy.append(new Option(label, v));
+        const proxy = el(doc, "select", "mg-btn cp-proxy");
+        for (const [v, label] of [["auto", "Proxy auto"], ["1", "Full res"], ["0.5", "Proxy 1/2"], ["0.25", "Proxy 1/4"]]) proxy.append(new Option(label, v));
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
@@ -699,6 +810,9 @@ export function createCompEditor(host, opts = {}) {
             try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ }
             gpuWhy = ""; gpuTried = false; gpuBtn.classList.toggle("on", on); queueRender();
         }, gpuWanted() ? "on cp-gpu" : "cp-gpu");
+        const regionBtn = tb("region", "", st.region.on
+            ? "Region render on: only the box is worked (Alt+W). Drag its edges, corners or the centre mark; a click here: the whole picture again"
+            : "Region render: work only a box of the picture, for a quicker look at a part of it (Alt+W)", () => setRegion(!st.region.on), "cp-region" + (st.region.on ? " on" : ""));
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
             disp = el(doc, "select", "mg-btn cp-display");
@@ -710,19 +824,35 @@ export function createCompEditor(host, opts = {}) {
         }
         // What the picture is looked at in: one menu, the layers and the channels in them.
         chanBtn = btn("", "What the picture is looked at in: rgba, or a layer of extra channels, and one channel of "
-            + "it as grey (the R G B A keys on the picture pick rgba's)", () => popMenu(chanBtn, chanItems()), "cp-chan");
+            + "it as grey (the R G B A keys on the picture pick rgba's)", () => popMenu(chanBtn, chanItems()), "cp-chan cp-dd");
         // Exposure, the comp's own: the viewer's element stays where it is (and is hidden over a comp).
         const exp = el(doc, "div", "cp-exp");
-        exp.title = "Exposure (EV), also E + a drag on the picture. A click here is back to 0.";
-        exp.append(el(doc, "span", "cp-exp-l", "Exposure"));
+        exp.title = "Exposure (EV), also E + a drag on the picture. A click on the number is back to 0.";
+        const step = (dir) => {
+            const b = el(doc, "button", "cp-exp-step");
+            b.innerHTML = svgIcon(dir < 0 ? "left" : "right");
+            b.title = (dir < 0 ? "A stop darker" : "A stop brighter") + " (Shift: a tenth)";
+            b.addEventListener("click", (e) => { e.stopPropagation(); setEv(Math.round((st.ev + dir * (e.shiftKey ? 0.1 : 1)) * 10) / 10); });
+            return b;
+        };
+        expValue = el(doc, "span", "cp-exp-v");
+        const track = el(doc, "div", "cp-exp-t");
         expSlider = el(doc, "input", "cp-exp-s");
         expSlider.type = "range"; expSlider.min = "-4"; expSlider.max = "4"; expSlider.step = "0.1";
         expSlider.title = "Exposure (EV) - the picture is shown brighter or darker; the render never is";
         expSlider.oninput = () => setEv(parseFloat(expSlider.value));
-        expValue = el(doc, "span", "cp-exp-v");
-        exp.append(expSlider, expValue);
-        exp.onclick = (e) => { if (e.target !== expSlider) setEv(0); };
+        // The scale under the track: a tick every half stop, longer and numbered every two.
+        const scale = el(doc, "div", "cp-exp-sc");
+        for (let k = 0; k <= 16; k++) {
+            const at = `${(k / 16) * 100}%`, v = k / 2 - 4, major = v % 2 === 0;
+            const tk = el(doc, "span", "cp-exp-tk" + (major ? " major" : "")); tk.style.left = at; scale.append(tk);
+            if (major) { const n = el(doc, "span", "cp-exp-n", v > 0 ? `+${v}` : String(v)); n.style.left = at; scale.append(n); }
+        }
+        track.append(expSlider, scale);
+        exp.append(step(-1), expValue, step(1), track);
+        exp.onclick = (e) => { if (e.target === expValue) setEv(0); };
         exp.oncontextmenu = (e) => { e.preventDefault(); setEv(0); };
+        exp.addEventListener("wheel", (e) => { e.preventDefault(); setEv(Math.round((st.ev - Math.sign(e.deltaY) * (e.shiftKey ? 0.1 : 0.5)) * 10) / 10); }, { passive: false });
         for (const t of ["pointerdown", "wheel", "dblclick"]) exp.addEventListener(t, (e) => e.stopPropagation());
         paintLook();
         const ib = (icon, title, fn, cls = "") => {
@@ -735,7 +865,7 @@ export function createCompEditor(host, opts = {}) {
         const eyes = el(doc, "select", "mg-btn cp-views");
         const vs = C.viewsOf(st.comp);
         if (vs.length) for (const v of vs) eyes.append(new Option(`View: ${v}`, v));
-        else eyes.append(new Option("Views: none", ""));
+        else eyes.append(new Option("No views", ""));
         eyes.append(new Option(vs.length ? "No views (take them off)" : "Stereo: left, right", "\u0001"));
         if (vs.length) eyes.append(new Option("Views…", "\u0002"));
         eyes.value = vs.length ? eyeNow() : "";
@@ -751,8 +881,9 @@ export function createCompEditor(host, opts = {}) {
             } else { st.eye = eyes.value; queueRender(); renderProps(); }
         };
         const vtOn = viewTools.summary();
-        vtBtn = btn("Viewer ▾", "The viewer's tools: compare with a second node (A / B wipe, difference), the pixel sampler, scopes, out-of-range colours, guides"
-            + (vtOn.length ? ` - on: ${vtOn.join(", ")}` : ""), () => popMenu(vtBtn, viewTools.menuItems()), "cp-vtools" + (vtOn.length ? " on" : ""));
+        vtBtn = tb("scan", "", "The viewer's tools: compare with a second node (A / B wipe, difference), the pixel sampler, scopes, out-of-range colours, guides"
+            + (vtOn.length ? ` - on: ${vtOn.join(", ")}` : ""), () => popMenu(vtBtn, viewTools.menuItems()), "cp-vtools cp-wide" + (vtOn.length ? " on" : ""));
+        vtBtn.append(el(doc, "span", "cp-mini-caret", "▾"));
         bar.append(
             ib("newDoc", "New comp…", () => o.newComp && o.newComp(), "cp-new"),
             ib("open", "Open… (Ctrl+O) a comp", () => o.open && o.open(), "cp-open"),
@@ -760,15 +891,15 @@ export function createCompEditor(host, opts = {}) {
             el(doc, "span", "mg-sep"),
             t,
             el(doc, "span", "mg-sep"),
-            btn("↶", "Undo (Ctrl+Z)", undo), btn("↷", "Redo (Ctrl+Shift+Z)", redo),
+            tb("undo", "", "Undo (Ctrl+Z)", undo, "cp-undo"), tb("redo", "", "Redo (Ctrl+Shift+Z)", redo, "cp-redo"),
             // Everything that only changes how the picture is LOOKED AT, together on the right by Fit.
             el(doc, "span", "mg-spacer"),
-            proxy, gpuBtn, ...(disp ? [disp] : []), chanBtn, exp, eyes,
+            proxy, gpuBtn, regionBtn, el(doc, "span", "mg-sep"), ...(disp ? [disp] : []), chanBtn, el(doc, "span", "mg-sep"), exp, el(doc, "span", "mg-sep"), eyes,
             vtBtn,
-            ...(has3d() && o.room3d ? [btn(st.room ? "3D ●" : "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d" + (st.room ? " on" : "")),
-                btn("◫", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
-            btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
-            el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
+            ...(has3d() && o.room3d ? [tb("box", "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d cp-wide" + (st.room ? " on" : "")),
+                tb("columns", "", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
+            el(doc, "span", "mg-sep"),
+            tb("fit", "", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }, "cp-fit"));
     }
     function fileItems() {
         return [["Save", save, !!st.path, "Ctrl+S"], ["Save as…", saveAs, !!o.saveAs, "Ctrl+Shift+S"], null,
@@ -995,7 +1126,7 @@ export function createCompEditor(host, opts = {}) {
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
         const tLoad = t0 - tAsk;
-        const roi = visibleRegion(scale);
+        const roi = workRegion(scale);
         const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false, scale !== base);
         lastRoi = img.roi || null;
         lastHow = how;
@@ -1027,6 +1158,8 @@ export function createCompEditor(host, opts = {}) {
         const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
+        const rgn = regionPx(scale);
+        if (rgn) blankOutside(data.data, img.w, img.h, rgn);
         const marked = viewTools.afterEncode(shownImg, data.data, scale);
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
@@ -1042,8 +1175,19 @@ export function createCompEditor(host, opts = {}) {
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}${traceNote()}`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}${st.region.on ? (lastHow === "cpu" ? " · region (the CPU works the whole picture)" : " · region") : ""}${traceNote()}`;
         roomAfterDraw();
+    }
+    /** The region render: the pixels outside the box shown black (the GPU leaves them unworked; the CPU works them all). */
+    function blankOutside(px, w, h, r) {
+        const x0 = Math.max(0, Math.min(w, r[0])), x1 = Math.max(x0, Math.min(w, r[2])), y0 = Math.max(0, Math.min(h, r[1])), y1 = Math.max(y0, Math.min(h, r[3]));
+        for (let y = 0; y < h; y++) {
+            const row = y * w * 4, inside = y >= y0 && y < y1;
+            for (let x = 0; x < w; x++) {
+                if (inside && x >= x0 && x < x1) { x = x1 - 1; continue; }
+                const i = row + x * 4; px[i] = px[i + 1] = px[i + 2] = 0; px[i + 3] = 255;
+            }
+        }
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -1120,7 +1264,7 @@ export function createCompEditor(host, opts = {}) {
         over.style.transform = canvas.style.transform;
         // A picture worked only over the part on screen: panned or zoomed past it, it is made again.
         if (lastRoi) {
-            const want = visibleRegion(lastScale);
+            const want = workRegion(lastScale);
             if (!want || want[0] < lastRoi[0] || want[1] < lastRoi[1] || want[2] > lastRoi[2] || want[3] > lastRoi[3]) queueRender();
         }
         if (o.onView) o.onView();
@@ -1187,7 +1331,51 @@ export function createCompEditor(host, opts = {}) {
         stage.classList.toggle("painting", paintTool.active());
         if (st.comp) viewTools.overlay(over);
         drawHandles();
+        drawRegion();
         if (o.onView) o.onView();
+    }
+    /** The render region's box on the picture: its edges and corners resize it, the mark in its middle moves it. */
+    function drawRegion() {
+        if (!st.region.on || !st.comp || st.room) return;
+        const vf = viewFmt(), W = vf.width, H = vf.height, z = st.zoom.s || 1;
+        const [x0, y0, x1, y1] = [st.region.box[0] * W, st.region.box[1] * H, st.region.box[2] * W, st.region.box[3] * H];
+        const g = svgEl(doc, "g", { class: "cp-region" });
+        g.append(svgEl(doc, "rect", { class: "cp-rg-line", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }));
+        const part = (elm, name, tip) => {
+            elm.dataset.crop = name;
+            tipped(elm, tip);
+            elm.addEventListener("pointerdown", (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault(); e.stopPropagation();
+                stage.setPointerCapture(e.pointerId);
+                const p0 = compXY(e), a = [x0, y0], b = [x1, y1];
+                stage.onpointermove = (ev) => {
+                    const p = compXY(ev), r = J.cropDrag(name, a, b, [p[0] - p0[0], p[1] - p0[1]]);
+                    let box = [r.topleft[0] / W, r.topleft[1] / H, r.bottomright[0] / W, r.bottomright[1] / H];
+                    if (name === "inside") {   // moved whole: kept its size, held inside the picture
+                        const bw = box[2] - box[0], bh = box[3] - box[1];
+                        const nx = Math.max(0, Math.min(1 - bw, box[0])), ny = Math.max(0, Math.min(1 - bh, box[1]));
+                        box = [nx, ny, nx + bw, ny + bh];
+                    }
+                    st.region.box = cleanRegion(box);
+                    renderOverlay(); queueRender();
+                };
+                stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; keepRegion(); };
+            });
+            g.append(elm);
+        };
+        const w = 9;
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x1, y2: y0, "stroke-width": w }), "t", "Drag: the region's top edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y1, x2: x1, y2: y1, "stroke-width": w }), "b", "Drag: the region's bottom edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x0, y2: y1, "stroke-width": w }), "l", "Drag: the region's left edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x1, y1: y0, x2: x1, y2: y1, "stroke-width": w }), "r", "Drag: the region's right edge");
+        const h = 4 / z;
+        for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
+            part(svgEl(doc, "rect", { class: "cp-rg-sq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner of the region");
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, k = 7 / z;
+        g.append(svgEl(doc, "path", { class: "cp-rg-line solid", d: `M${cx - k} ${cy}H${cx + k}M${cx} ${cy - k}V${cy + k}` }));
+        part(svgEl(doc, "circle", { class: "cp-rg-move", cx, cy, r: 9 / z }), "inside", "Drag: move the region");
+        over.append(g);
     }
     /** The points of the selected node that are dragged on the picture: [{param, at: [x, y], set(xy) -> value, small?}]. */
     function handlesOf(n) {
@@ -2198,6 +2386,7 @@ export function createCompEditor(host, opts = {}) {
         else if (k === "Escape" && WUI.escape(wctx())) { /* stopped placing a point / drawing lines */ }
         else if (!ctrl && (part === root || part === props) && paintTool.key(e)) { /* the Paint tool's */ }
         else if (part === root && viewTools.key(e)) { /* the viewer tools' */ }
+        else if (part === root && e.altKey && !ctrl && e.code === "KeyW") setRegion(!st.region.on);
         else if (k === "2" && primary()) viewTools.setB(fid(primary().id));
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
@@ -3951,7 +4140,8 @@ export function createCompEditor(host, opts = {}) {
         /** The frames of the picture on screen kept in the cache (the timeline's marks). */
         cachedFrames,
         /** How the last picture was made: "cpu", "gpu", "gpu, region" or "kept"; and why the GPU is off, if it is. */
-        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi }),
+        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi, renderRegion: st.region.on ? st.region.box.slice() : null }),
+        setRenderRegion: (on, box) => setRegion(on, box),
         /** Switch the GPU preview on / off (kept in localStorage). */
         setGpu: (on) => { try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ } gpuWhy = ""; gpuTried = false; queueRender(); },
         /** The 3D renderer up (true) or not to be had (false). */
