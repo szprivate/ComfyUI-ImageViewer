@@ -1103,6 +1103,56 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(off, {"tool": "none", "home": True})
         self.assertEqual(self.errors, [])
 
+    def test_roto_shows_tangents_while_drawing_and_has_a_b_spline_mode(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => { try { localStorage.removeItem('imageviewer.viewer.maskShape'); } catch (e) {} }")
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); e.select([]);
+            const r = e.addNode('roto'); c.nodes.find((n) => n.type === 'output').inputs = [r.id]; e.select([r.id]); }}""")
+        add = "() => __panel.compPropsPanel.querySelectorAll('button').forEach((b) => { if (b.textContent === '+ Shape') b.click(); })"
+        pg.evaluate(add)
+        box = pg.evaluate(f"() => {{ const r = {self.ED}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        at = lambda fx, fy: (box[0] + box[2] * fx, box[1] + box[3] * fy)
+        tangents = lambda: pg.evaluate("() => __panel._toolDraw.querySelectorAll('.mask-guide-tangent').length")
+        # A press dragged while placing pulls out the point's tangents, and they show at once.
+        pg.mouse.move(*at(0.2, 0.2)); pg.mouse.down(); pg.mouse.move(*at(0.32, 0.16), steps=5)
+        self.assertGreaterEqual(tangents(), 2, "both tangents of the new point show while it is dragged")
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "roto-tangents-while-drawing.png"))
+        pg.mouse.up()
+        self.assertGreaterEqual(tangents(), 2, "and stay up while the shape is drawn")
+        for fx, fy in ((0.6, 0.2), (0.6, 0.7), (0.2, 0.7)):
+            pg.mouse.click(*at(fx, fy))
+        pg.keyboard.press("Enter")                                 # Enter closes it, as in every mask tool
+        roto = lambda: pg.evaluate(f"() => {self.ED}.comp().nodes.find((n) => n.type === 'roto').roto")
+        L = roto()["layers"][0]
+        self.assertEqual(len(L["points"]), 4)
+        p0 = L["points"][0]
+        self.assertIn("cout", p0)
+        self.assertAlmostEqual(p0["cout"]["x"] - p0["x"], p0["x"] - p0["cin"]["x"], delta=1e-6)   # mirrored
+        self.assertEqual(tangents(), 0, "the drawing guide goes when the shape is closed")
+        # The B-spline switch turns the selected shape; its points become control points, the corners round off.
+        pg.evaluate("() => __panel._toolPanel.querySelector('.roto-shape-switch .mask-shape-btn[data-shape=\"bspline\"]').click()")
+        L = roto()["layers"][0]
+        self.assertEqual(L.get("shape"), "bspline")
+        self.assertFalse(any("cout" in p for p in L["points"]))
+        self.assertGreater(pg.evaluate("() => __panel._toolDraw.querySelectorAll('.mask-guide-polygon').length"), 0)
+        pg.wait_for_timeout(600)
+        self.assertGreater(self.pixel(pg, 0.4, 0.45)[0], 200, "inside: white")
+        self.assertLess(self.pixel(pg, 0.205, 0.69)[0], 60, "a control point's corner is outside the curve")
+        if SHOTS:
+            pg.screenshot(path=os.path.join(SHOTS, "roto-bspline.png"))
+        # The choice is kept: the next shape starts as a B-spline, and Backspace takes its last point back.
+        pg.evaluate(add)
+        for fx, fy in ((0.7, 0.3), (0.85, 0.3), (0.85, 0.6)):
+            pg.mouse.click(*at(fx, fy))
+        pg.keyboard.press("Backspace")
+        L2 = pg.evaluate("() => { const l = __panel._roto.layers[__panel._roto.selLayer]; return { shape: l.shape, n: l.points.length }; }")
+        self.assertEqual(L2, {"shape": "bspline", "n": 2})
+        pg.keyboard.press("Escape")                                # Esc drops a shape being drawn
+        self.assertEqual(len(roto()["layers"]), 1)
+        self.assertEqual(self.errors, [])
+
     def test_the_eye_on_a_node_shows_it_in_the_picture_and_the_viewed_node_is_tagged(self):
         pg = self.page()
         self.new_comp(pg)

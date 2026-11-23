@@ -776,6 +776,51 @@ class MatchmoveBrowserTests(unittest.TestCase):
         finally:
             pg.close()
 
+    def test_a_mask_drawn_on_the_plate_has_tangents_and_a_b_spline_mode(self):
+        """The mask tool draws as every mask tool does: a press dragged while placing pulls out the point's
+        tangents (shown at once), a double-click closes it, and the Bezier / B-spline switch turns it."""
+        pg = self._page()
+        try:
+            pg.evaluate("() => { try { localStorage.removeItem('imageviewer.viewer.maskShape'); } catch (e) {} }")
+            pg.evaluate("async () => { const P = window.__panel; P.matchmovePickPlate = () => {}; P.matchmoveOpen(); }")
+            pg.wait_for_timeout(300)
+            pg.evaluate("async (p) => { await window.__panel.matchmoveSetPlate(p); }", self.plate)
+            pg.evaluate("() => window.__panel.matchmovePlateMain(true)")
+            pg.wait_for_function("() => { const st = window.__panel._mmCur(); return st && st.frameNear && st.frameNear.naturalWidth > 0; }",
+                                 timeout=20000)
+            pg.wait_for_timeout(300)
+            pg.evaluate("() => window.__panel.matchmoveTool('mask')")
+            box = pg.evaluate("() => { const r = window.__panel._mmUI.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+            at = lambda fx, fy: (box[0] + box[2] * fx, box[1] + box[3] * fy)
+            pg.mouse.move(*at(0.3, 0.3)); pg.mouse.down(); pg.mouse.move(*at(0.4, 0.25), steps=5)
+            d = pg.evaluate("() => window.__panel._mmCur().drawing")
+            self.assertEqual(len(d), 1)
+            self.assertEqual(len(d[0]), 6, "the point being placed has its tangents")
+            self._shot(pg, "mm_mask_tangents_while_drawing")
+            pg.mouse.up()
+            pg.mouse.click(*at(0.7, 0.3))
+            pg.mouse.click(*at(0.7, 0.7))
+            pg.mouse.dblclick(*at(0.3, 0.7))
+            mk = pg.evaluate("() => window.__panel._mmCur().mm.masks")
+            self.assertEqual(len(mk), 1, mk)
+            pts = mk[0]["keys"][0]["pts"]
+            self.assertEqual(len(pts), 4)
+            self.assertEqual(len(pts[0]), 6)
+            self.assertNotIn("shape", mk[0])
+            # B-spline: the picked mask is turned (control points, no tangents) and new masks start as one.
+            pg.evaluate("() => window.__panel._mmUI.tools.__shape.querySelector('.mask-shape-btn[data-shape=\"bspline\"]').click()")
+            mk = pg.evaluate("() => window.__panel._mmCur().mm.masks")
+            self.assertEqual(mk[0].get("shape"), "bspline")
+            self.assertTrue(all(len(p) == 2 for p in mk[0]["keys"][0]["pts"]))
+            self.assertEqual(pg.evaluate("() => localStorage.getItem('imageviewer.viewer.maskShape')"), "bspline")
+            pressed = pg.evaluate("() => [...window.__panel._mmUI.tools.__shape.querySelectorAll('.mask-shape-btn')].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.dataset.shape)")
+            self.assertEqual(pressed, ["bspline"])
+            pg.wait_for_timeout(400)                              # the buttons' colour fades over
+            self._shot(pg, "mm_mask_bspline")
+            self.assertEqual(self.errors, [])
+        finally:
+            pg.close()
+
     def test_the_plate_is_a_tab_of_the_main_view(self):
         """Sebastian 2026-11-20: the plate's Main view / 3D view button did nothing - it is gone, and the Plate opens
         as a tab of the main view, beside the 3D view; the tabs switch between them, it goes with the 3D tab."""

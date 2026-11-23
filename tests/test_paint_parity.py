@@ -223,6 +223,16 @@ class PaintParity(unittest.TestCase):
         Q["closed"] = False
         self.assertEqual(M.flatten_path(Q)[-1], [6, 20])
         self.assertLess(len(M.flatten_path(Q)), len(line))
+        # A B-spline path (its points are control points) flattens the same in both.
+        B = M.clean_path(dict(path, closed=True, shape="bspline"))
+        self.assertEqual(B.get("shape"), "bspline")
+        d2 = rnd_doc(9, [])
+        d2.path = {"path": dict(path, shape="bspline"), "w": W, "h": H, "width": 3.4}
+        got2 = self.run_node({"p": d2})["p"]
+        bl = M.flatten_path(B)
+        self.assertEqual(len(bl), len(got2["path_line"]))
+        self.assertLess(float(np.abs(np.array(bl) - np.array(got2["path_line"])).max()), 1e-9)
+        self.same(M.path_mask(W, H, B), got2["path_fill"], (H, W), "b-spline fill", tol=0)
         # A path survives clean_meta (so it is kept in the .ora's imageviewer.json).
         meta = dict(d.meta, paths=[path, {"pts": []}])
         self.assertEqual([p["name"] for p in P.clean_meta(meta)["paths"]], ["p"])

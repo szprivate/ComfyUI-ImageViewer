@@ -612,8 +612,37 @@ def clean_path(p):
         x, y = f(a.get("x"), 0), f(a.get("y"), 0)
         pts.append({"x": x, "y": y, "ix": f(a.get("ix"), x), "iy": f(a.get("iy"), y),
                     "ox": f(a.get("ox"), x), "oy": f(a.get("oy"), y), "smooth": bool(a.get("smooth"))})
-    return {"id": str(p.get("id") or uuid.uuid4().hex[:12])[:40], "name": str(p.get("name") or "Path")[:120],
-            "closed": bool(p.get("closed")) and len(pts) > 2, "pts": pts}
+    out = {"id": str(p.get("id") or uuid.uuid4().hex[:12])[:40], "name": str(p.get("name") or "Path")[:120],
+           "closed": bool(p.get("closed")) and len(pts) > 2, "pts": pts}
+    if p.get("shape") == "bspline":
+        out["shape"] = "bspline"
+    return out
+
+
+def _mask_shape():
+    try:
+        from . import mask_shape
+        return mask_shape
+    except ImportError:  # loaded on its own, by its path (the tests): mask_shape.py beside it
+        import importlib.util
+        import os
+        import sys
+        mod = sys.modules.get("mask_shape")
+        if mod is None:
+            spec = importlib.util.spec_from_file_location("mask_shape", os.path.join(os.path.dirname(os.path.abspath(__file__)), "mask_shape.py"))
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            sys.modules["mask_shape"] = mod
+        return mod
+
+
+def curve_points(path):
+    """The anchors a path is drawn with: its own, or a B-spline path's from its control points (curvePoints)."""
+    pts = path["pts"]
+    if path.get("shape") != "bspline":
+        return pts
+    anch = _mask_shape().bspline_anchors([(a["x"], a["y"]) for a in pts], bool(path.get("closed")))
+    return [{"x": a[0], "y": a[1], "ix": a[2], "iy": a[3], "ox": a[4], "oy": a[5]} for a in anch]
 
 
 MAX_GUIDES = 100
@@ -667,7 +696,7 @@ def bezier_at(a, b, t):
 
 
 def flatten_path(path):
-    pts, out = path["pts"], []
+    pts, out = curve_points(path), []
     if not pts:
         return out
     out.append([pts[0]["x"], pts[0]["y"]])

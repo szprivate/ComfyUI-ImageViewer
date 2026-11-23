@@ -827,6 +827,43 @@ class PaintBrowserTests(unittest.TestCase):
         self.assertEqual(alpha(66, 5), 0)
         self.assertEqual(alpha(66, 60), 255)
 
+    def test_the_pen_draws_b_splines_and_shows_tangents_while_drawing(self):
+        pg = self.page()
+        self.open_photo(pg)
+        ed = self.ED
+        pg.evaluate("() => { try { localStorage.removeItem('imageviewer.viewer.maskShape'); } catch (e) {} }")
+        x0, y0, w, h = pg.evaluate(f"() => {{ const r = {ed}.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }}")
+        k = w / 200
+        at = lambda x, y: (x0 + x * k, y0 + y * k)
+        pg.mouse.move(*at(5, 5))
+        pg.keyboard.press("p")
+        # Switch to B-spline: a click places a control point and the curve stays inside them.
+        btn = pg.evaluate_handle(f"() => {ed}.root.querySelector('.paint-shape-switch .mask-shape-btn[data-shape=\"bspline\"]')")
+        btn.as_element().click()
+        for x, y in ((20, 20), (180, 20), (180, 100)):
+            pg.mouse.click(*at(x, y))
+        if os.environ.get("PAINT_SHOTS"):
+            pg.screenshot(path=os.path.join(os.environ["PAINT_SHOTS"], "paint-pen-bspline-drawing.png"))
+        pg.mouse.dblclick(*at(20, 100))                           # a double-click places the last point and closes it
+        P = pg.evaluate(f"() => {ed}.curPath()")
+        self.assertEqual(P.get("shape"), "bspline")
+        self.assertTrue(P["closed"])
+        self.assertEqual(len(P["pts"]), 4)
+        pg.keyboard.press("Control+Enter")
+        sel = lambda x, y: pg.evaluate(f"() => {ed}.sel[{y} * 200 + {x}]")
+        self.assertEqual(sel(100, 60), 255)
+        self.assertEqual(sel(22, 22), 0, "the control point's corner is outside a B-spline")
+        # Back to Bezier keeps the curve exactly (anchors with tangents where the curve is).
+        btn = pg.evaluate_handle(f"() => {ed}.root.querySelector('.paint-shape-switch .mask-shape-btn[data-shape=\"bezier\"]')")
+        btn.as_element().click()
+        Q = pg.evaluate(f"() => {ed}.curPath()")
+        self.assertNotEqual(Q.get("shape"), "bspline")
+        self.assertTrue(all(p["ox"] != p["x"] or p["oy"] != p["y"] for p in Q["pts"]))
+        self.assertEqual(pg.evaluate(f"() => {ed}.undoStack.at(-1).label"), "Path shape")
+        if os.environ.get("PAINT_SHOTS"):
+            pg.screenshot(path=os.path.join(os.environ["PAINT_SHOTS"], "paint-pen-bspline.png"))
+        self.assertEqual(self.errors, [])
+
     def test_pen_paths_select_fill_stroke_and_save(self):
         pg = self.page()
         self.open_photo(pg)

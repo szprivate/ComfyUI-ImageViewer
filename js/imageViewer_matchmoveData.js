@@ -8,6 +8,8 @@
 // imageViewer_previzMatchmove.js; the maths of tracking and solving is the server's (src/matchmove*.py).
 // Written from scratch, clean-room.
 
+import * as MS from "./imageViewer_maskShape.js";
+
 export const MM_VERSION = 1;
 
 // The guide's steps, in order. `tips` are what to watch out for; the panel shows them under the step.
@@ -144,8 +146,9 @@ export function cleanMask(m) {
     if (!m || typeof m !== "object") return null;
     const keys = [];
     for (const k of Array.isArray(m.keys) ? m.keys : []) {
+        // [x, y] a corner, [x, y, ix, iy, ox, oy] a point with its tangents (absolute)
         const pts = (Array.isArray(k && k.pts) ? k.pts : []).filter((p) => Array.isArray(p) && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])))
-            .map((p) => [Number(p[0]), Number(p[1])]);
+            .map((p) => (p.length >= 6 && p.slice(0, 6).every((v) => Number.isFinite(Number(v))) ? p.slice(0, 6).map(Number) : [Number(p[0]), Number(p[1])]));
         if (pts.length >= 3 && Number.isFinite(Number(k.f))) keys.push({ f: Math.round(Number(k.f)), pts });
     }
     keys.sort((a, b) => a.f - b.f);
@@ -153,7 +156,7 @@ export function cleanMask(m) {
     if (!keys.length && !matte) return null;
     const mode = m.mode === "object" ? "object" : "exclude";
     return { id: String(m.id || ""), name: String(m.name || "Mask"), mode, object: mode === "object" ? String(m.object || "") : "",
-             on: m.on !== false, keys, ...(matte ? { matte } : {}) };
+             on: m.on !== false, keys, ...(m.shape === "bspline" ? { shape: "bspline" } : {}), ...(matte ? { matte } : {}) };
 }
 
 // A mask may be a MATTE in place of a keyed shape: a grey picture per frame (white = masked) that an AI workflow
@@ -611,7 +614,8 @@ export function tracksInRect(mm, f, x0, y0, x1, y1) {
 
 // ── masks ────────────────────────────────────────────────────────────────────
 
-/** A mask's polygon at frame f: held outside its keys, straight in between (the server's mask_at). */
+/** A mask's points at frame f ([x, y] or [x, y, ix, iy, ox, oy]): held outside its keys, straight in between (the
+ *  server's mask_at; a corner counts as a point whose tangents sit on it). */
 export function maskAt(mask, f) {
     const ks = mask.keys;
     if (!ks.length) return [];
@@ -622,15 +626,29 @@ export function maskAt(mask, f) {
         if (a.f <= f && f <= b.f) {
             if (a.pts.length !== b.pts.length) return a.pts;
             const t = (f - a.f) / Math.max(1, b.f - a.f);
-            return a.pts.map((p, j) => [p[0] + (b.pts[j][0] - p[0]) * t, p[1] + (b.pts[j][1] - p[1]) * t]);
+            return a.pts.map((p, j) => {
+                const q = b.pts[j];
+                if (p.length < 6 && q.length < 6) return [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+                const A = p.length < 6 ? [p[0], p[1], p[0], p[1], p[0], p[1]] : p.slice(0, 6);
+                const B = q.length < 6 ? [q[0], q[1], q[0], q[1], q[0], q[1]] : q.slice(0, 6);
+                return A.map((v, k) => v + (B[k] - v) * t);
+            });
         }
     }
     return ks[ks.length - 1].pts;
 }
 
+/** A keyed mask's outline at frame f as a polygon [[x, y]]: its curve (Bezier tangents or a B-spline) flattened,
+ *  as the server's mask_polygon - what the plate fills and what counts as inside. */
+export function maskPolygon(mask, f) {
+    const pts = maskAt(mask, f);
+    if (pts.length < 3) return pts.map((p) => [p[0], p[1]]);
+    return MS.shapePolygon(pts.map(MS.fromArr), mask.shape, true);
+}
+
 /** Put the mask's shape at frame f as a key (a vertex dragged at f keys it there). */
 export function setMaskKey(mask, f, pts) {
-    const key = { f: Math.round(f), pts: pts.map((p) => [p[0], p[1]]) };
+    const key = { f: Math.round(f), pts: pts.map((p) => (p.length >= 6 && MS.hasHandles(MS.fromArr(p)) ? p.slice(0, 6) : [p[0], p[1]])) };
     const at = mask.keys.findIndex((k) => k.f >= key.f);
     if (at < 0) mask.keys.push(key);
     else if (mask.keys[at].f === key.f) mask.keys[at] = key;

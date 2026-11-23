@@ -304,10 +304,28 @@ class Tracking(unittest.TestCase):
     def test_mask_keys_are_straight_in_between(self):
         m = MM.clean_mask({"keys": [{"f": 0, "pts": [[0, 0], [10, 0], [0, 10]]},
                                     {"f": 10, "pts": [[10, 0], [20, 0], [10, 10]]}]})
-        self.assertEqual(MM.mask_at(m, 5)[0].tolist(), [5, 0])
-        self.assertEqual(MM.mask_at(m, -3)[0].tolist(), [0, 0])
-        self.assertEqual(MM.mask_at(m, 30)[0].tolist(), [10, 0])
+        self.assertEqual(MM.mask_at(m, 5)[0][:2].tolist(), [5, 0])
+        self.assertEqual(MM.mask_at(m, -3)[0][:2].tolist(), [0, 0])
+        self.assertEqual(MM.mask_at(m, 30)[0][:2].tolist(), [10, 0])
         self.assertEqual(MM.inside([[0, 0], [10, 0], [10, 10], [0, 10]], [[5, 5], [15, 5]]).tolist(), [True, False])
+
+    def test_curved_and_b_spline_masks_keep_their_curve(self):
+        sq = [[0, 0], [100, 0], [100, 100], [0, 100]]
+        corner_pt = [[3, 3]]
+        flat = MM.clean_mask({"keys": [{"f": 0, "pts": sq}]})
+        self.assertTrue(MM.inside(MM.mask_polygon(flat, 0), corner_pt)[0])
+        bs = MM.clean_mask({"shape": "bspline", "keys": [{"f": 0, "pts": sq}]})
+        self.assertEqual(bs["shape"], "bspline")
+        poly = MM.mask_polygon(bs, 0)
+        self.assertGreater(len(poly), 4)
+        self.assertFalse(MM.inside(poly, corner_pt)[0])          # the corner is rounded away
+        self.assertTrue(MM.inside(poly, [[50, 50]])[0])
+        # tangents on a Bezier point survive clean_mask and bulge the edge out
+        bz = MM.clean_mask({"keys": [{"f": 0, "pts": [[0, 0, 0, 0, 0, 0], [100, 0, 100, 0, 100, 0],
+                                                    [100, 100, 130, 70, 70, 130], [0, 100]]}]})
+        self.assertEqual(len(bz["keys"][0]["pts"][2]), 6)
+        self.assertFalse(MM.inside([[0, 0], [100, 0], [100, 100], [0, 100]], [[50, 105]])[0])
+        self.assertTrue(MM.inside(MM.mask_polygon(bz, 0), [[50, 105]])[0])
 
 
 class Facts(unittest.TestCase):

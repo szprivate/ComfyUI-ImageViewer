@@ -16,6 +16,7 @@
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
 import * as D from "./imageViewer_matchmoveData.js";
+import * as MS from "./imageViewer_maskShape.js";
 import { openFilePicker, notice, canvasContext } from "./imageViewer_exportUI.js";
 import { openLensChart } from "./imageViewer_lensChart.js";
 import { setEditIcon } from "./imageViewer_editIcons.js";
@@ -32,7 +33,7 @@ const PLATE_SIZE = 1920;        // the longest side of the plate's pictures on t
 const TOOLS = [
     ["select", "Select", "Click a track to pick it (Shift adds), drag a box or a lasso round several (Shift adds, Ctrl takes away), drag a picked one to move its key here"],
     ["add", "Add track", "Click a feature: a track is made there and followed through the shot"],
-    ["mask", "Mask", "Click the corners of a mask, Enter or a double-click to close it; drag a corner to key it here"],
+    ["mask", "Mask", "Click to place a mask's points (drag: pull out tangents), click the first point, Enter or a double-click to close it; drag a point to key it here"],
     ["lines", "Lines", "Click along something straight in the world (3 or more points), Enter to end the line"],
     ["ground", "Ground", "Click round the floor (3 or more corners), Enter or a double-click to end: the solved tracks inside set the ground"],
 ];
@@ -1616,6 +1617,26 @@ export const PrevizMatchmoveMixin = {
 
     // ── the Plate panel ──────────────────────────────────────────────────────
 
+    /** The Bezier / B-spline switch of the Mask tool: the picked mask (every key) turned to it; new masks start as
+     *  it (the choice is shared with every mask tool). A B-spline made Bezier keeps its exact outline. */
+    matchmoveMaskShape(kind) {
+        const st = this._mmCur(false);
+        if (!st) return;
+        kind = MS.shapeKind(kind);
+        MS.setPreferredShape(kind);
+        const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
+        if (m && MS.shapeKind(m.shape) !== kind) {
+            this._mmEdit("mask shape", (mm2) => {
+                const q = mm2.masks.find((x) => x.id === m.id);
+                for (const k of q.keys) k.pts = MS.convertShape(k.pts.map(MS.fromArr), q.shape, kind, true).map(MS.toArr);
+                if (kind === "bspline") q.shape = "bspline"; else delete q.shape;
+            });
+            this._mmChanged(st);
+        }
+        this._mmPlateEnsure();
+        this._mmDraw();
+    },
+
     matchmoveTool(tool) {
         const st = this._mmCur();
         if (!st) return;
@@ -1691,6 +1712,13 @@ export const PrevizMatchmoveMixin = {
                 icon(b, TOOL_ICONS[id]);
                 tools[id] = b;
                 gTools.append(b);
+                if (id === "mask") {
+                    // Bezier / B-spline: the picked mask is turned to it, new masks start as it (shared by every mask tool).
+                    const sw = MS.shapeSwitch(doc, MS.preferredShape(), (k) => this.matchmoveMaskShape(k), { label: "" });
+                    sw.classList.add("mm-mask-shape");
+                    gTools.append(sw);
+                    tools.__shape = sw;
+                }
                 if (id === "select") {
                     shape = el(doc, "button", "mm-btn mm-select-shape", "");
                     shape.title = "Box or lasso: how a drag with Select picks tracks (Shift adds, Ctrl takes away)";
@@ -1729,7 +1757,12 @@ export const PrevizMatchmoveMixin = {
             ui = this._mmUI = { root, bar, tools, toggles, shape, info, stage, canvas, empty, lastFrame: -1, raf: 0 };
             this._mmWirePlate(ui);
         }
-        for (const [id, b] of Object.entries(ui.tools)) b.classList.toggle("on", st.tool === id);
+        for (const [id, b] of Object.entries(ui.tools)) if (id !== "__shape") b.classList.toggle("on", st.tool === id);
+        if (ui.tools.__shape) {
+            const pick = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
+            ui.tools.__shape.style.display = st.tool === "mask" ? "" : "none";
+            ui.tools.__shape.setShape(pick ? pick.shape : MS.preferredShape());
+        }
         for (const [id, b] of Object.entries(ui.toggles)) b.classList.toggle("on", !!st.show[id]);
         const lasso = st.selectShape === "lasso";
         if (ui.shape.dataset.icon !== (lasso ? "mmLasso" : "mmBox")) {
@@ -1843,8 +1876,9 @@ export const PrevizMatchmoveMixin = {
             }
             const pts = D.maskAt(m, f);
             if (pts.length < 3) continue;
+            const poly = D.maskPolygon(m, f);
             g.beginPath();
-            pts.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
+            poly.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
             g.closePath();
             g.fillStyle = !m.on ? "rgba(120,120,120,0.12)" : m.mode === "object" ? "rgba(80,160,255,0.18)" : "rgba(255,60,60,0.2)";
             g.fill();
@@ -1853,7 +1887,11 @@ export const PrevizMatchmoveMixin = {
             g.stroke();
             if (st.maskSel === m.id && st.tool === "mask") {
                 const keyed = m.keys.some((k) => k.f === f);
-                for (const [x, y] of pts) { const [a, b] = this._mmToScreen(st, x, y); g.fillStyle = keyed ? "#ffcc00" : "#fff"; g.fillRect(a - 3, b - 3, 6, 6); }
+                // The same guide as every mask tool: a B-spline's control polygon, the picked point's tangents.
+                const scr = pts.map((p) => this._mmAnchorToScreen(st, MS.fromArr(p)));
+                if (m.shape === "bspline") MS.drawGuide(g, { polygon: scr.map((a) => [a.x, a.y]), closed: true });
+                else if (st.maskPt != null && scr[st.maskPt]) MS.drawGuide(g, { handles: MS.handleLines(scr, [st.maskPt]) });
+                scr.forEach((a, i) => { g.fillStyle = i === st.maskPt ? "#ff8a00" : keyed ? "#ffcc00" : "#fff"; g.fillRect(a.x - 3, a.y - 3, 6, 6); });
             }
         }
         // lens lines
@@ -1878,8 +1916,20 @@ export const PrevizMatchmoveMixin = {
             g.lineWidth = 1;
             g.stroke();
         }
-        if (st.drawing && (st.tool === "mask" || st.tool === "ground") && st.drawing.length) {
-            g.strokeStyle = st.tool === "ground" ? "#5adc78" : "#fff";
+        if (st.drawing && st.tool === "mask" && st.drawing.length) {
+            // A mask on its way: its curve so far, and the tangents of the point just placed (Bezier) or the
+            // control polygon (B-spline) - the guide every mask tool draws.
+            const kind = MS.preferredShape();
+            const scr = st.drawing.map((p) => this._mmAnchorToScreen(st, MS.fromArr(p)));
+            g.strokeStyle = "#fff";
+            g.lineWidth = 1.5;
+            g.stroke(new Path2D(MS.curveD(MS.curveAnchors(scr, kind, false), false, (x, y) => [x, y])));
+            if (kind === "bspline") MS.drawGuide(g, { polygon: scr.map((a) => [a.x, a.y]) });
+            else MS.drawGuide(g, { handles: MS.handleLines(scr, [scr.length - 2, scr.length - 1].filter((i) => i >= 0)) });
+            for (const a of scr) { g.fillStyle = "#fff"; g.fillRect(a.x - 3, a.y - 3, 6, 6); }
+        }
+        if (st.drawing && st.tool === "ground" && st.drawing.length) {
+            g.strokeStyle = "#5adc78";
             g.beginPath();
             st.drawing.forEach(([x, y], i) => { const [a, b] = this._mmToScreen(st, x, y); if (i) g.lineTo(a, b); else g.moveTo(a, b); });
             g.stroke();
@@ -1989,7 +2039,16 @@ export const PrevizMatchmoveMixin = {
             const win = stage.ownerDocument.defaultView || window;
             const f = Math.round(this.currentFrame || 0);
             let move = null, up = null;
-            if (e.button === 1 || (e.button === 0 && e.altKey)) {
+            // The Mask tool's Alt+click (add a point / pull out tangents) and right-click (take a point away) on the
+            // picked mask come before Alt-drag panning; anywhere else they pan / do nothing as before.
+            if (st.tool === "mask" && !st.drawing && (e.button === 2 || (e.button === 0 && e.altKey))) {
+                const [px, py] = this._mmToPlate(st, sx, sy);
+                const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
+                const r = m ? this._mmMaskDown(st, m, e, px, py, 9 / st.view.zoom, f, pos) : false;
+                if (r) { move = r.move || null; up = r.up || null; this._mmDraw(); if (!move) return; }
+            }
+            if (move) { /* the mask's own drag */ }
+            else if (e.button === 1 || (e.button === 0 && e.altKey)) {
                 const v0 = { ...st.view };
                 move = (ev) => { const [x, y] = pos(ev); st.view.x = v0.x + x - sx; st.view.y = v0.y + y - sy; this._mmDraw(); };
             } else if (e.button === 0) {
@@ -2008,28 +2067,9 @@ export const PrevizMatchmoveMixin = {
                     return;
                 }
                 if (st.tool === "mask") {
-                    const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel);
-                    if (m && !st.drawing) {
-                        const pts = D.maskAt(m, f).map((p) => p.slice());
-                        const i = pts.findIndex(([x, y]) => Math.hypot(x - px, y - py) <= radius);
-                        if (i >= 0) {
-                            let first = true;
-                            move = (ev) => {
-                                const [qx, qy] = this._mmToPlate(st, ...pos(ev));
-                                pts[i] = [qx, qy];
-                                if (first) { this._mmEdit("mask key", (mm2) => D.setMaskKey(mm2.masks.find((q) => q.id === m.id), f, pts)); first = false; }
-                                else { D.setMaskKey(st.mm.masks.find((q) => q.id === m.id), f, pts); this._mmDraw(); }
-                            };
-                            up = () => this._mmChanged(st);
-                        } else if (!D.pointInPolygon(pts, px, py)) {
-                            st.maskSel = null;
-                            st.drawing = [[px, py]];
-                        }
-                    } else {
-                        st.drawing = st.drawing || [];
-                        st.drawing.push([px, py]);
-                        if (e.detail >= 2 && st.drawing.length >= 4) { st.drawing.pop(); this._mmFinishDrawing(st); }
-                    }
+                    const m = st.maskSel && st.mm.masks.find((q) => q.id === st.maskSel && !q.matte);
+                    const r = this._mmMaskDown(st, m, e, px, py, radius, f, pos);
+                    if (r) { move = r.move || null; up = r.up || null; }
                     this._mmDraw();
                     if (!move) return;
                 }
@@ -2095,6 +2135,137 @@ export const PrevizMatchmoveMixin = {
         stage.addEventListener("contextmenu", (e) => e.preventDefault());
     },
 
+    /** A screen anchor from a plate anchor (the point and its tangents). */
+    _mmAnchorToScreen(st, a) {
+        const [x, y] = this._mmToScreen(st, a.x, a.y), [ix, iy] = this._mmToScreen(st, a.ix, a.iy), [ox, oy] = this._mmToScreen(st, a.ox, a.oy);
+        return { x, y, ix, iy, ox, oy };
+    },
+
+    /**
+     * A press with the Mask tool, by the rules every mask tool shares (imageViewer_maskShape.js): while drawing, a
+     * click places a point and its drag pulls out the point's tangents (a B-spline's: moves it), the first point /
+     * a double-click closes; on the picked mask, a point or a tangent is dragged (keyed at this frame), Alt+click
+     * on the outline adds a point, right-click on a point takes it away; elsewhere a new mask is begun.
+     * -> {move, up} for a drag, {} when the press was taken, false when it was not (Alt pans, then).
+     */
+    _mmMaskDown(st, m, e, px, py, radius, f, pos) {
+        const kind = MS.preferredShape();
+        const place = () => {
+            const pt = [px, py];
+            st.drawing.push(pt);
+            const s0 = this._mmToScreen(st, px, py);
+            return {
+                move: (ev) => {
+                    const [qx, qy] = this._mmToPlate(st, ...pos(ev));
+                    const at = st.drawing && st.drawing.indexOf(pt);
+                    if (at == null || at < 0) return;
+                    if (kind === "bspline") { st.drawing[at] = [qx, qy]; this._mmDraw(); return; }
+                    const s1 = this._mmToScreen(st, qx, qy);
+                    if (Math.hypot(s1[0] - s0[0], s1[1] - s0[1]) < 2) return;
+                    st.drawing[at] = [px, py, 2 * px - qx, 2 * py - qy, qx, qy];
+                    this._mmDraw();
+                },
+                up: () => this._mmDraw(),
+            };
+        };
+        if (st.drawing) {
+            if (e.button !== 0) return false;
+            const d = st.drawing;
+            if (d.length >= 3 && (MS.isDoubleClick(st, e, e.clientX, e.clientY) || Math.hypot(d[0][0] - px, d[0][1] - py) <= radius)) { this._mmFinishDrawing(st); return {}; }
+            return place();
+        }
+        if (m) {
+            const pts = D.maskAt(m, f).map((p) => p.slice());
+            const key = (fn) => {
+                let first = true;
+                return (ev) => {
+                    fn(this._mmToPlate(st, ...pos(ev)), ev);
+                    if (first) { this._mmEdit("mask key", (mm2) => D.setMaskKey(mm2.masks.find((q) => q.id === m.id), f, pts)); first = false; }
+                    else { D.setMaskKey(st.mm.masks.find((q) => q.id === m.id), f, pts); this._mmDraw(); }
+                };
+            };
+            // the picked point's tangents (Bezier)
+            if (m.shape !== "bspline" && st.maskPt != null && pts[st.maskPt]) {
+                const i = st.maskPt, a = MS.fromArr(pts[i]);
+                for (const side of ["in", "out"]) {
+                    const hx = side === "in" ? a.ix : a.ox, hy = side === "in" ? a.iy : a.oy;
+                    if ((hx !== a.x || hy !== a.y) && Math.hypot(hx - px, hy - py) <= radius) {
+                        return { move: key(([qx, qy], ev) => {
+                            const b = { ...a };
+                            if (side === "in") { b.ix = qx; b.iy = qy; } else { b.ox = qx; b.oy = qy; }
+                            if (!ev.altKey) {   // the other side mirrored, unless Alt breaks the tangent
+                                if (side === "in") { b.ox = 2 * a.x - qx; b.oy = 2 * a.y - qy; } else { b.ix = 2 * a.x - qx; b.iy = 2 * a.y - qy; }
+                            }
+                            pts[i] = [b.x, b.y, b.ix, b.iy, b.ox, b.oy];
+                        }), up: () => this._mmChanged(st) };
+                    }
+                }
+            }
+            const i = pts.findIndex((p) => Math.hypot(p[0] - px, p[1] - py) <= radius);
+            if (i >= 0 && e.button === 2) {
+                if (pts.length <= 3) { notice("warn", "Mask", "A mask needs three points; delete the mask instead."); return {}; }
+                this._mmEdit("mask point", (mm2) => { for (const k of mm2.masks.find((q) => q.id === m.id).keys) if (k.pts.length === pts.length) k.pts.splice(i, 1); });
+                st.maskPt = null;
+                this._mmChanged(st);
+                return {};
+            }
+            if (e.button === 2) return false;
+            if (i >= 0 && e.button === 0 && e.altKey && m.shape !== "bspline") {
+                // Alt+drag on a point pulls out its tangents (mirrored), as when it was placed
+                st.maskPt = i;
+                const a = MS.fromArr(pts[i]);
+                return { move: key(([qx, qy]) => { pts[i] = [a.x, a.y, 2 * a.x - qx, 2 * a.y - qy, qx, qy]; }), up: () => this._mmChanged(st) };
+            }
+            if (i >= 0 && e.button === 0) {
+                st.maskPt = i;
+                const a = MS.fromArr(pts[i]);
+                return { move: key(([qx, qy]) => {
+                    const dx = qx - a.x, dy = qy - a.y;   // the tangents ride along
+                    pts[i] = pts[i].length >= 6 ? [qx, qy, a.ix + dx, a.iy + dy, a.ox + dx, a.oy + dy] : [qx, qy];
+                }), up: () => this._mmChanged(st) };
+            }
+            const poly = D.maskPolygon(m, f);
+            if (e.button === 0 && e.altKey) {
+                // a point on the outline between the two around it, in every key (keys keep as many points)
+                const anch = MS.curveAnchors(pts.map(MS.fromArr), m.shape, true);
+                let best = null;
+                anch.forEach((a, j) => {
+                    const b = anch[(j + 1) % anch.length];
+                    for (let k = 1; k < 24; k++) {
+                        const [x, y] = MS.bezierAt(a, b, k / 24), dd = Math.hypot(x - px, y - py);
+                        if (!best || dd < best.d) best = { j, t: k / 24, d: dd };
+                    }
+                });
+                if (!best || best.d > radius * 1.6) return false;
+                {
+                    this._mmEdit("mask point", (mm2) => {
+                        const mk = mm2.masks.find((q) => q.id === m.id);
+                        for (const k of mk.keys) {
+                            if (k.pts.length !== pts.length) continue;
+                            const A = MS.curveAnchors(k.pts.map(MS.fromArr), mk.shape, true);
+                            const [x, y] = MS.bezierAt(A[best.j], A[(best.j + 1) % A.length], best.t);
+                            k.pts.splice(best.j + 1, 0, [x, y]);
+                        }
+                    });
+                    st.maskPt = best.j + 1;
+                    this._mmChanged(st);
+                }
+                return {};
+            }
+            if (e.button === 0 && !D.pointInPolygon(poly, px, py)) {
+                st.maskSel = null;
+                st.maskPt = null;
+                st.drawing = [];
+                return place();
+            }
+            return {};
+        }
+        if (e.button !== 0) return false;
+        st.drawing = [];
+        st.maskPt = null;
+        return place();
+    },
+
     _mmFinishDrawing(st) {
         const pts = st.drawing || [];
         st.drawing = null;
@@ -2110,12 +2281,14 @@ export const PrevizMatchmoveMixin = {
             const forObj = st.newMaskFor;
             st.newMaskFor = null;
             let id;
+            const kind = MS.preferredShape();
             this._mmEdit("mask", (m) => {
                 if (forObj) m.masks = m.masks.filter((q) => !(q.mode === "object" && q.object === forObj));
                 id = D.newId(m, "k");
                 const obj = forObj && m.objects.find((o) => o.id === forObj);
                 m.masks.push({ id, name: obj ? obj.name : `Mask ${m.masks.length + 1}`, mode: obj ? "object" : "exclude", object: obj ? obj.id : "",
-                               on: true, keys: [{ f, pts: pts.map((p) => [p[0], p[1]]) }] });
+                               on: true, ...(kind === "bspline" ? { shape: "bspline" } : {}),
+                               keys: [{ f, pts: pts.map((p) => (kind === "bspline" ? [p[0], p[1]] : p.slice(0, p.length >= 6 ? 6 : 2))) }] });
             });
             st.maskSel = id;
         }
@@ -2135,6 +2308,12 @@ export const PrevizMatchmoveMixin = {
         let done = true;
         if (k === "Enter") { if (st.drawing) this._mmFinishDrawing(st); else done = false; }
         else if (k === "Escape") { if (st.drawing) st.drawing = null; else if (st.sel.size) st.sel.clear(); else st.maskSel = null; this._mmRender(); this._mmDraw(); }
+        else if ((k === "Delete" || k === "Backspace") && st.drawing && st.tool === "mask") {
+            // the point placed last taken back, as in every mask tool
+            st.drawing.pop();
+            if (!st.drawing.length) st.drawing = null;
+            this._mmDraw();
+        }
         else if (k === "Delete" || k === "Backspace") {
             if (st.sel.size) this.matchmoveDeleteSelected();
             else if (st.maskSel) this._mmEdit("delete mask", (m) => { m.masks = m.masks.filter((q) => q.id !== st.maskSel); st.maskSel = null; });

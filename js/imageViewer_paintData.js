@@ -13,6 +13,7 @@
 import { cleanStyle, styleOn, styledCached } from "./imageViewer_paintStyle.js";
 import { cleanFilters, smartLayer } from "./imageViewer_paintSmart.js";
 import { cleanSmart } from "./imageViewer_paintSmartLayer.js";
+import { bsplineAnchors } from "./imageViewer_maskShape.js";
 
 export const BLEND_MODES = ["normal", "multiply", "screen", "overlay", "darken", "lighten", "difference", "add",
     "color_dodge", "color_burn", "soft_light", "hard_light"];
@@ -1351,7 +1352,16 @@ export function cleanPath(p) {
         const x = f(a.x, 0), y = f(a.y, 0);
         return { x, y, ix: f(a.ix, x), iy: f(a.iy, y), ox: f(a.ox, x), oy: f(a.oy, y), smooth: !!a.smooth };
     });
-    return { id: String((p && p.id) || newId()).slice(0, 40), name: String((p && p.name) || "Path").slice(0, 120), closed: !!(p && p.closed) && pts.length > 2, pts };
+    const out = { id: String((p && p.id) || newId()).slice(0, 40), name: String((p && p.name) || "Path").slice(0, 120), closed: !!(p && p.closed) && pts.length > 2, pts };
+    if (p && p.shape === "bspline") out.shape = "bspline";
+    return out;
+}
+
+/** The anchors a path is drawn with: its own (Bezier), or a B-spline path's worked out from its control points
+ *  (imageViewer_maskShape.js, the shape every mask tool shares). paint_math.curve_points is the same. */
+export function curvePoints(path) {
+    if (!path || path.shape !== "bspline") return path ? path.pts : [];
+    return bsplineAnchors(path.pts, !!path.closed);
 }
 
 export function cleanPaths(list) {
@@ -1379,7 +1389,7 @@ export function bezierAt(a, b, t) {
 
 /** The path as a polyline [[x, y], ...]; a closed path's last segment back to the first anchor included (not repeating it). */
 export function flattenPath(path) {
-    const pts = path.pts, out = [];
+    const pts = curvePoints(path), out = [];
     if (!pts.length) return out;
     out.push([pts[0].x, pts[0].y]);
     const segs = path.closed ? pts.length : pts.length - 1;
