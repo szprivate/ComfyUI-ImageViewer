@@ -39,7 +39,21 @@ import * as DT from "./imageViewer_dockTree.js";
 
 // Names that are another panel now: the Channel Box lives in the Parameters panel (Sebastian 2026-11-12).
 const DOCK_ALIASES = { channels: "params" };
-const _dockId = (id) => DOCK_ALIASES[id] || id;
+const _dockId = (id) => {
+    const i = id.indexOf("@");
+    const base = i < 0 ? id : id.slice(0, i);
+    const alias = DOCK_ALIASES[base] || base;
+    return i < 0 ? alias : alias + id.slice(i);
+};
+
+// Panels come in instances (Sebastian 2026-11-23): the first one keeps the plain id ("browser"), every further
+// one of the same kind is "browser@2", "browser@3"... The layout tree treats them as ordinary panel ids; only
+// the element lookup and the wake-up tell them apart. Which kinds can multiply is said by the makers registered
+// on the viewer (_dockMakers): a kind with no maker stays a singleton (the Edit, Paint, Motion and Comp panels
+// whose one editor DOM is seated into them, and the agentY chat, which is one page-level host).
+const dockBase = (id) => { const i = id.indexOf("@"); return i < 0 ? id : id.slice(0, i); };
+const dockInstN = (id) => { const i = id.indexOf("@"); return i < 0 ? 1 : (parseInt(id.slice(i + 1), 10) || 1); };
+const dockIsInstance = (id) => id.indexOf("@") >= 0;
 
 // The dockable panels, and the room each one needs to stay usable.
 const DOCK_PANELS = {
@@ -132,10 +146,11 @@ const GAP = 5;
 const DRAG_SLOP = 4;
 // The main view, where a panel id is asked for (its drag, its maximise). Never a key of DOCK_PANELS.
 const VIEW_ID = "__view__";
-// A panel's least room, with the room round its card (a 3 px margin each side).
+// A panel's least room, with the room round its card (a 3 px margin each side). An instance asks for its kind's.
 const CARD = 6;
-const _minOf = (id) => { const s = DOCK_PANELS[id]; return s ? { w: s.minW + CARD, h: s.minH + CARD } : null; };
-const _known = (id) => !!DOCK_PANELS[id];
+const _dockSpec = (id) => DOCK_PANELS[dockBase(id)];
+const _minOf = (id) => { const s = _dockSpec(id); return s ? { w: s.minW + CARD, h: s.minH + CARD } : null; };
+const _dockLabel = (id) => { const s = _dockSpec(id); const n = dockInstN(id); return s ? s.label + (n > 1 ? " " + n : "") : id; };
 // What the old shape's default was; the tree's default is read from it, so both say the same.
 const DEFAULT_RAILS = () => ({
     left:   { width: 88,  panels: [{ id: "history", size: 1, hidden: true  }] },
@@ -174,6 +189,15 @@ export const DockMixin = {
         const main = sr.querySelector(".main-area");
         this.dockOverlay = sr.getElementById("dock-overlay");
         if (!main || !this.viewport || !this.viewport.parentNode) return;
+        // Instances: the makers each kind registers (_dockMakers), their elements and their live objects.
+        // A layout may name an instance id ("browser@2"); it is known while its kind has a maker.
+        this._dockInstEls = new Map();
+        this._dockInsts = new Map();
+        this._dockKnown = (id) => {
+            const b = dockBase(id);
+            if (!DOCK_PANELS[b]) return false;
+            return b === id || !!(this._dockInstMakers && this._dockInstMakers[b]);
+        };
         const doc = main.ownerDocument;
         // The rails of the old markup: the tree draws splits of its own. (A rail element a cached older page still
         // has is simply taken out.)
@@ -241,9 +265,132 @@ export const DockMixin = {
         }
     },
 
+    /** The makers registered by the panel kinds that can multiply: base id -> (viewer, id, saved) => instance. */
+    _dockMakers() {
+        return this._dockInstMakers || (this._dockInstMakers = {});
+    },
+
+    _dockCanMulti(base) {
+        return !!(this._dockInstMakers && this._dockInstMakers[base]);
+    },
+
     _dockPanelEl(id) {
+        if (dockIsInstance(id)) return (this._dockInstEls && this._dockInstEls.get(id)) || null;
         const spec = DOCK_PANELS[id];
         return spec ? (this[spec.prop] || null) : null;
+    },
+
+    /**
+     * Make an instance's element when the layout names one that is not up yet (a restored layout, a space come
+     * back to). The maker builds the content and returns { el, wake?, dispose?, save?, move? }; the dock gives
+     * it the title bar and a place. An element of another document (the pop-out was left) is made again.
+     */
+    _dockEnsureInstance(id) {
+        const base = dockBase(id);
+        const maker = this._dockInstMakers && this._dockInstMakers[base];
+        if (!maker) return null;
+        const doc = this._dockRootEl && this._dockRootEl.ownerDocument;
+        let inst = this._dockInsts.get(id);
+        if (inst && inst.el && inst.el.ownerDocument === doc && inst.el.isConnected) return inst.el;
+        if (inst) { try { inst.dispose && inst.dispose(); } catch (_) { /* gone */ } inst.el.remove(); }
+        const saved = (this._dockInstSaved && this._dockInstSaved[id]) || (inst && inst.save && inst.save()) || null;
+        inst = maker(this, id, saved);
+        if (!inst || !inst.el) return null;
+        inst.el.classList.add("dock-instance");
+        inst.el.dataset.panel = id;
+        this._dockInstEls.set(id, inst.el);
+        this._dockInsts.set(id, inst);
+        this._ensurePanelTitlebar(id);
+        return inst.el;
+    },
+
+    /** The instances of a kind that are up and in front, [{ id, inst, entry }] — what a refresh fans out to. */
+    _dockInstancesOf(base) {
+        const out = [];
+        if (!this.dockLayout || !DT.isTreeLayout(this.dockLayout)) return out;
+        for (const p of DT.panels(this.dockLayout.root)) {
+            if (dockBase(p.id) !== base || p.hidden || p.behind) continue;
+            const inst = this._dockInsts.get(p.id);
+            if (inst) out.push({ id: p.id, inst, entry: p });
+        }
+        return out;
+    },
+
+    /** Every instance id anywhere in the layouts (the space that is up and the ones kept aside). */
+    _dockInstanceIds() {
+        const out = new Set();
+        const add = (root) => { for (const p of DT.panels(root)) if (dockIsInstance(p.id)) out.add(p.id); };
+        if (this.dockLayout && DT.isTreeLayout(this.dockLayout)) add(this.dockLayout.root);
+        for (const root of Object.values(this._dockSpaceMap())) if (DT.isSplit(root)) add(root);
+        return out;
+    },
+
+    /**
+     * Open one more panel of a kind under a place (the + menu): "browser@2" beside what is there, with content
+     * and state of its own. The first of a kind keeps the plain id; a closed instance's number is used again.
+     */
+    dockNewInstance(base, underId) {
+        base = dockBase(_dockId(base));
+        if (!this._dockCanMulti(base) || !this.dockLayout || !DT.isTreeLayout(this.dockLayout)) return false;
+        const taken = this._dockInstanceIds();
+        let n = 2;
+        while (taken.has(`${base}@${n}`) || this._dockInsts.has(`${base}@${n}`)) n++;
+        const id = `${base}@${n}`;
+        if (!this._dockEnsureInstance(id)) return false;
+        const L = this.dockLayout;
+        const spec = DOCK_PANELS[base];
+        const entry = { id, hidden: false, size: spec.size || 1 };
+        const ref = underId === VIEW_ID ? { kind: "view" } : { kind: "panel", id: _dockId(underId) };
+        if (ref.kind === "panel" && ref.id === id) return false;
+        if (ref.kind === "panel" && this.isPanelCollapsed(ref.id)) {
+            const e = this._dockEntryOf(ref.id);
+            if (e) delete e.collapsed;
+        }
+        const node = ref.kind === "view" ? DT.findView(L.root).node : DT.locate(L.root, ref.id)?.node;
+        if (!node) return false;
+        const px = Math.max(spec.minH, 240);
+        L.root = DT.tidy(DT.insertBeside(L.root, node, "bottom", entry, px), this._dockKnown);
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        if (this.barGroupsSync) this.barGroupsSync();
+        return id;
+    },
+
+    /** Close an instance for good: its place goes, its content and state with it (the first of a kind only hides). */
+    dockCloseInstance(id) {
+        if (!dockIsInstance(id)) return false;
+        const L = this.dockLayout;
+        const entry = DT.detach(L.root, id);
+        if (entry) L.root = DT.tidy(L.root, this._dockKnown);
+        const inst = this._dockInsts.get(id);
+        if (inst) { try { inst.dispose && inst.dispose(); } catch (_) { /* gone */ } inst.el.remove(); }
+        this._dockInsts.delete(id);
+        this._dockInstEls.delete(id);
+        if (this._dockInstSaved) delete this._dockInstSaved[id];
+        if (this._dockMaxId === id) this._dockMaxId = null;
+        this.applyDockLayout();
+        this.queuePersistViewerState && this.queuePersistViewerState();
+        return true;
+    },
+
+    /** The viewer moved into another window (the pop-out): every instance is made again there. */
+    _dockInstancesAfterMove() {
+        if (!this._dockInsts || !this._dockInsts.size) return;
+        const doc = this._dockRootEl && this._dockRootEl.ownerDocument;
+        let moved = false;
+        for (const [id, inst] of [...this._dockInsts]) {
+            if (inst.el && inst.el.ownerDocument === doc && inst.el.isConnected) continue;
+            moved = true;
+            if (inst.move) { try { inst.move(); } catch (e) { console.warn(`imageViewer: ${id} could not move`, e); } continue; }
+            const saved = inst.save ? inst.save() : null;
+            try { inst.dispose && inst.dispose(); } catch (_) { /* gone */ }
+            inst.el.remove();
+            this._dockInsts.delete(id);
+            this._dockInstEls.delete(id);
+            if (saved) (this._dockInstSaved || (this._dockInstSaved = {}))[id] = saved;
+            if (DT.locate(this.dockLayout.root, id)) this._dockEnsureInstance(id);
+        }
+        if (moved) this.applyDockLayout();
     },
 
     /** A node's element: a panel's own, the picture's place, or the split's box (made the first time). */
@@ -266,12 +413,12 @@ export const DockMixin = {
         // Matches what the viewer opened with before docking existed: the
         // parameters panel showing on the right, the others put away.
         const L = DT.fromRails(DEFAULT_RAILS());
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         // The matchmove's Plate is a tab of the main view, put away (Sebastian 2026-11-20).
         L.root = DT.insertAsTab(L.root, "view", { id: "mmPlate" });
         const plate = DT.locate(L.root, "mmPlate");
         if (plate) plate.node.hidden = true;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         return L;
     },
 
@@ -291,6 +438,7 @@ export const DockMixin = {
         const root = this.dockLayout.root;
         const used = new Set();
         const place = (n, parentEl, parent, order) => {
+            if (DT.isPanel(n) && dockIsInstance(n.id)) this._dockEnsureInstance(n.id);
             const el = this._dockNodeEl(n);
             if (!el) return;
             used.add(el);
@@ -305,7 +453,7 @@ export const DockMixin = {
                 el.classList.toggle("bottom", !!row);
                 const folded = !!n.collapsed && !n.hidden;
                 el.classList.toggle("dock-collapsed", folded);
-                const spec = DOCK_PANELS[n.id];
+                const spec = _dockSpec(n.id);
                 // Along the split: its own minimum. Across: the split owns that, as a rail owned its width.
                 el.style.minHeight = folded || row ? "" : `${spec.minH}px`;
                 el.style.minWidth = row && !folded ? `${spec.minW}px` : "";
@@ -393,11 +541,11 @@ export const DockMixin = {
             if (entry.hidden || entry.behind || mates.length < 2) {
                 if (name._tabs) {
                     name._tabs = ""; name.classList.remove("pt-tabs");
-                    name.textContent = isView ? this._dockViewText() : DOCK_PANELS[entry.id].label;
+                    name.textContent = isView ? this._dockViewText() : _dockLabel(entry.id);
                 }
                 return;
             }
-            const label = (p) => (DT.isView(p) ? this._dockViewText() : DOCK_PANELS[p.id].label);
+            const label = (p) => (DT.isView(p) ? this._dockViewText() : _dockLabel(p.id));
             const sig = mates.map(label).join(",") + "|" + label(entry);
             if (name._tabs === sig) return;
             name._tabs = sig;
@@ -411,7 +559,7 @@ export const DockMixin = {
                 tab.className = "pt-tab" + (front ? " on" : "") + (DT.isView(p) ? " pt-tab-view" : "");
                 tab.textContent = label(p);
                 if (!front) {
-                    tab.title = DT.isView(p) ? "Show the main view" : "Show " + DOCK_PANELS[p.id].label;
+                    tab.title = DT.isView(p) ? "Show the main view" : "Show " + _dockLabel(p.id);
                     tab.addEventListener("pointerdown", (e) => e.stopPropagation());
                     tab.addEventListener("click", (e) => {
                         e.stopPropagation();
@@ -440,7 +588,7 @@ export const DockMixin = {
             this.dockLayout = DT.isRailLayout(this.dockLayout) ? DT.fromRails(this.dockLayout) : this._defaultDockLayout();
         }
         const L = this.dockLayout;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         // Once each: a panel's home moved to the strip under the picture. A layout saved before that has it, put
         // away, beside the picture: the Curve Editor; the Mixer (it shipped in the right rail, where it shared the
         // height with the Inspector); the Comp's Layers (a timeline now, a tab beside the Node graph).
@@ -455,7 +603,7 @@ export const DockMixin = {
             const s = this._dockSideOf("curves");
             if (s !== "left" && s !== "right") return;
             const entry = DT.detach(L.root, "curves");
-            if (entry) { entry.size = 1; L.root = DT.tidy(L.root, _known); this._dockRail("bottom", entry); }
+            if (entry) { entry.size = 1; L.root = DT.tidy(L.root, this._dockKnown); this._dockRail("bottom", entry); }
         });
         once("imageviewer.viewer.mixerBottom", () => this._dockMixerHome());
         once("imageviewer.viewer.compLayersBottom", () => this._dockCompLayersHome());
@@ -487,7 +635,7 @@ export const DockMixin = {
             if (spec.first) rail.children.unshift(entry); else rail.children.push(entry);
             seen.add(id);
         }
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
     },
 
     /**
@@ -496,7 +644,7 @@ export const DockMixin = {
      */
     dockIntoViewTab(id, { front = true } = {}) {
         const L = this.dockLayout;
-        if (!L || !DT.isTreeLayout(L) || !DOCK_PANELS[id]) return false;
+        if (!L || !DT.isTreeLayout(L) || !_dockSpec(id)) return false;
         const at = DT.locate(L.root, id);
         if (!at) return false;
         const hidden = !!at.node.hidden;
@@ -504,7 +652,7 @@ export const DockMixin = {
         if (!(v && v.node.tab && at.parent === v.parent && at.node.tab === v.node.tab)) {
             const entry = DT.detach(L.root, id);
             if (!entry) return false;
-            L.root = DT.tidy(L.root, _known);
+            L.root = DT.tidy(L.root, this._dockKnown);
             L.root = DT.insertAsTab(L.root, "view", entry);
             v = DT.findView(L.root);
             if (!v || !v.node.tab) return false;
@@ -514,7 +662,7 @@ export const DockMixin = {
         panel.hidden = hidden;
         const ahead = front && !hidden ? panel : v.node;
         for (const p of mates) p.behind = p !== ahead;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         return true;
     },
 
@@ -533,7 +681,7 @@ export const DockMixin = {
         if (s !== "left" && s !== "right" && s !== "top") return;
         const entry = DT.detach(L.root, "editMixer");
         if (!entry) return;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         const tl = DT.locate(L.root, "editTimeline");
         if (tl && tl.parent && tl.parent.split === "row") {
             entry.size = Math.max(0.2, (tl.node.size || 1) * 0.4);
@@ -551,7 +699,7 @@ export const DockMixin = {
         if (s !== "left" && s !== "right" && s !== "top") return;
         const entry = DT.detach(L.root, "compLayers");
         if (!entry) return;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         const g = DT.locate(L.root, "compGraph");
         if (!g || !g.parent) { entry.size = 1; this._dockRail("bottom", entry); return; }
         if (!g.node.tab) { g.node.tab = "comp"; g.node.behind = false; }
@@ -657,12 +805,12 @@ export const DockMixin = {
     /** Put a panel into the place of another, as a tab beside it, in front. */
     dockPanelAsTab(id, ontoId) {
         const onView = ontoId === "view";
-        if (id === ontoId || !DOCK_PANELS[id] || !(onView ? DT.findView(this.dockLayout.root) : DT.locate(this.dockLayout.root, ontoId))) return;
+        if (id === ontoId || !_dockSpec(id) || !(onView ? DT.findView(this.dockLayout.root) : DT.locate(this.dockLayout.root, ontoId))) return;
         const L = this.dockLayout;
         const entry = DT.detach(L.root, id);
         if (!entry) return;
-        L.root = DT.tidy(L.root, _known);
-        L.root = DT.tidy(DT.insertAsTab(L.root, ontoId, entry), _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
+        L.root = DT.tidy(DT.insertAsTab(L.root, ontoId, entry), this._dockKnown);
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
     },
@@ -693,17 +841,17 @@ export const DockMixin = {
 
     /** Move a panel into a rail - the place beside the picture on `side` - at `index` (default: its end). */
     dockPanelTo(id, side, index) {
-        if (!DOCK_PANELS[id] || !RAIL_SIDES.includes(side)) return;
+        if (!_dockSpec(id) || !RAIL_SIDES.includes(side)) return;
         const L = this.dockLayout;
         const entry = DT.detach(L.root, id);
         if (!entry) return;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         const rail = this._dockRail(side);
         const at = (index == null) ? rail.children.length : Math.max(0, Math.min(rail.children.length, index));
         rail.children.splice(at, 0, entry);
         // Sizes are shares, so a stack of new arrivals should start out even.
         rail.children.forEach((p) => { if (!(p.px > 0)) p.size = 1; });
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
     },
@@ -714,19 +862,19 @@ export const DockMixin = {
      * the split it is in when that runs the same way.
      */
     dockPanelBeside(id, ref, edge) {
-        if (!DOCK_PANELS[id] || !DT.EDGES.includes(edge) || !ref) return false;
+        if (!_dockSpec(id) || !DT.EDGES.includes(edge) || !ref) return false;
         if (ref.kind === "panel" && (ref.id === id || !DT.locate(this.dockLayout.root, ref.id))) return false;
         const L = this.dockLayout;
         const entry = DT.detach(L.root, id);
         if (!entry) return false;
         entry.hidden = false;
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         const node = ref.kind === "view" ? DT.findView(L.root).node
             : ref.kind === "root" ? L.root
             : DT.locate(L.root, ref.id)?.node;
-        const spec = DOCK_PANELS[id];
+        const spec = _dockSpec(id);
         const px = DT.edgeDir(edge) === "row" ? Math.max(spec.minW, 300) : Math.max(spec.minH, 240);
-        L.root = DT.tidy(DT.insertBeside(L.root, node || L.root, edge, entry, px), _known);
+        L.root = DT.tidy(DT.insertBeside(L.root, node || L.root, edge, entry, px), this._dockKnown);
         this.applyDockLayout();
         this.queuePersistViewerState && this.queuePersistViewerState();
         return true;
@@ -763,6 +911,11 @@ export const DockMixin = {
     },
 
     _onPanelShown(id) {
+        if (dockIsInstance(id)) {
+            const inst = this._dockInsts && this._dockInsts.get(id);
+            if (inst && inst.wake) inst.wake();
+            return;
+        }
         if (id === "browser") {
             // First time up, go and read a folder; after that the listing it
             // already holds is still good.
@@ -940,7 +1093,7 @@ export const DockMixin = {
             this._dockSwitchIcon(grip);
             const name = doc.createElement("span");
             name.className = "pt-name";
-            name.textContent = DOCK_PANELS[id].label;
+            name.textContent = _dockLabel(id);
             // No Switch Side button: dragging the bar puts the panel exactly
             // where you want it, including which rail and in what order, so a
             // button that only flips it between two of those was redundant.
@@ -970,7 +1123,11 @@ export const DockMixin = {
             bar.addEventListener("dblclick", (e) => { if (!e.target.closest("button, select, input, a")) this.dockToggleCollapsed(id); });
 
             hide.addEventListener("pointerdown", (e) => e.stopPropagation());
-            hide.addEventListener("click", (e) => { e.stopPropagation(); this.setPanelDocked(id, false); });
+            hide.addEventListener("click", (e) => {
+                e.stopPropagation();
+                // An instance goes for good; the first of a kind keeps its place, put away.
+                if (dockIsInstance(id)) this.dockCloseInstance(id); else this.setPanelDocked(id, false);
+            });
 
             bar.addEventListener("pointerdown", (e) => this._onDockHeaderDown(id, bar, e));
         }
@@ -1059,7 +1216,7 @@ export const DockMixin = {
         const mates = DT.panels(this.dockLayout.root).filter((p) => !p.hidden && !p.behind && !p.tab && this._dockPanelEl(p.id));
         if (mates.length) {
             entries.push("-", { head: "Trade places with" });
-            for (const p of mates) entries.push({ label: "     " + DOCK_PANELS[p.id].label, title: "The main view and this panel swap places",
+            for (const p of mates) entries.push({ label: "     " + _dockLabel(p.id), title: "The main view and this panel swap places",
                                                   run: () => this.dockViewSwap(p.id) });
         }
         const r = btn.getBoundingClientRect();
@@ -1094,7 +1251,7 @@ export const DockMixin = {
         const v = this._dockTakeView(L.root);
         if (!v) return false;
         const node = ref.kind === "root" ? L.root : DT.locate(L.root, ref.id).node;
-        L.root = DT.tidy(DT.insertBeside(L.root, node, edge, v), _known);
+        L.root = DT.tidy(DT.insertBeside(L.root, node, edge, v), this._dockKnown);
         this._dockAfterViewMove();
         return true;
     },
@@ -1111,7 +1268,7 @@ export const DockMixin = {
         const put = (n, r) => { delete n.px; delete n.size; if (r.px > 0) n.px = r.px; if (r.size > 0) n.size = r.size; };
         put(v.node, rp); put(p.node, rv);
         // The panel had the view's room, which was a share: it keeps the view's share where the view's chain was.
-        L.root = DT.tidy(L.root, _known);
+        L.root = DT.tidy(L.root, this._dockKnown);
         this._dockAfterViewMove();
         return true;
     },
@@ -1202,22 +1359,24 @@ export const DockMixin = {
         return btn;
     },
 
-    /** The + menu: every panel of the space; the one picked comes up under this place (moved here if open elsewhere). */
+    /** The + menu: every panel of the space, this one included when it can multiply; the pick comes up under this place. */
     _dockAddMenu(id, btn) {
         const key = "add:" + id;
         if (this._previzAddMenu) { const was = this._dockSwitchOpen; this._previzCloseAddMenu(); if (was === key) return; }
-        const self = id === VIEW_ID ? null : _dockId(id);
+        const self = id === VIEW_ID ? null : dockBase(_dockId(id));
         const entries = [];
         for (const g of this._dockSwitchGroups()) {
-            const items = g.items.filter((it) => it.id !== self);
+            const items = g.items.filter((it) => it.id !== self || this._dockCanMulti(it.id));
             if (!items.length) continue;
             if (entries.length) entries.push("-");
             entries.push({ head: g.title });
             for (const it of items) {
                 const open = this.isPanelDocked(it.id);
+                const multi = this._dockCanMulti(it.id);
                 entries.push({
                     label: it.label,
-                    title: open ? "Open in another place: it moves under this one" : "Add it under this panel",
+                    title: multi ? (open ? "Open another one under this panel, with content of its own" : "Add it under this panel")
+                        : open ? "Open in another place: it moves under this one" : "Add it under this panel",
                     run: () => this.dockPanelUnder(it.id, id),
                 });
             }
@@ -1237,7 +1396,13 @@ export const DockMixin = {
     /** Put panel `newId` under the place `underId` holds (a panel's id, or the main view's): that place splits in two. */
     dockPanelUnder(newId, underId) {
         newId = _dockId(newId);
-        if (!DOCK_PANELS[newId] || !this._dockPanelEl(newId)) return false;
+        const base = dockBase(newId);
+        if (!DOCK_PANELS[base]) return false;
+        // A kind that can multiply and is already open: one more of it, with content and state of its own.
+        if (base === newId && this._dockCanMulti(base) && this.isPanelDocked(base)) {
+            return !!this.dockNewInstance(base, underId);
+        }
+        if (!this._dockPanelEl(newId)) return false;
         const ref = underId === VIEW_ID ? { kind: "view" } : { kind: "panel", id: _dockId(underId) };
         if (ref.id === newId) return false;
         // A folded place opens, so the newcomer is not squeezed under a title bar.
@@ -1262,7 +1427,7 @@ export const DockMixin = {
      */
     dockSwitchPanel(fromId, toId) {
         fromId = _dockId(fromId); toId = _dockId(toId);
-        if (fromId === toId || !DOCK_PANELS[toId] || !this._dockPanelEl(toId)) return false;
+        if (fromId === toId || !_dockSpec(toId) || !this._dockPanelEl(toId)) return false;
         const a = this._dockEntry(fromId), b = this._dockEntry(toId);
         if (!a || !b) return false;
         const PLACE = ["size", "px", "tab", "behind", "collapsed", "hidden"];
@@ -1368,7 +1533,8 @@ export const DockMixin = {
             for (const k of ["position", "left", "top", "width", "height", "zIndex"]) vel.style[k] = "";
         }
         this.dockViewTitleSync();
-        for (const pid of Object.keys(DOCK_PANELS)) {
+        const pids = new Set([...Object.keys(DOCK_PANELS), ...(this._dockInstEls ? this._dockInstEls.keys() : [])]);
+        for (const pid of pids) {
             const el = this._dockPanelEl(pid);
             if (!el) continue;
             const bar = el.querySelector(":scope > .panel-titlebar");
@@ -1468,7 +1634,7 @@ export const DockMixin = {
         this._dockPreviewEl.className = "dock-preview";
         this._dockGhostEl = doc.createElement("div");
         this._dockGhostEl.className = "dock-ghost";
-        this._dockGhostEl.textContent = id === VIEW_ID ? "Main view" : DOCK_PANELS[id].label;
+        this._dockGhostEl.textContent = id === VIEW_ID ? "Main view" : _dockLabel(id);
         this.dockOverlay.appendChild(this._dockPreviewEl);
         this.dockOverlay.appendChild(this._dockGhostEl);
         this.dockOverlay.classList.add("active");
@@ -1595,7 +1761,7 @@ export const DockMixin = {
         // Onto a panel: the whole of it, since its place is what is shared.
         if (target.kind === "tab") { put(r.left, r.top, r.width, r.height); return; }
         // Beside a place: the band of it the panel will take - half of a panel, its own size beside the picture.
-        const spec = DOCK_PANELS[dragId] || { minW: 200, minH: 150 };
+        const spec = _dockSpec(dragId) || { minW: 200, minH: 150 };
         const half = target.ref.kind === "panel" || dragId === VIEW_ID;
         if (target.edge === "left" || target.edge === "right") {
             const w = Math.min(r.width / 2, half ? r.width / 2 : Math.max(spec.minW, 300));
@@ -1640,7 +1806,7 @@ export const DockMixin = {
         this._dockSpace = to;
         const saved = this._dockSpaceMap()[to];
         if (!saved || !DT.isSplit(saved)) return false;
-        this.dockLayout = { v: DT.LAYOUT_VERSION, root: DT.tidy(DT.cleanCopy(saved), _known) };
+        this.dockLayout = { v: DT.LAYOUT_VERSION, root: DT.tidy(DT.cleanCopy(saved), this._dockKnown) };
         this.applyDockLayout();
         return true;
     },
@@ -1663,6 +1829,7 @@ export const DockMixin = {
         if (this.activeTab && this.switchTab) {
             try { this.switchTab(this.activeTab); } catch (e) { console.warn("imageViewer: the space could not show its panels again", e); }
         }
+        this._dockPruneInstances();
         this.queuePersistViewerState && this.queuePersistViewerState();
         return space;
     },
@@ -1696,7 +1863,28 @@ export const DockMixin = {
         for (const [k, root] of Object.entries(this._dockSpaceMap())) if (k !== space && DT.isSplit(root)) spaces[k] = root;
         if (Object.keys(spaces).length) out.spaces = spaces;
         out.space = space;
+        // What each instance holds of its own (a folder, a viewport), by its id.
+        const inst = {};
+        for (const [id, o] of this._dockInsts || []) {
+            if (!o.save) continue;
+            try { const s = o.save(); if (s != null) inst[id] = s; } catch (_) { /* not saved */ }
+        }
+        if (Object.keys(inst).length) out.inst = inst;
         return out;
+    },
+
+    /** Instances no layout names any more go: their content and state with them. */
+    _dockPruneInstances() {
+        if (!this._dockInsts || !this._dockInsts.size) return;
+        const named = this._dockInstanceIds();
+        for (const [id, o] of [...this._dockInsts]) {
+            if (named.has(id)) continue;
+            try { o.dispose && o.dispose(); } catch (_) { /* gone */ }
+            o.el.remove();
+            this._dockInsts.delete(id);
+            this._dockInstEls.delete(id);
+            if (this._dockInstSaved) delete this._dockInstSaved[id];
+        }
     },
 
     /** Take a saved layout: the tree's shape, or the three rails' (read into the tree). */
@@ -1706,7 +1894,11 @@ export const DockMixin = {
         if (DT.isTreeLayout(data)) L = { v: DT.LAYOUT_VERSION, root: DT.cleanCopy(data.root) };
         else if (DT.isRailLayout(data)) L = DT.fromRails(data);
         if (!L) return false;
-        L.root = DT.tidy(L.root, _known);
+        // What the instances held, for the makers to read when their elements are made again.
+        if (data.inst && typeof data.inst === "object") {
+            this._dockInstSaved = Object.assign({}, this._dockInstSaved, data.inst);
+        }
+        L.root = DT.tidy(L.root, this._dockKnown);
         // The spaces' layouts, when the saved one has them (a layout of the rails' shape has one for all).
         if (DT.isTreeLayout(data)) {
             const spaces = {};
@@ -1719,13 +1911,14 @@ export const DockMixin = {
             const was = typeof data.space === "string" && data.space ? data.space : here;
             if (was !== here) {
                 spaces[was] = DT.cleanCopy(L.root);
-                if (spaces[here]) L.root = DT.tidy(DT.cleanCopy(spaces[here]), _known);
+                if (spaces[here]) L.root = DT.tidy(DT.cleanCopy(spaces[here]), this._dockKnown);
             }
             delete spaces[here];
             this._dockSpace = here;
         }
         this.dockLayout = L;
         this.applyDockLayout();
+        this._dockPruneInstances();
         return true;
     },
 

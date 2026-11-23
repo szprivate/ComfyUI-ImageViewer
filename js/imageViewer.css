@@ -807,7 +807,7 @@ textarea.param-input {
 .browser-btn:hover { border-color: #f60; color: #f60; }
 /* The jump menu: only its arrow shows, beside the path. Closed, it would
    read "Go to…" — so the text is transparent, and the list it opens is not. */
-#browser-root-sel {
+.browser-root-sel {
     -webkit-appearance: none; appearance: none;
     flex: 0 0 22px; width: 22px; min-width: 0; height: 20px; min-height: 0; color: transparent;
     background: #1a1a1a url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23ccc' stroke-width='1.5'/%3E%3C/svg%3E") center / 9px 6px no-repeat;
@@ -815,8 +815,8 @@ textarea.param-input {
 }
 /* The header's controls keep to its 20px row (the viewer's buttons are 32px). */
 .browser-header .browser-btn { min-height: 0; height: 20px; }
-#browser-root-sel:hover { border-color: #f60; }
-#browser-root-sel option { color: #ccc; background: #111; }
+.browser-root-sel:hover { border-color: #f60; }
+.browser-root-sel option { color: #ccc; background: #111; }
 /* The folder you are in, in the header row. */
 .browser-path {
     flex: 1; min-width: 0; height: 20px;

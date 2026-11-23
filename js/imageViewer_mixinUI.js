@@ -397,6 +397,8 @@ export const UIMixin = {
         if (this._gridAfterMove) this._gridAfterMove();
         // So does the 3D view, and its WebGL canvas belongs to the old document.
         if (this._model3d) this._model3d.rebind();
+        // And every panel instance, whose content was made in the old document too.
+        if (this._dockInstancesAfterMove) this._dockInstancesAfterMove();
         // So do the comps' pictures.
         if (this._cpAfterMove) this._cpAfterMove();
     },
