@@ -1642,7 +1642,7 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(px[0], px[1]); self.assertEqual(px[1], px[2])
         self.assertGreater(px[0], 220, px)                        # 0.2 x 4 = 0.8
         self.assertEqual(pg.evaluate("() => __panel.channelView"), "green")
-        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.green ▾")
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.green")
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
             self.pick_chan(pg, "rgba")
@@ -1669,10 +1669,10 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {self.ED}.stage.closest('.cp-root').focus()")
         pg.keyboard.press("a")
         self.assertEqual(pg.evaluate("() => __panel.channelView"), "alpha")
-        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.alpha ▾")
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba.alpha")
         pg.keyboard.press("a")
         self.assertEqual(pg.evaluate("() => __panel.channelView"), "all")
-        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba ▾")
+        self.assertEqual(pg.locator(self.CHAN).inner_text(), "rgba")
         # Leaving Comp gives the viewport its own bar back; the comp itself never changed.
         pg.evaluate("() => __panel.resetExposure()")
         pg.wait_for_timeout(300)
