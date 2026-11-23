@@ -200,7 +200,7 @@ line.cp-shuf2-wire{stroke-width:2;stroke:#9a9aa2;stroke-linecap:round}line.cp-sh
 line.cp-shuf2-wire.temp{stroke-dasharray:4 3}
 .cp-shuf-extra{padding:4px 6px!important}.cp-shuf-btns{display:flex;gap:4px;align-items:center;justify-content:flex-end;margin:6px 6px 2px}.cp-shuf-hint{flex:1;font-size:10px;color:#8a8a92;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .cp-layerdlg .cp-field label{width:64px}.cp-layerdlg input.cp-layer-ch{flex:0 0 auto;width:48px}.cp-layerdlg .cp-layer-presets{flex-wrap:wrap;gap:4px}.cp-layerdlg .cp-layer-preset{padding:1px 7px}
-.mg-prop textarea.cp-text{flex:1;min-width:0;resize:vertical;font:inherit;background:#1b1b1b;color:inherit;border:1px solid #3a3a3a;border-radius:3px;padding:3px 5px}.mg-empty.cp-warn{color:#e0a64a;opacity:.9}.cp-pane > .mg-empty.cp-ai{padding:6px 4px}.mg-prop.cp-btnrow{flex-wrap:wrap;gap:4px}
+.mg-prop textarea.cp-text{flex:1;min-width:0;resize:vertical;font:inherit;background:#1b1b1b;color:inherit;border:1px solid #3a3a3a;border-radius:3px;padding:3px 5px}.mg-empty.cp-warn{color:#e0a64a;opacity:.9}.cp-wbadge{position:absolute;left:-7px;top:-7px;width:14px;height:14px;border-radius:7px;background:#e0a64a;color:#111;font:700 10px/14px sans-serif;text-align:center;cursor:help}.cp-pane > .mg-empty.cp-ai{padding:6px 4px}.mg-prop.cp-btnrow{flex-wrap:wrap;gap:4px}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
 .cp-cctabs,.cp-ccrange{display:flex;flex-wrap:wrap;gap:3px;margin:6px 0 4px}
@@ -755,6 +755,7 @@ export function createCompEditor(host, opts = {}) {
             el(doc, "span", "mg-spacer"),
             proxy, gpuBtn, ...(disp ? [disp] : []), chanBtn, exp, eyes,
             vtBtn,
+            ...(has3d() && o.room3d ? [btn(st.room ? "3D ●" : "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale)", () => setRoom(!st.room), "cp-3d" + (st.room ? " on" : ""))] : []),
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -815,6 +816,73 @@ export function createCompEditor(host, opts = {}) {
     }
     const win = () => (root.ownerDocument && root.ownerDocument.defaultView) || window;
     let moveGen = 0;
+    // ── the 3D room (imageViewer_comp3dRoom.js): the picture's place given to the 3D space's viewport ──
+    const has3d = () => !!(st.comp && G.flattenComp(st.comp).nodes.some((n) => n.type === "render3d" || C.GEO3D.has(n.type)));
+    /** The Render3D the room shows: the one looked at, else the one the picture reads, else the comp's first. */
+    function roomTarget() {
+        const flat = G.flattenComp(st.comp), by = new Map(flat.nodes.map((n) => [n.id, n]));
+        const seen = new Set(), walk = (id) => { const n = by.get(id); if (!n || seen.has(id)) return null; seen.add(id); if (n.type === "render3d") return n.id; for (const s of n.inputs || []) { const r = s && walk(s); if (r) return r; } return null; };
+        const v = viewedId();
+        return walk(v) || (flat.nodes.find((n) => n.type === "render3d" && !n.disable) || {}).id || null;
+    }
+    const roomApi = {
+        selected: () => { const p = primary(); return p ? fid(p.id) : null; },
+        paramsOf: (id) => {
+            const n = G.flatNode(st.comp, id);
+            if (!n) return null;
+            const P = (k) => { const v = C.paramAt(n, k, st.frame); return Array.isArray(v) ? v.slice() : v; };
+            return { type: n.type, translate: P("translate"), rotate: P("rotate"), scale: n.type === "card3d" || n.type === "geo3d" ? P("scale") : null, from_scene: n.from_scene || "" };
+        },
+        gizmo: (id, patch, phase) => {
+            const n = G.flatNode(st.comp, id);
+            if (!n) return;
+            if (phase === "start") { st.hist.push(st.comp); return; }
+            const specs = C.NODE_TYPES[n.type].params;
+            for (const [p, v] of Object.entries(patch)) {
+                if (!specs[p]) continue;
+                if (specs[p].key && Mo.isAnimated(n, p)) Mo.setProp(keyHost(), n, p, v, st.frame); else n[p] = v;
+            }
+            if (phase === "end") { st.dirty = true; refresh(["bar", "props"]); }
+            queueRender();
+        },
+    };
+    async function render3dFrame(id, f, view, w, h) {
+        const c = JSON.parse(JSON.stringify(st.comp));
+        const n = (c.nodes || []).find((x) => x.id === id);
+        if (!n || n.type !== "render3d") return null;
+        n.inputs = [n.inputs[0], n.inputs[1], null];
+        n.depth = "depth.z";
+        const scale = w / Math.max(1, c.format.width);
+        const pics = new Map();
+        await loadNeeds(C.sourceNeeds(c, id, f, view || eyeNow()), pics, scale);
+        const ctx = Object.assign(sourcesCtx(pics), { scale, view: view || eyeNow() });
+        const img = C.renderNode(c, id, f, ctx);
+        if (!img || img.w !== w || img.h !== h) return null;
+        return { w, h, data: img.data, depth: img.ch && img.ch["depth.z"] ? img.ch["depth.z"] : null };
+    }
+    let roomLastKey = "";
+    async function setRoom(on) {
+        if (on && !st.room) {
+            st.room = true; renderBar();
+            const ok = await o.room3d(stage, roomApi).catch(() => false);
+            if (!ok) { st.room = false; renderBar(); toast("The 3D room needs WebGL 2 with float pictures, which this browser cannot do.", "warn"); return; }
+            roomLastKey = "";
+            queueRender();
+        } else if (!on && st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); renderBar(); queueRender(); }
+    }
+    /** After a draw: the room's scene again when the Render3D or the frame changed (drawn small: only its objects count). */
+    async function roomAfterDraw() {
+        if (!st.room) return;
+        const t = roomTarget();
+        const key = t ? `${t}@${st.frame}@${eyeNow()}@${C.upstreamHash(st.comp, t)}` : "";
+        if (t && key !== roomLastKey) {
+            roomLastKey = key;
+            const F = C.formatAt(st.comp, t), k = Math.min(1, 256 / Math.max(F.width, F.height));
+            const w = Math.max(1, Math.round(F.width * k)), h = Math.max(1, Math.round(F.height * k));
+            try { await render3dFrame(t, st.frame, eyeNow(), w, h); } catch (_) { /* the room keeps what it had */ }
+        }
+        if (o.room3dSync) o.room3dSync();
+    }
     function queueRender() {
         if (renderQueued) return;
         renderQueued = true;
@@ -827,9 +895,21 @@ export function createCompEditor(host, opts = {}) {
     const eyeNow = () => { const vs = C.viewsOf(st.comp); return vs.includes(st.eye) ? st.eye : vs[0] || null; };
     /** renderNode's sources from the pixels loaded for a draw (Reads per view, DeepReads' deep pictures). */
     const sourcesCtx = (pics) => ({ view: eyeNow(), source: (n, nf) => pics.get(C.srcKey(n, nf)) || null,
-        deepSource: (n, nf) => pics.get("deep:" + C.srcKey(n, nf)) || null });
-    /** The pixels `needs` names (C.sourceNeeds) into `pics`: Reads by srcKey, DeepReads' deep pictures by "deep:" + it. */
-    const loadNeeds = (needs, pics, scale) => Promise.all(needs.map(async ({ node: n, frame: nf, deep }) => {
+        deepSource: (n, nf) => pics.get("deep:" + C.srcKey(n, nf)) || null,
+        sceneSource: (n) => pics.get("scene:" + n.id) || null,
+        // The 3D space's renderer (imageViewer_comp3dEngine.js), when the page has one: Render3D draws with it.
+        engine3d: o.engine3d ? o.engine3d() : null });
+    /** The pixels `needs` names (C.sourceNeeds) into `pics`: Reads by srcKey, DeepReads' deep pictures by "deep:" + it,
+     *  SceneFiles' scenes by "scene:" + id (their models loaded into the 3D renderer); `engine` waits for that renderer. */
+    const loadNeeds = (needs, pics, scale) => Promise.all(needs.map(async ({ node: n, frame: nf, deep, scene, engine }) => {
+        if (engine) { if (o.engine3dReady) await o.engine3dReady().catch(() => null); return; }
+        if (scene) {
+            if (pics.has("scene:" + n.id)) return;
+            pics.set("scene:" + n.id, null);
+            const got = o.loadScene ? await o.loadScene(n).catch(() => null) : null;
+            pics.set("scene:" + n.id, got);
+            return;
+        }
         const load = deep ? o.loadDeep : o.loadSource;
         const stored = !deep && n.type === "read" ? G.flatNode(st.comp, n.id) : null;
         const pic = load ? await load(n, nf, { scale, format: stored ? C.formatAt(st.comp, n.id) : fmt() }).catch(() => null) : null;
@@ -924,6 +1004,7 @@ export function createCompEditor(host, opts = {}) {
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
         info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
+        roomAfterDraw();
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -1318,6 +1399,7 @@ export function createCompEditor(host, opts = {}) {
         renderCrumbs();
         const viewed = viewedId();
         const lv = gc();
+        const warn3d = C.warnings3d(lv);
         const area = (n) => C.nodeSize(n)[0] * C.nodeSize(n)[1];
         // Backdrops under everything (the bigger ones lower), so a smaller one inside a bigger one can be picked.
         for (const n of lv.nodes.filter((x) => x.type === "backdrop").sort((a, b) => area(b) - area(a))) {
@@ -1378,6 +1460,7 @@ export function createCompEditor(host, opts = {}) {
             }
             if (fid(n.id) === viewTools.b()) { const bt = el(doc, "span", "cp-btag", "B"); bt.title = "Compared with the picture on show (the Viewer menu; 2 on a selected node)"; box.append(bt); }
             if (n.expr && Object.keys(n.expr).length) { const x = el(doc, "span", "cp-xbadge", "="); box.append(x); }
+            if (warn3d[n.id]) { const w = el(doc, "span", "cp-wbadge", "!"); w.title = warn3d[n.id]; box.append(w); }
             world.append(box);
             n.inputs.forEach((src, i) => {
                 const s = src && node(src);
@@ -1864,8 +1947,10 @@ export function createCompEditor(host, opts = {}) {
             const after = G.GRAPH_ONLY.has(type) ? null : primary();
             const extra = at ? { x: Math.round(at[0] - C.NODE_W / 2), y: Math.round(at[1] - C.NODE_H / 2) } : {};
             if (type === "group_input") extra.index = 1e6;   // the last port (the ports are renumbered after)
-            const n = C.insertNode(gc(), type, at || (after && G.GRAPH_ONLY.has(after.type)) ? null : after && after.id, extra);
-            if (st.grid.snap) { n.x = C.snapTo(n.x); n.y = C.snapTo(n.y); }
+            const afterId = at || (after && G.GRAPH_ONLY.has(after.type)) ? null : after && after.id;
+            const starter = type === "render3d" && afterId ? C.insertRender3dStarter(gc(), afterId) : null;
+            const n = starter ? starter.render : C.insertNode(gc(), type, afterId, extra);
+            if (st.grid.snap) for (const m of starter ? [starter.card, starter.camera, starter.render] : [n]) { m.x = C.snapTo(m.x); m.y = C.snapTo(m.y); }
             st.sel = [n.id];
         });
     }
@@ -2385,6 +2470,20 @@ export function createCompEditor(host, opts = {}) {
             i.placeholder = mixed ? "— (differs)" : d.kind === "outfile" ? "empty: beside the comp, or shot.####.exr" : (p === "timecode" ? "HH:MM:SS:FF" : "");
             i.onchange = () => write(i.value.trim());
             row.append(i);
+            // A Camera following a camera of the SceneFile wired into it: its cameras to pick from.
+            if (p === "from_scene" && n.type === "camera3d" && o.loadScene) {
+                const b = btn("▾", "A camera of the SceneFile wired into scene", () => {
+                    const sf = n.inputs && n.inputs[0] ? node(fid(n.inputs[0])) || G.flatNode(st.comp, n.inputs[0]) : null;
+                    if (!sf || sf.type !== "scenefile3d") { toast("Wire a SceneFile into this Camera's scene input first.", "warn"); return; }
+                    o.loadScene(sf).then((got) => {
+                        const cams = ((got && got.scene && got.scene.items) || []).filter((x) => x.kind === "camera");
+                        if (!cams.length) { toast("That scene has no camera.", "warn"); return; }
+                        popMenu(b, [["(none: the numbers here)", () => write("")], null].concat(cams.map((c) => [c.name || c.id, () => write(c.name || c.id)])));
+                    }).catch((e) => toast("Cannot read the scene: " + (e.message || e), "warn"));
+                });
+                b.classList.add("cp-scenecam");
+                row.append(b);
+            }
         } else if (d.kind === "file") {
             const i = el(doc, "input"); i.type = "text"; i.value = mixed ? "" : (cur || ""); i.placeholder = mixed ? "— (differs)" : "a picture, a film, or shot.####.exr";
             i.onchange = () => write(i.value.trim());
@@ -2392,6 +2491,16 @@ export function createCompEditor(host, opts = {}) {
             open.classList.add("cp-open");
             const b = btn("…", "Choose a file in the viewer's file browser", () => o.pickFile && o.pickFile((path) => write(path)));
             row.append(i, open, b);
+            // A SceneFile can follow a scene open in a 3D tab, live.
+            if (n.type === "scenefile3d" && o.sceneTabs) {
+                const t = btn("3D tab", "Follow a scene open in a 3D tab (changes there show here at once)", () => {
+                    const tabs = o.sceneTabs();
+                    if (!tabs.length) { toast("No 3D tab is open.", "warn"); return; }
+                    popMenu(t, tabs.map((x) => [x.label, () => write("tab:" + x.label)]));
+                });
+                t.classList.add("cp-scenetab");
+                row.append(t);
+            }
         }
         if (d.key) {
             const key = el(doc, "span", "mg-key", animated ? (Mo.keyAt(n, p, st.frame) ? "◆" : "◇") : "");
@@ -3236,6 +3345,8 @@ export function createCompEditor(host, opts = {}) {
         pane.append(row);
     }
     function paneBody(n, t, first) {
+        const w3 = C.warnings3d(gc())[n.id];
+        if (w3) pane.append(el(doc, "div", "mg-empty cp-warn cp-warn3d", w3));
         if (n.type === "sticky") {
             const ta = el(doc, "textarea"); ta.value = n.text || ""; ta.rows = 4; ta.style.width = "100%";
             ta.onchange = () => mutate(() => { n.text = ta.value; }, { structure: false });
@@ -3800,6 +3911,18 @@ export function createCompEditor(host, opts = {}) {
         renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi }),
         /** Switch the GPU preview on / off (kept in localStorage). */
         setGpu: (on) => { try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ } gpuWhy = ""; gpuTried = false; queueRender(); },
+        /** The 3D renderer up (true) or not to be had (false). */
+        engineReady: async () => !!(o.engine3dReady && await o.engine3dReady()),
+        /**
+         * One Render3D frame as the 3D space draws it, w x h, WITHOUT its bg (the Write job lays that itself):
+         * {w, h, data: Float32Array rgba rows top-down, depth: Float32Array} or null. For a Write job (comp_write).
+         */
+        render3dFrame: (id, f, view, w, h) => render3dFrame(id, f, view, w, h),
+        /** Draw the picture again (what a node reads changed elsewhere: a 3D tab's scene, the 3D renderer ready). */
+        rerender: () => queueRender(),
+        /** The 3D room up (true) or the picture (false); resolves when it is there. */
+        setRoom: (on) => setRoom(!!on),
+        roomOn: () => !!st.room,
         /** Forget every kept result (a source changed on disk). */
         clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
@@ -3942,12 +4065,12 @@ export function createCompEditor(host, opts = {}) {
                 }
             });
         },
-        addNode: (type, extra) => { let n; mutate(() => { n = C.insertNode(gc(), type, primary() && primary().id, extra || {}); st.sel = [n.id]; }); return n; },
+        addNode: (type, extra) => { let n; mutate(() => { const after = primary() && primary().id; const sr = type === "render3d" && after ? C.insertRender3dStarter(gc(), after, extra || {}) : null; n = sr ? sr.render : C.insertNode(gc(), type, after, extra || {}); st.sel = [n.id]; }); return n; },
         undo, redo, save,
         /** What a picture may cost before it is drawn smaller while moving (ms; tests set it low). */
         setProxyBudget: (ms) => { PROXY_BUDGET_MS = Number(ms) || 0; },
         lastRender: () => ({ ms: lastMs, scale: lastScale, width: canvas.width, height: canvas.height, phases: lastPhases, draws: drawCount }),
         canvas,
-        dispose() { if (ro) ro.disconnect(); closeMenus(); infos.clear(); letGo(); },
+        dispose() { if (st.room && o.room3dClose) o.room3dClose(); st.room = false; if (ro) ro.disconnect(); closeMenus(); infos.clear(); letGo(); },
     };
 }

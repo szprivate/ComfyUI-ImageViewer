@@ -119,3 +119,25 @@ test("a 3D shot's camera becomes keys: place, turn (with its parent) and lens", 
     CI.applyCameraKeys(one, CI.cameraKeys(s.slice(0, 1), 36, 16, 9));
     assert.equal(one.tracks, undefined);
 });
+
+test("a Render3D after a picture comes with a Card and a Camera, and the warnings say what is missing", async () => {
+    const C = await import("../js/imageViewer_compModel.js");
+    const comp = C.newComp({ width: 64, height: 36 });
+    const k = C.insertNode(comp, "constant", null);
+    const out = comp.nodes.find((n) => n.type === "output");
+    out.inputs[0] = k.id;
+    const r = C.insertRender3dStarter(comp, k.id);
+    assert.ok(r);
+    assert.equal(r.card.inputs[0], k.id);
+    assert.deepEqual(r.render.inputs.slice(0, 2), [r.card.id, r.camera.id]);
+    assert.equal(out.inputs[0], r.render.id);
+    assert.deepEqual(C.warnings3d(comp), {});
+    assert.equal(C.insertRender3dStarter(comp, r.card.id), null);
+    const lone = C.insertNode(comp, "render3d", null);
+    const cam = C.insertNode(comp, "camera3d", null);
+    const w = C.warnings3d(comp);
+    assert.match(w[lone.id], /Nothing to render/);
+    assert.match(w[cam.id], /Not used/);
+    lone.inputs[0] = C.insertNode(comp, "light3d", null).id;
+    assert.match(C.warnings3d(comp)[lone.id], /nothing to see/);
+});

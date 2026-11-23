@@ -93,7 +93,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | Filter and light | Blur, MotionBlur, DepthBlur, Defocus, ZDefocus (depth-channel defocus), Glow, LensFlare, Laplacian, Grain, Degrain, Regrain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
 | Time | Retime (nearest, mix or vector blend), Vectors (optical flow), FrameHold, FrameRange, TimeOffset, AppendClip, TimeBlur |
 | Channels | Shuffle, AddChannels, Remove |
-| 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |
+| 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, SceneFile, Light, Project, PointCloud, Render |
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
 | AI | AI Matte, AI Depth, AI Inpaint, AI Upscale |
@@ -248,13 +248,18 @@ Both are the viewer's, not the comp's: they are shared with the picture viewer, 
 
 ## 3D
 
-A small scene renderer inside the comp: Y up, the camera looking down -Z, rotations in degrees applied X, then Y, then Z.
+The 3D nodes are drawn by the 3D space's own renderer, so a comp can hold the same models, splats and lights as a 3D tab. Y is up, the camera looks down -Z, and rotations are in degrees, applied X, then Y, then Z, as in the 3D space.
 
 - **Card** puts an image on a plane (its height follows the image's aspect); **Geometry** wraps an image, or plain white, round a cube, sphere or cylinder. Both have translate, rotate, scale and a uniform scale.
 - **Project** paints an image onto whatever it is attached to, from a Camera; *front* keeps it off faces turned away from that camera.
 - **PointCloud** turns an image and its depth channel (`depth.z` by default, read as distance or 1 / distance) into points seen from a Camera.
 - **Scene** gathers up to four of these; **Render** draws a Scene (or one piece) through a Camera over an optional background, with 1 to 4 samples per pixel each way. It writes `depth.z` too. Fed into a Deep node, it gives one sample per object per pixel.
-- **Camera** has a focal length and a film back, near and far planes, and an interaxial and convergence for stereo. Its **import** row takes keys from a camera of a shot open in a 3D tab (place, turn and lens, one key a frame) or from a camera text file: `.chan`, one line a frame with `frame tx ty tz rx ry rz` and optionally the vertical field of view.
+- **SceneFile** brings in a scene of the 3D space: a saved scene file (.usda, .usdc, .json) or, with the *3D tab* button, a scene open in a 3D tab. A 3D tab is followed live: what is changed there shows in the comp at once. *offset* slides the scene's time against the comp's.
+- **Light** lights cards and shapes: point, spot, directional or ambient, with a colour and an intensity. Without any light, a card shows its picture as it is.
+- **Render**'s *renderer* is *3D space* (the default) or *built-in*, Comp's own small renderer, which draws cards, shapes and points only, unlit. Renders and Write nodes make their 3D frames in the open comp tab while the job runs; with no tab open, the job falls back to the built-in renderer and says so.
+- A Render put after a picture comes ready to look at: a Card of the picture and a Camera in front of it. A 3D node that would draw nothing as it is wired (a Render with nothing in its scene, a Camera nobody reads) gets an orange **!** in the graph, with the reason in its tooltip and in its parameters.
+- **The 3D room**: the *3D* button in the picture's bar shows the scene of a Render as a room to look around in (the 3D space's navigation), with the render camera drawn as a frustum. Selecting a Card, Shape, Light or Camera puts a gizmo on it (W move, E turn, R scale); a drag changes its numbers live, as one undo step, and keys them when they are animated. Press *3D* again for the picture.
+- **Camera** has a focal length and a film back, near and far planes, and an interaxial and convergence for stereo. With a SceneFile in its *scene* input, *scene camera* names one of the scene's cameras (the ▾ lists them), and the Camera follows it frame by frame. Its **import** row takes keys from a camera of a shot open in a 3D tab (place, turn and lens, one key a frame) or from a camera text file: `.chan`, one line a frame with `frame tx ty tz rx ry rz` and optionally the vertical field of view.
 
 ## Deep
 

@@ -21,6 +21,8 @@ export const SHAPES = ["cube", "sphere", "cylinder"];
 export const PROJECT_FACES = ["both", "front"];
 export const DEPTH_MODES = ["distance", "inverse"];
 export const DEPTH_OUT = ["depth.z", "none"];
+export const LIGHT_TYPES = ["point", "spot", "directional", "ambient"];
+export const RENDERERS = ["3D space", "built-in"];
 
 const D2R = Math.PI / 180;
 

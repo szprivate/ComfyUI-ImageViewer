@@ -10,6 +10,8 @@ SHAPES = ["cube", "sphere", "cylinder"]
 PROJECT_FACES = ["both", "front"]
 DEPTH_MODES = ["distance", "inverse"]
 DEPTH_OUT = ["depth.z", "none"]
+LIGHT_TYPES = ["point", "spot", "directional", "ambient"]
+RENDERERS = ["3D space", "built-in"]
 
 D2R = math.pi / 180
 

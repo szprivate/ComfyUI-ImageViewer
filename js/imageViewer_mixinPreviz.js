@@ -238,6 +238,8 @@ export const PrevizMixin = {
         if (view.scatterPainting && view.scatterPainting() && this._previzScatterPaintCheck) this._previzScatterPaintCheck();
         if (view.terrainBrushing && view.terrainBrushing() && this._previzTerrainBrushCheck) this._previzTerrainBrushCheck();
         if (view.terrainEroding && view.terrainEroding() && this._previzTerrainErodeCheck) this._previzTerrainErodeCheck();
+        // Comp's SceneFile nodes reading this tab follow it live.
+        if (this.compScenesChanged) this.compScenesChanged();
         return done;
     },
 

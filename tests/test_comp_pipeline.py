@@ -5,6 +5,7 @@ the agent's ops, relinking, localising, and the farm request (a dry run; the rel
     python -m unittest discover -s tests -p test_comp_pipeline.py
 """
 import asyncio
+import base64
 import importlib
 import json
 import os
@@ -170,6 +171,46 @@ class Routes(unittest.TestCase):
                           {"id": "Metadata1", "type": "metadata", "set": "shot = sh020", "inputs": ["Read1"]},
                           dict({"id": "Write1", "type": "write", "name": "comp", "inputs": ["Metadata1"]}, **write),
                           {"id": "Output1", "type": "output", "inputs": ["Write1"]}]}
+
+    def test_a_write_job_takes_render3d_frames_from_the_page(self):
+        """No bake step: the job asks for each Render3D frame (need3d), the page hands it over (comp_write_3d); without
+        a page that serves them, Comp's own renderer draws them and the result says so."""
+        path = os.path.join(self.dirs["output"], "r3.comp.json")
+        comp = {"comp": 1, "format": {"width": 24, "height": 16, "fps": 24, "frames": 2}, "output": "Output1",
+                "nodes": [{"id": "card1", "type": "card3d", "inputs": [None]},
+                          {"id": "cam1", "type": "camera3d", "inputs": [None]},
+                          {"id": "R1", "type": "render3d", "inputs": ["card1", "cam1", None]},
+                          {"id": "Write1", "type": "write", "name": "r3", "inputs": ["R1"]},
+                          {"id": "Output1", "type": "output", "inputs": ["Write1"]}]}
+
+        async def go(c):
+            st, d = await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            self.assertEqual(st, 200, d)
+            st, d = await self.j(c, "/imageviewer/comp_write", {"path": path, "first": 0, "last": 1, "handles": 0, "page3d": True})
+            self.assertEqual(st, 200, d)
+            jid, asked = d["job"], []
+            for _ in range(400):
+                await asyncio.sleep(0.02)
+                s = await (await c.get("/imageviewer/comp_write", params={"job": jid})).json()
+                if s["state"] != "running":
+                    break
+                for n in s.get("need3d") or []:
+                    asked.append((n["node"], n["frame"], n["w"], n["h"]))
+                    img = np.full((n["h"], n["w"], 4), 0.25, np.float32)
+                    st, r = await self.j(c, "/imageviewer/comp_write_3d", {"job": jid, "key": n["key"], "w": n["w"], "h": n["h"],
+                                                                         "data": base64.b64encode(img.tobytes()).decode()})
+                    self.assertEqual(st, 200, r)
+            self.assertEqual(s["state"], "done", s)
+            self.assertEqual(asked, [("R1", 0, 24, 16), ("R1", 1, 24, 16)])
+            self.assertFalse(any("own renderer" in x for x in s["result"]["notes"]), s["result"]["notes"])
+            st, r = await self.j(c, "/imageviewer/comp_write_3d", {"job": jid, "key": "x", "w": 2, "h": 2, "data": "AAAA"})
+            self.assertEqual(st, 422, r)
+            # No page: drawn here, said.
+            st, d = await self.j(c, "/imageviewer/comp_write", {"path": path, "first": 0, "last": 0, "handles": 0})
+            s = await self.wait(c, "/imageviewer/comp_write", d["job"])
+            self.assertEqual(s["state"], "done", s)
+            self.assertTrue(any("own renderer" in x for x in s["result"]["notes"]), s["result"]["notes"])
+        self.run_c(go)
 
     def test_writes_planned_and_rendered(self):
         path = os.path.join(self.dirs["output"], "w.comp.json")

@@ -52,6 +52,7 @@ and a render of its Output by the export rule.
                                                           -> {job}: a .nk by the export rule (kind "comp"), the nodes
                                                           Nuke has none for baked to EXR beside it (comp_nuke);
                                                           GET ?job= -> its state; POST {job, cancel}
+    POST /imageviewer/comp_write_3d {job, key, w, h, data, depth?}  a Render3D frame the page drew for a Write job
     POST /imageviewer/comp_write_plan {path, comp?, writes?, first?, last?, handles?}
                                                           the Write nodes' files, written nothing (comp_write.plan)
     POST /imageviewer/comp_write {path, writes?, first?, last?, handles?}
@@ -76,6 +77,7 @@ starts a process: films are read and written by PyAV in this process.
 """
 from __future__ import annotations
 
+import base64
 import gzip
 import math
 import os
@@ -97,6 +99,7 @@ from . import comp_pipeline as CP
 from . import comp_model as M
 
 MAX_JOBS = 8
+WAIT_3D = 60          # seconds a Write job waits for the page to hand over a Render3D frame
 PIXEL_MAX = 4096
 DEEP_MAX = 24_000_000   # samples the preview takes from one deep frame (about 576 MB as floats)
 
@@ -355,6 +358,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     def run_job(job, comp, comp_path, spec):
         sources = comp_io.Sources(comp_path, allow=path_access.may_serve, allow_lut=path_access.is_allowed)
+        sources.render3d = page_3d(job, sources)
         try:
             views = spec.get("views") or [None]
             results = []
@@ -378,7 +382,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             job = jobs.get(request.query.get("job") or "")
             if not job:
                 return err("no such render", 404)
-            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error")})
+            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error", "need3d")})
         body = await body_of(request)
         if body.get("job"):
             job = jobs.get(str(body["job"]))
@@ -431,7 +435,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
-        job = jobs[jid] = {"state": "running", "done": 0, "total": (f1 - f0 + 1) * max(1, len(spec["views"]))}
+        job = jobs[jid] = {"state": "running", "done": 0, "total": (f1 - f0 + 1) * max(1, len(spec["views"])),
+                           "page3d": bool(body.get("page3d")), "need3d": [], "got3d": {}, "cond3d": threading.Condition()}
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
@@ -579,8 +584,38 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(e, 422)
         return web.json_response({"writes": public_plan(plans), "refused": write_refusal(plans)})
 
+    def page_3d(job, sources):
+        """Render3D's frames from the page's 3D space while a Write job runs (no bake step, Sebastian 2026-11-23):
+        the job names the frame it needs (``need3d``, read by the page's poll of the job), the page draws it with
+        the 3D space's renderer and POSTs it to comp_write_3d; the job waits for it (``WAIT_3D`` s at most).
+        Without a page that said it serves them, or when it does not answer, Comp's own renderer draws it."""
+        cond = job["cond3d"]
+
+        def hook(n, f, view, w, h):
+            if not job.get("page3d"):
+                sources.note(f"{n['id']}: drawn by Comp's own renderer (cards and shapes, unlit) - the 3D space's "
+                             "renderer draws only while the comp is open in the viewer")
+                return None
+            key = f"{n['id']}@{f}#{view or ''}:{w}x{h}"
+            with cond:
+                if key not in job["got3d"]:
+                    job["need3d"] = [{"key": key, "node": n["id"], "frame": f, "view": view, "w": w, "h": h}]
+                    end = time.time() + WAIT_3D
+                    while key not in job["got3d"] and not job.get("cancel") and time.time() < end:
+                        cond.wait(0.25)
+                    job["need3d"] = []
+                got = job["got3d"].pop(key, None)
+            if job.get("cancel"):
+                raise InterruptedError
+            if got is None:
+                job["page3d"] = False         # it stopped answering: the rest without it
+                sources.note(f"{n['id']}: the page did not hand over frame {f} in time; drawn by Comp's own renderer")
+            return got
+        return hook
+
     def run_writes(job, comp, comp_path, plans):
         sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
+        sources.render3d = page_3d(job, sources)
         try:
             done = CW.render(comp, comp_path, plans, sources, progress=lambda d, t: job.update(done=d, total=t),
                              cancelled=lambda: job.get("cancel"))
@@ -600,7 +635,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             job = jobs.get(request.query.get("job") or "")
             if not job:
                 return err("no such render", 404)
-            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error")})
+            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error", "need3d")})
         body = await body_of(request)
         if body.get("job"):
             job = jobs.get(str(body["job"]))
@@ -626,9 +661,34 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         for k in [k for k, j in jobs.items() if j.get("ended")][: max(0, len(jobs) - MAX_JOBS + 1)]:
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
-        job = jobs[jid] = {"state": "running", "done": 0, "total": sum(len(p["frames"]) for p in plans)}
+        job = jobs[jid] = {"state": "running", "done": 0, "total": sum(len(p["frames"]) for p in plans),
+                           "page3d": bool(body.get("page3d")), "need3d": [], "got3d": {}, "cond3d": threading.Condition()}
         threading.Thread(target=run_writes, args=(job, comp, path, plans), daemon=True, name=f"comp-write-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"], "writes": public_plan(plans)})
+
+    async def take_3d(request):
+        """POST {job, key, w, h, data: base64 float32 rgba (rows top-down, premultiplied, linear), depth?: base64
+        float32} -> {ok}: one Render3D frame for a running Write job (see page_3d)."""
+        body = await body_of(request)
+        job = jobs.get(str(body.get("job") or ""))
+        if not job or "cond3d" not in job:
+            return err("no such render", 404)
+        try:
+            w, h = int(body["w"]), int(body["h"])
+            img = np.frombuffer(base64.b64decode(body["data"]), np.float32)
+            if w < 1 or h < 1 or img.size != w * h * 4:
+                raise ValueError("the picture is not w x h x 4 floats")
+            img = img.reshape(h, w, 4).copy()
+            dep = np.frombuffer(base64.b64decode(body["depth"]), np.float32) if body.get("depth") else np.zeros(w * h, np.float32)
+            if dep.size != w * h:
+                raise ValueError("the depth is not w x h floats")
+            dep = dep.reshape(h, w).copy()
+        except (KeyError, TypeError, ValueError) as e:
+            return err(e, 422)
+        with job["cond3d"]:
+            job["got3d"][str(body.get("key") or "")] = (img, dep)
+            job["cond3d"].notify_all()
+        return web.json_response({"ok": True})
 
     async def get_metadata(request):
         """POST {path, comp, node, frame} -> {metadata}: what node ``node``'s picture carries at ``frame`` (the
@@ -1370,6 +1430,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("POST", f"{prefix}/comp_write_plan", write_plan)
         add("GET", f"{prefix}/comp_write", render_writes)
         add("POST", f"{prefix}/comp_write", render_writes)
+        add("POST", f"{prefix}/comp_write_3d", take_3d)
         add("POST", f"{prefix}/comp_metadata", get_metadata)
         add("GET", f"{prefix}/comp_autosave", autosave)
         add("POST", f"{prefix}/comp_autosave", autosave)

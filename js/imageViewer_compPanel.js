@@ -25,6 +25,7 @@ import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./image
 import { decodeDeep } from "./imageViewer_compDeep.js";
 import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
 import { showInstallLog } from "./imageViewer_installLog.js";
+import { Comp3DEngine } from "./imageViewer_comp3dEngine.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -591,6 +592,15 @@ export const CompPanelMixin = {
             loadSource: (node, frame, how) => this._cpLoadSource(rec, node, frame, how),
             loadDeep: (node, frame) => this._cpLoadDeep(rec, node, frame),
             importCamera: (kind, node) => this._cpImportCamera(rec, kind, node),
+            // The 3D nodes drawn by the 3D space's renderer (imageViewer_comp3dEngine.js), one per comp tab.
+            engine3d: () => rec.engine || null,
+            engine3dReady: () => this._cpEngine(rec).ensure(),
+            loadScene: (node) => this._cpLoadScene(rec, node),
+            sceneTabs: () => this._cpSceneTabs(),
+            // The 3D room in the picture's place (imageViewer_comp3dRoom.js): the same view, on screen.
+            room3d: (stage, api) => this._cpEngine(rec).openRoom(stage, api),
+            room3dClose: () => { if (rec.engine) rec.engine.closeRoom(); },
+            room3dSync: () => { if (rec.engine) rec.engine.roomSync(); },
             playing: () => !!this.isPlaying,
             onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),
@@ -1277,6 +1287,74 @@ export const CompPanelMixin = {
         return { tracks: cameraKeys(samples, hap, fmt.width, fmt.height), from: baseOf(file.path), frames: samples.length };
     },
 
+    /** The comp tab's 3D renderer (made on first use; it lives in the tab's element, hidden). */
+    _cpEngine(rec) {
+        if (!rec.engine) rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); } });
+        return rec.engine;
+    },
+
+    /** The 3D tabs open now: [{key, label, scene}] (a SceneFile's "tab:<label>"). */
+    _cpSceneTabs() {
+        const out = [];
+        for (const key of Object.keys(this._scenes || {})) {
+            const scene = this.previzScene ? this.previzScene(key) : null;
+            if (scene) out.push({ key, label: (this.tabLabels && this.tabLabels[key]) || scene.name || key, scene });
+        }
+        return out;
+    },
+
+    /**
+     * A SceneFile's scene, loaded into the tab's 3D renderer: {scene, key} (the same object while nothing changed,
+     * so the comp's cache keeps its pictures), or null. "tab:<name>" is a scene open in a 3D tab, followed live
+     * (previzChanged -> compScenesChanged); a path is read through /imageviewer/scene, looked at again every 5 s.
+     */
+    async _cpLoadScene(rec, n) {
+        const file = String((n && n.file) || "").trim();
+        if (!file) return null;
+        rec.sceneGot = rec.sceneGot || new Map();
+        let scene = null, key = "";
+        if (/^tab:/i.test(file)) {
+            const want = file.slice(4).trim(), low = want.toLowerCase();
+            const tabs = this._cpSceneTabs();
+            const t = tabs.find((x) => x.key === want) || tabs.find((x) => x.label === want) || tabs.find((x) => String(x.label).toLowerCase() === low);
+            if (!t) return null;
+            scene = t.scene;
+            key = `tab:${t.key}:${this._cpSceneRev || 0}`;
+        } else {
+            rec.sceneFiles = rec.sceneFiles || new Map();
+            const had = rec.sceneFiles.get(file);
+            if (had && performance.now() - had.t < 5000) ({ scene, key } = had);
+            else {
+                const res = await api.fetchApi(`/imageviewer/scene?${new URLSearchParams({ path: file })}`);
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok || !data.scene) throw new Error(data.error || `HTTP ${res.status}`);
+                const text = JSON.stringify(data.scene);
+                key = had && had.text === text ? had.key : `file:${file}:${(this._cpSceneRev || 0)}:${performance.now()}`;
+                scene = had && had.text === text ? had.scene : data.scene;
+                rec.sceneFiles.set(file, { t: performance.now(), scene, key, text });
+            }
+        }
+        const eng = this._cpEngine(rec);
+        await eng.prepareScene(n.id, scene, key);
+        const got = rec.sceneGot.get(n.id);
+        if (got && got.key === key && got.scene === scene) return got;
+        const fresh = { scene, key };
+        rec.sceneGot.set(n.id, fresh);
+        return fresh;
+    },
+
+    /** A 3D tab's scene changed: comp tabs reading one ("tab:...") draw again. */
+    compScenesChanged() {
+        this._cpSceneRev = (this._cpSceneRev || 0) + 1;
+        const st = this._cpState ? this._cpState() : null;
+        for (const rec of Object.values((st && st.tabs) || {})) {
+            if (!rec.editor || !rec.sceneGot) continue;
+            const comp = rec.editor.comp && rec.editor.comp();
+            const reads = ((comp && comp.nodes) || []).some((x) => x.type === "scenefile3d" && /^tab:/i.test(String(x.file || "")));
+            if (reads && rec.editor.rerender) rec.editor.rerender();
+        }
+    },
+
     /** One of several things, in a small dialog over the comp: the index picked, or null. */
     _cpChoose(rec, title, labels) {
         const doc = rec.el.ownerDocument;
@@ -1400,6 +1478,7 @@ export const CompPanelMixin = {
         const rec = st.tabs[key];
         if (!rec) return;
         if (rec.editor) { try { rec.editor.dispose(); } catch (_) { /* already gone */ } }
+        if (rec.engine) { try { rec.engine.dispose(); } catch (_) { /* already gone */ } rec.engine = null; }
         if (rec.el) rec.el.remove();
         delete st.tabs[key];
         if (this.activeTab === key) this._cpSeat(null);
@@ -1620,7 +1699,7 @@ export const CompPanelMixin = {
                 if (ed.isDirty()) return { ok: false, message: "The comp could not be saved, so it was not rendered." };
                 const got = await this.compRender(rec.path, {
                     format: fmt, name: v.name, context: v.context, first, last: lastF, options, first_number, padding, display, view,
-                }, (done, total) => ui.progress(done, total, `Frame ${done} of ${total}`));
+                }, (done, total) => ui.progress(done, total, `Frame ${done} of ${total}`), rec);
                 if (!got.ok) return got;
                 this.compLand(got.result, { canvas: canvasBox.checked });
                 return { ok: true };
@@ -1704,17 +1783,23 @@ export const CompPanelMixin = {
     },
 
     /** Render the saved comp on the server and wait for it: {ok, result} or {ok: false, message}. */
-    async compRender(path, spec, progress) {
+    async compRender(path, spec, progress, rec = null) {
+        // Render3D through the 3D space: the job asks this page (rec's comp tab) for each frame as it goes.
+        const ed = rec && rec.editor;
+        const page3d = !!(ed && ed.render3dFrame && C.usesEngine3d(ed.comp()) && await ed.engineReady().catch(() => false));
         const res = await api.fetchApi("/imageviewer/comp_render", {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ path }, spec)),
+            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(Object.assign({ path, page3d }, spec)),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) return { ok: false, error: true, message: data.error || `HTTP ${res.status}` };
+        let quick = false;
         for (;;) {
-            await new Promise((r) => setTimeout(r, 300));
+            await new Promise((r) => setTimeout(r, quick ? 0 : 300));
+            quick = false;
             const r = await api.fetchApi(`/imageviewer/comp_render?job=${encodeURIComponent(data.job)}`);
             const s = await r.json().catch(() => ({}));
             if (progress) progress(s.done || 0, s.total || data.total || 1);
+            if (page3d && s.state === "running" && s.need3d && s.need3d.length) { await this._cpServe3d(rec, data.job, s.need3d).catch(() => null); quick = true; continue; }
             if (s.state === "done") return { ok: true, result: s.result };
             if (s.state !== "running") return { ok: false, error: true, message: s.error || "The render stopped." };
         }
