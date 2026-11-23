@@ -182,6 +182,44 @@ SPLIT = ROOM.split("  const btn")[0] + """  ed.setRoomSplit(true);
   return out;
 }"""
 
+# Path traced: the raster picture first and a trace started; when the trace is done the engine's sig changes and
+# the same Render3D gives the traced picture - a card's picture as it is (emissive, no light), its alpha the card's
+# coverage - and a projected card through the bake.
+TRACE = """async () => {
+  const C = await import('/extensions/viewer/imageViewer_compModel.js');
+  const { Comp3DEngine } = await import('/extensions/viewer/imageViewer_comp3dEngine.js');
+  const T = await import('/extensions/viewer/imageViewer_comp3dTrace.js');
+  const eng = new Comp3DEngine(document.body);
+  if (!(await eng.ensure())) return { skip: eng.why };
+  const N = (type, id, inputs, params = {}) => Object.assign(C.makeNode({ nodes: [] }, type, params), { id, inputs });
+  const comp = (nodes) => ({ comp: 1, format: { width: 48, height: 32, fps: 24, frames: 4 }, nodes, output: 'render3d1' });
+  const stats = (img) => {
+    let a = 0, r = 0, n = 0;
+    for (let i = 0; i < img.w * img.h; i++) { const al = img.data[i * 4 + 3]; a += al; if (al > 0.99) { r += img.data[i * 4]; n++; } }
+    return { alpha: a, red: n ? r / n : 0, full: n };
+  };
+  const out = {};
+  const card = (proj) => comp([N('constant', 'Constant1', [], { color: [2, 0.5, 0.25, 1] }),
+      ...(proj ? [N('camera3d', 'pcam', [], { translate: [0, 0, 2] }), N('project3d', 'proj1', ['Constant1', 'pcam'])] : []),
+      N('card3d', 'card3d1', [proj ? 'proj1' : 'Constant1']), N('camera3d', 'camera3d1', [], { translate: [0, 0, 2] }),
+      N('render3d', 'render3d1', ['card3d1', 'camera3d1', null], { renderer: 'path traced', rays: 24, bounces: 2 })]);
+  for (const [name, c] of [['card', card(false)], ['proj', card(true)]]) {
+    const raster = C.renderNode(c, 'render3d1', 0, { engine3d: eng, traces: [] });
+    const ctx = { engine3d: eng, traces: [] };
+    C.renderNode(c, 'render3d1', 0, ctx);
+    const sig0 = eng.sig;
+    const done = await Promise.race([Promise.all(ctx.traces), new Promise((r) => setTimeout(() => r('timeout'), 60000))]);
+    if (done === 'timeout') return { skip: 'the trace took more than a minute (' + (eng.traceWhy || 'software GL') + ')' };
+    if (!done[0]) return { skip: 'no trace: ' + eng.traceWhy };
+    const traced = C.renderNode(c, 'render3d1', 0, { engine3d: eng, traces: [] });
+    out[name] = { started: ctx.traces.length, sigChanged: eng.sig !== sig0, raster: stats(raster), traced: stats(traced), hasZ: !!(traced.ch && traced.ch['depth.z']) };
+  }
+  out.atlas = Array.from(T.atlasUvs(3)).map((v) => Math.round(v * 100) / 100);
+  out.straight = (() => { const r = T.straightForMap(new Float32Array([1, 0.5, 0, 0.5, 0, 0, 0, 0])); return { d: Array.from(r.data), g: r.gain }; })();
+  eng.dispose();
+  return out;
+}"""
+
 
 def _free_port():
     with socket.socket() as s:
@@ -250,6 +288,31 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertGreater(st["lit"]["green"], 10, "the green light lights the card")
         self.assertGreater(st["scene"]["alpha"], 50, "the SceneFile's box is in the picture")
         self.assertEqual([n for n in st["needs"] if n["scene"]], [{"id": "sf1", "scene": True, "engine": False}])
+        self.assertEqual(errors, [])
+
+    def test_render3d_path_traced_shows_the_raster_picture_until_the_trace_is_done(self):
+        pg = self.browser.new_page(viewport={"width": 1000, "height": 700})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(TRACE)
+        finally:
+            pg.close()
+        if "skip" in st:
+            self.skipTest(st["skip"])
+        self.assertEqual(st["straight"]["g"], 2, "the brightest straight value is the map's gain")
+        self.assertEqual(st["straight"]["d"][:4], [1, 0.5, 0, 0.5])
+        self.assertEqual(len(st["atlas"]), 18)
+        for name in ("card", "proj"):
+            r = st[name]
+            self.assertEqual(r["started"], 1, name)
+            self.assertTrue(r["sigChanged"], name)
+            self.assertTrue(r["hasZ"], name)
+            self.assertGreater(r["traced"]["alpha"], r["raster"]["alpha"] * 0.85, name)
+            self.assertLess(r["traced"]["alpha"], r["raster"]["alpha"] * 1.15, name)
+            self.assertAlmostEqual(r["traced"]["red"], 2, delta=0.15, msg=f"{name}: the picture as it is, brighter than 1 too")
         self.assertEqual(errors, [])
 
     def test_a_scenefile_follows_a_3d_tab_live(self):

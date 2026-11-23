@@ -500,6 +500,8 @@ NODE_TYPES = {
     "render3d": {"inputs": ["scene", "camera", "bg"], "params": {
         "renderer": {"kind": "enum", "def": "3D space", "choices": G3.RENDERERS},
         "samples": {"kind": "int", "def": 2, "min": 1, "max": 4},
+        "rays": {"kind": "int", "def": 64, "min": 1, "max": 4096},
+        "bounces": {"kind": "int", "def": 5, "min": 1, "max": 32},
         "depth": {"kind": "enum", "def": "depth.z", "choices": G3.DEPTH_OUT},
     }},
     "deepread": {"inputs": [], "params": {

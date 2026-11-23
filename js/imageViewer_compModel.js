@@ -376,8 +376,10 @@ export const NODE_TYPES = {
         size: { kind: "num", def: 2, min: 0.1, max: 64, key: true, step: 0.1, help: "A point's width when rendered, in pixels" },
     } },
     render3d: { label: "Render3D", cat: "3D", inputs: ["scene", "camera", "bg"], params: {
-        renderer: { kind: "enum", def: "3D space", choices: G3.RENDERERS, help: "3D space: the 3D space's own renderer (models, lights, SceneFiles); built-in: Comp's own, cards and shapes only, unlit" },
-        samples: { kind: "int", def: 2, min: 1, max: 4, help: "Samples a pixel each way (antialiasing): 2 is 4 a pixel" },
+        renderer: { kind: "enum", def: "3D space", choices: G3.RENDERERS, help: "3D space: the 3D space's own renderer (models, lights, SceneFiles); path traced: the same scene traced by the 3D space's path tracer (the raster picture shows until the trace is done); built-in: Comp's own, cards and shapes only, unlit" },
+        samples: { kind: "int", def: 2, min: 1, max: 4, help: "Samples a pixel each way (antialiasing): 2 is 4 a pixel. Not used when path traced" },
+        rays: { kind: "int", def: 64, min: 1, max: 4096, only: (n) => n.renderer === "path traced", help: "Path traced: rays a pixel (more: less noise, slower)" },
+        bounces: { kind: "int", def: 5, min: 1, max: 32, only: (n) => n.renderer === "path traced", help: "Path traced: how often a ray bounces" },
         depth: { kind: "enum", def: "depth.z", choices: G3.DEPTH_OUT, help: "depth.z: the distance to the nearest surface goes into the depth.z channel (0: nothing)" },
     } },
     // ── deep (imageViewer_compDeep.js): any number of samples a pixel; viewed, a deep node shows itself flattened ──
@@ -2179,6 +2181,19 @@ export function renderNode(comp, id, frame, ctx) {
         // cards, shapes and points only (unlit) - a SceneFile and lights need the 3D space.
         const eng = ctx.engine3d && paramAt(n, "renderer", f) !== "built-in" && ctx.engine3d.ready ? ctx.engine3d : null;
         let r = eng ? eng.render(objs, cam, W, H, ns, { node: n.id, frame: f }) : null;
+        // Path traced: the trace is a job of the engine's (imageViewer_comp3dTrace.js) under a key of everything
+        // that makes the picture; until it is done the raster picture stands in (ctx.traces collects the jobs, so
+        // a Write's frame can wait for them).
+        if (r && eng.trace && paramAt(n, "renderer", f) === "path traced") {
+            const tkey = `${n.id}@${f}@${W}x${H}@${view || ""}@${upstreamHash(comp, n.id)}@${paramAt(n, "rays", f)}/${paramAt(n, "bounces", f)}@`
+                + sourceSigOf(comp, n.id, f, ctx, view).split(",").filter((x) => x && x[0] !== "E").join(",");
+            const done = eng.traced(tkey);
+            if (done) r = { img: done.img, depth: r.depth };
+            else if (!ctx.noTrace) {
+                const job = eng.trace(objs, cam, W, H, { samples: paramAt(n, "rays", f), bounces: paramAt(n, "bounces", f), key: tkey });
+                if (ctx.traces) ctx.traces.push(job);
+            }
+        }
         if (r && !r.deep) r.deep = DP.deepFromImage(r.img, r.depth, 1);
         if (!r) r = G3.renderScene(objs.filter((o) => o.kind === "mesh" || o.kind === "points"), cam, W, H, ns);
         dmemo.set(`${n.id}@${f}`, r.deep);
