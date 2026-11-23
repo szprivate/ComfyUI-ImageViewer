@@ -1612,11 +1612,12 @@ class CompBrowserTests(unittest.TestCase):
         # What only changes how the picture is LOOKED AT is one group, right of the file group and by Fit.
         pos = pg.evaluate(f"""() => {{ const kids = [...{BAR}.children]; const at = (s) => kids.findIndex((x) => x.matches(s));
             return {{ title: at('.mg-title'), spacer: at('.mg-spacer'), gpu: at('.cp-gpu'), chan: at('.cp-chan'),
-                exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools'), info: at('.mg-info') }}; }}""")
+                exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools') }}; }}""")
         self.assertTrue(-1 not in pos.values(), pos)
+        self.assertEqual(pg.evaluate(f"() => {BAR}.querySelectorAll('.mg-info').length"), 0)   # no format readout in the bar
         self.assertLess(pos["title"], pos["spacer"], pos)
-        self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")],
-                         sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools", "info")), pos)
+        self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")],
+                         sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")), pos)
         # The bar's slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170). The value is the viewer's,
         # so its exposure follows.
         pg.evaluate(f"() => {{ const r = {BAR}.querySelector('.cp-exp-s'); r.value = '2'; r.dispatchEvent(new Event('input')); }}")
@@ -1681,6 +1682,49 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.compTabLeave()")
         self.assertTrue(pg.evaluate("() => __panel.exposureControl.parentNode === __panel.viewport"))
         self.assertTrue(pg.evaluate("() => getComputedStyle(__panel.exposureControl).display !== 'none'"))
+        self.assertEqual(self.errors, [])
+
+    def test_the_region_render_works_only_a_box_of_the_picture(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.5, 0.5, 0.5, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
+        pg.wait_for_timeout(400)
+        BAR = f"{self.ED}.stage.closest('.cp-root').querySelector('.mg-bar')"
+        # The GPU switch says GPU; the region button beside it is an icon.
+        self.assertEqual(pg.evaluate(f"() => {BAR}.querySelector('.cp-gpu').textContent"), "GPU")
+        self.assertEqual(pg.evaluate(f"() => [...{BAR}.children].indexOf({BAR}.querySelector('.cp-region')) - [...{BAR}.children].indexOf({BAR}.querySelector('.cp-gpu'))"), 1)
+        grey = self.pixel(pg, 0.1, 0.1)
+        self.assertGreater(grey[0], 100, grey)
+        pg.evaluate(f"() => {BAR}.querySelector('.cp-region').click()")
+        pg.wait_for_function(f"() => {self.ED}.renderInfo().renderRegion", timeout=3000)
+        pg.wait_for_timeout(400)
+        # Outside the box (the middle half) black, inside the picture as it was; the box and its handles on the picture.
+        self.assertEqual(self.pixel(pg, 0.1, 0.1)[:3], [0, 0, 0])
+        self.assertEqual(self.pixel(pg, 0.5, 0.5)[:3], grey[:3])
+        self.assertTrue(pg.evaluate(f"() => {BAR}.querySelector('.cp-region').classList.contains('on')"))
+        self.assertEqual(pg.evaluate("() => __panel.container.querySelectorAll('.cp-over .cp-region .cp-rg-sq').length"), 4)
+        self.assertIn("region", pg.evaluate(f"() => {self.ED}.stage.querySelector('.cp-info').textContent"))
+        # Its top left corner dragged to the picture's corner: the box grows and is kept for the next comp.
+        sq = pg.evaluate("() => { const r = __panel.container.querySelector('.cp-over .cp-rg-sq[data-crop=tl]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+        c0 = pg.evaluate(f"() => {{ const r = {self.ED}.canvas.getBoundingClientRect(); return [r.left + 1, r.top + 1]; }}")
+        pg.mouse.move(*sq); pg.mouse.down(); pg.mouse.move(c0[0], c0[1], steps=6); pg.mouse.up()
+        pg.wait_for_timeout(400)
+        box = pg.evaluate(f"() => {self.ED}.renderInfo().renderRegion")
+        self.assertLess(box[0], 0.02, box); self.assertLess(box[1], 0.02, box)
+        self.assertAlmostEqual(box[2], 0.75, places=2); self.assertAlmostEqual(box[3], 0.75, places=2)
+        self.assertEqual(self.pixel(pg, 0.1, 0.1)[:3], grey[:3])
+        self.assertEqual(self.pixel(pg, 0.9, 0.9)[:3], [0, 0, 0])
+        kept = pg.evaluate("() => JSON.parse(localStorage.getItem('imageviewer.comp.region'))")
+        self.assertTrue(kept["on"]); self.assertAlmostEqual(kept["box"][2], 0.75, places=2)
+        # Alt+W on the picture: the whole picture again.
+        pg.evaluate(f"() => {self.ED}.stage.closest('.cp-root').focus()")
+        pg.keyboard.press("Alt+w")
+        pg.wait_for_timeout(400)
+        self.assertIsNone(pg.evaluate(f"() => {self.ED}.renderInfo().renderRegion"))
+        self.assertEqual(self.pixel(pg, 0.9, 0.9)[:3], grey[:3])
+        self.assertEqual(pg.evaluate("() => __panel.container.querySelectorAll('.cp-over .cp-region').length"), 0)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
         self.assertEqual(self.errors, [])
 
     def test_the_graph_in_comfyuis_bottom_panel(self):
