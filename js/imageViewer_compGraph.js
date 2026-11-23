@@ -38,7 +38,7 @@ const kept = [];   // the last few flattenings, by what they were made from
 /** The comp the renderers see (see the top of the file); the comp itself when it has nothing to flatten. */
 export function flattenComp(comp) {
     if (!comp || comp.__flat || !needsFlat(comp.nodes)) return comp;
-    const key = JSON.stringify([comp.format, comp.output, comp.nodes]);
+    const key = JSON.stringify([comp.format, comp.output, comp.nodes, comp.layers || null]);
     const had = kept.find((k) => k.key === key);
     if (had) return had.flat;
     const nodes = [], alias = new Map();

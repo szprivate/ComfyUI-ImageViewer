@@ -144,8 +144,8 @@ def _bakeable(n):
     if t == "shuffle" and any(k not in _CH or not (v in ("0", "1") or (v[0] == "B" and v[2:] in _CH))
                               for k, v in M.shuffle_route(n).items()):
         return "shuffle: input A and extra channels are not written into the Nuke script (its rgba is baked)"
-    if t == "constant" and (n.get("write") or "rgba") != "rgba":
-        return "constant: writing into a channel is not written into the Nuke script (its rgba is baked)"
+    if (n.get("write") or "rgba") != "rgba":
+        return f"{t}: writing into a channel or layer is not written into the Nuke script (its rgba is baked)"
     if t == "channelmerge":
         if "luminance" in (n.get("a_channel"), n.get("b_channel")) or n.get("output") in ("rgb", "rgba"):
             return "channelmerge: Nuke's ChannelMerge takes one channel of each and writes one (no luminance)"
