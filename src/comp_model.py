@@ -449,7 +449,8 @@ NODE_TYPES = {
         "seed": {"kind": "int", "def": 1},
         "write": {"kind": "target", "def": "rgba"},
     }},
-    "camera3d": {"inputs": [], "params": {
+    "camera3d": {"inputs": ["scene"], "params": {
+        "from_scene": {"kind": "text", "def": ""},
         "translate": {"kind": "vec3", "def": [0, 0, 2], "key": True},
         "rotate": {"kind": "vec3", "def": [0, 0, 0], "key": True},
         "focal": {"kind": "num", "def": 35, "min": 1, "max": 2000, "key": True},
@@ -477,6 +478,18 @@ NODE_TYPES = {
         "faces": {"kind": "enum", "def": "both", "choices": G3.PROJECT_FACES},
     }},
     "scene3d": {"inputs": ["1", "2", "3", "4"], "params": {}},
+    "scenefile3d": {"inputs": [], "params": {
+        "file": {"kind": "file", "def": ""},
+        "offset": {"kind": "int", "def": 0},
+    }},
+    "light3d": {"inputs": [], "params": {
+        "light": {"kind": "enum", "def": "point", "choices": G3.LIGHT_TYPES},
+        "color": {"kind": "color", "def": [1, 1, 1, 1], "key": True},
+        "intensity": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "translate": {"kind": "vec3", "def": [0, 2, 2], "key": True},
+        "rotate": {"kind": "vec3", "def": [-45, 0, 0], "key": True},
+        "cone": {"kind": "num", "def": 30, "min": 1, "max": 89, "key": True},
+    }},
     "pointcloud": {"inputs": ["img", "camera"], "params": {
         "channel": {"kind": "chan", "def": "depth.z"},
         "mode": {"kind": "enum", "def": "distance", "choices": G3.DEPTH_MODES},
@@ -485,6 +498,7 @@ NODE_TYPES = {
         "size": {"kind": "num", "def": 2, "min": 0.1, "max": 64, "key": True},
     }},
     "render3d": {"inputs": ["scene", "camera", "bg"], "params": {
+        "renderer": {"kind": "enum", "def": "3D space", "choices": G3.RENDERERS},
         "samples": {"kind": "int", "def": 2, "min": 1, "max": 4},
         "depth": {"kind": "enum", "def": "depth.z", "choices": G3.DEPTH_OUT},
     }},
@@ -1153,7 +1167,7 @@ def reformat_layout(node, frame, in_fmt, scale=1.0):
     return m, max(1, _round_js(bw * scale)), max(1, _round_js(bh * scale))
 
 
-GEO3D = {"camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud"}
+GEO3D = {"camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "scenefile3d", "light3d"}
 DEEP = {"deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"}
 _PLAIN_SIZE = (GEO3D | DEEP) - {"project3d"}
 
@@ -3042,7 +3056,16 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
 
     def render3d(n, f, d1):
         ins = n["inputs"]
-        img, dep, deep = G3.render_scene(scene_of(ins[0], f, d1), camera_of(ins[1], f, W, H, True), W, H, param_at(n, "samples", f))
+        # The 3D space's renderer lives in the page: a Write job the page serves hands its frames over
+        # (``source.render3d(node, frame, view, W, H)`` -> (img, depth) or None; comp_routes' render_writes).
+        # Without one, Comp's own renderer: cards, shapes and points, unlit.
+        hook = getattr(source, "render3d", None)
+        got = hook(n, f, view, W, H) if hook and param_at(n, "renderer", f) != "built-in" else None
+        if got is not None:
+            img, dep = got
+            deep = DP.deep_from_image(img, dep, 1)
+        else:
+            img, dep, deep = G3.render_scene(scene_of(ins[0], f, d1), camera_of(ins[1], f, W, H, True), W, H, param_at(n, "samples", f))
         memo[("d", n["id"], f)] = deep
         ex = {}
         if ins[2]:
@@ -3247,8 +3270,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p["size"] = p["size"] * scale
             p["maximum"] = p["maximum"] * scale
             return z_defocus_image(src, z, p)
-        if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud"):
-            if t == "camera3d":
+        if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud", "scenefile3d", "light3d"):
+            if t in ("camera3d", "scenefile3d", "light3d"):
                 return blank(W, H), {}
             cam = next((c for c in comp["nodes"] if c["type"] == "camera3d" and not c.get("disable")), None)
             img, _, _ = G3.render_scene(scene_of(n["id"], f, d1), camera_of(cam["id"] if cam else None, f, W, H, True), W, H, 1)

@@ -7,7 +7,7 @@
 // (relayed to agentY's /agentY/comp_farm), GET / POST comp_autosave.
 import { api } from "../../scripts/api.js";
 import { notice, openFilePicker } from "./imageViewer_exportUI.js";
-import { readNodes, writeNodes } from "./imageViewer_compModel.js";
+import { readNodes, usesEngine3d, writeNodes } from "./imageViewer_compModel.js";
 
 const AUTOSAVE_MS = 30 * 1000;
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
@@ -46,12 +46,16 @@ export const CompPipelineMixin = {
     _cpSay(note, text, error = false) { note.textContent = text; note.classList.toggle("error", !!error); },
 
     /** Wait for a job route ({job}) to end; progress(done, total). */
-    async _cpWait(route, jid, progress) {
+    async _cpWait(route, jid, progress, onNeed) {
+        let quick = false;
         for (;;) {
-            await new Promise((r) => setTimeout(r, 300));
+            await new Promise((r) => setTimeout(r, quick ? 0 : 300));
+            quick = false;
             const r = await api.fetchApi(`${route}?job=${encodeURIComponent(jid)}`);
             const s = await r.json().catch(() => ({}));
             if (progress) progress(s.done || 0, s.total || 1);
+            // A Write job asking for Render3D frames the 3D space draws here (comp_routes' page_3d).
+            if (onNeed && s.state === "running" && s.need3d && s.need3d.length) { await onNeed(s.need3d).catch(() => null); quick = true; continue; }
             if (s.state === "done") return s.result;
             if (s.state !== "running") throw new Error(s.error || (s.state === "stopped" ? "Stopped." : "The job stopped."));
         }
@@ -128,9 +132,12 @@ export const CompPipelineMixin = {
             try {
                 if (ed.isDirty()) await ed.save();
                 if (ed.isDirty()) throw new Error("The comp could not be saved, so it was not rendered.");
-                const started = await post("/imageviewer/comp_write", { path: rec.path, writes, ...range() });
+                // Render3D through the 3D space: the job asks this page for each frame as it goes (no bake step).
+                const page3d = !!(ed.render3dFrame && usesEngine3d(ed.comp()) && await rec.editor.engineReady().catch(() => false));
+                const started = await post("/imageviewer/comp_write", { path: rec.path, writes, ...range(), page3d });
                 jid = started.job;
-                const result = await this._cpWait("/imageviewer/comp_write", jid, (done, total) => this._cpSay(d.note, `Frame ${done} of ${total}`));
+                const serve = page3d ? (need) => this._cpServe3d(rec, jid, need) : null;
+                const result = await this._cpWait("/imageviewer/comp_write", jid, (done, total) => this._cpSay(d.note, `Frame ${done} of ${total}`), serve);
                 d.shut(result);
                 this.compLandWrites(result);
             } catch (e) { go.disabled = false; this._cpSay(d.note, String(e.message || e), true); }
@@ -138,6 +145,17 @@ export const CompPipelineMixin = {
         d.finish();
         showPlan();
         return d.done;
+    },
+
+    /** Draw the Render3D frames a Write job asks for and hand them over (base64 float32, rows top-down). */
+    async _cpServe3d(rec, jid, need) {
+        const b64 = (arr) => { const u = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); let s = "";
+            for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+        for (const n of need) {
+            const got = await rec.editor.render3dFrame(n.node, n.frame, n.view, n.w, n.h);
+            if (!got) continue;
+            await post("/imageviewer/comp_write_3d", { job: jid, key: n.key, w: got.w, h: got.h, data: b64(got.data), depth: got.depth ? b64(got.depth) : null });
+        }
     },
 
     /** What the Writes wrote: said, and the first file of each in the History. */

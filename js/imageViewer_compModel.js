@@ -32,6 +32,7 @@ import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
 import * as G3 from "./imageViewer_comp3d.js";
+import { sceneCameraSamples, focalFor, eulerOf } from "./imageViewer_compCamImport.js";
 import * as DP from "./imageViewer_compDeep.js";
 import * as PT from "./imageViewer_compPaint.js";
 import * as WP from "./imageViewer_compWarp.js";
@@ -326,7 +327,8 @@ export const NODE_TYPES = {
         bloom_gain: { only: ZD_BLOOM, kind: "num", def: 2, min: 0, key: true, step: 0.1, label: "bloom gain", help: "How much more of a highlight's brightness above the threshold" },
     } },
     // ── 3D (imageViewer_comp3d.js): geometry and cameras are not pictures; Render 3D makes one ──
-    camera3d: { label: "Camera", cat: "3D", inputs: [], params: {
+    camera3d: { label: "Camera", cat: "3D", inputs: ["scene"], params: {
+        from_scene: { kind: "text", def: "", label: "scene camera", help: "A camera of the SceneFile wired into scene (its name): it follows that camera live, frame by frame; empty: the numbers below" },
         translate: { kind: "vec3", def: [0, 0, 2], key: true, step: 0.01, help: "Where it stands, in scene units (y up)" },
         rotate: { kind: "vec3", def: [0, 0, 0], key: true, step: 0.5, help: "Its turn in degrees about x, then y, then z; it looks down its own -z" },
         focal: { kind: "num", def: 35, min: 1, max: 2000, key: true, step: 0.5, help: "Focal length, mm" },
@@ -354,6 +356,18 @@ export const NODE_TYPES = {
         faces: { kind: "enum", def: "both", choices: G3.PROJECT_FACES, help: "front: only surfaces facing the projecting camera take the picture" },
     } },
     scene3d: { label: "Scene", cat: "3D", inputs: ["1", "2", "3", "4"], params: {} },
+    scenefile3d: { label: "SceneFile", cat: "3D", inputs: [], params: {
+        file: { kind: "file", def: "", help: "A scene of the 3D space (.usda, .usdc, .json), or tab:<name> for a scene open in a 3D tab (followed live)" },
+        offset: { kind: "int", def: 0, help: "Frames to slide the scene by: comp frame 0 is the scene's first frame plus this" },
+    } },
+    light3d: { label: "Light", cat: "3D", inputs: [], params: {
+        light: { kind: "enum", def: "point", choices: G3.LIGHT_TYPES, help: "point, spot (along its -Z), directional (along its -Z) or ambient" },
+        color: { kind: "color", def: [1, 1, 1, 1], key: true },
+        intensity: { kind: "num", def: 1, min: 0, key: true, step: 0.05 },
+        translate: { kind: "vec3", def: [0, 2, 2], key: true, step: 0.01 },
+        rotate: { kind: "vec3", def: [-45, 0, 0], key: true, step: 0.5, help: "Degrees about x, then y, then z; spot and directional shine down their own -Z" },
+        cone: { kind: "num", def: 30, min: 1, max: 89, key: true, step: 0.5, help: "spot: the half angle of its cone, degrees" },
+    } },
     pointcloud: { label: "PointCloud", cat: "3D", inputs: ["img", "camera"], params: {
         channel: { kind: "chan", def: "depth.z", help: "Where the picture holds its depth" },
         mode: { kind: "enum", def: "distance", choices: G3.DEPTH_MODES, help: "distance: the depth is the distance along the camera's view; inverse: it is 1 / distance" },
@@ -362,6 +376,7 @@ export const NODE_TYPES = {
         size: { kind: "num", def: 2, min: 0.1, max: 64, key: true, step: 0.1, help: "A point's width when rendered, in pixels" },
     } },
     render3d: { label: "Render3D", cat: "3D", inputs: ["scene", "camera", "bg"], params: {
+        renderer: { kind: "enum", def: "3D space", choices: G3.RENDERERS, help: "3D space: the 3D space's own renderer (models, lights, SceneFiles); built-in: Comp's own, cards and shapes only, unlit" },
         samples: { kind: "int", def: 2, min: 1, max: 4, help: "Samples a pixel each way (antialiasing): 2 is 4 a pixel" },
         depth: { kind: "enum", def: "depth.z", choices: G3.DEPTH_OUT, help: "depth.z: the distance to the nearest surface goes into the depth.z channel (0: nothing)" },
     } },
@@ -901,6 +916,60 @@ export function insertNode(comp, type, afterId, extra = {}) {
         shiftBelow(comp, node, after.id);
     }
     return node;
+}
+
+/**
+ * A Render3D put after a picture comes ready to look at: a Card of that picture, a Camera two units in front of it
+ * looking at it, and the Render3D reading both, taking over what read the picture. Returns {render, card, camera},
+ * or null when ``afterId`` is not a picture (then insertNode does the usual).
+ */
+export function insertRender3dStarter(comp, afterId, extra = {}) {
+    const after = afterId ? nodeById(comp, afterId) : null;
+    if (!after || after.type === "output" || GEO3D.has(after.type) || DEEP.has(after.type) || !NODE_TYPES[after.type]) return null;
+    const x = after.x, y = after.y;
+    const takers = consumers(comp, after.id);
+    const card = makeNode(comp, "card3d", { x, y: y + 70 });
+    addNode(comp, card);
+    card.inputs[0] = after.id;
+    const camera = makeNode(comp, "camera3d", { x: x + NODE_W + 40, y: y + 70 });
+    addNode(comp, camera);
+    const render = makeNode(comp, "render3d", Object.assign({ x, y: y + 140 }, extra));
+    addNode(comp, render);
+    render.inputs[0] = card.id; render.inputs[1] = camera.id;
+    for (const { node: c, port } of takers) c.inputs[port] = render.id;
+    shiftBelow(comp, render, after.id);
+    return { render, card, camera };
+}
+
+/** The 3D nodes of one graph level that would draw nothing as they are wired, with why: {id: text}. Read off the
+ *  graph alone (Dots and disabled nodes passing on as they do), so it holds before anything is rendered. */
+export function warnings3d(level) {
+    const nodes = (level && level.nodes) || [], by = new Map(nodes.map((n) => [n.id, n])), out = {};
+    const through = (id, k = 0) => { const n = id && by.get(id); if (!n || k > 64) return null; return n.type === "dot" || (n.disable && n.inputs && n.inputs[0]) ? through(n.inputs[0], k + 1) : n; };
+    const read = new Set();
+    for (const n of nodes) for (const s of n.inputs || []) { const t = through(s); if (t) read.add(t.id); }
+    const SEEN = new Set(["card3d", "geo3d", "project3d", "pointcloud", "scenefile3d"]);
+    const holds = (id, want, k = 0) => {
+        const n = through(id);
+        if (!n || n.disable || k > 64) return false;
+        if (want.has(n.type)) return true;
+        return n.type === "scene3d" && n.inputs.some((s) => holds(s, want, k + 1));
+    };
+    for (const n of nodes) {
+        if (n.disable) continue;
+        if (n.type === "render3d") {
+            if (!through(n.inputs[0])) out[n.id] = "Nothing to render: wire a Card, a Shape, a SceneFile or a Scene into its scene input.";
+            else if (!holds(n.inputs[0], SEEN)) out[n.id] = "Its scene holds nothing to see: lights and cameras alone draw nothing.";
+            else if (n.renderer === "built-in" && holds(n.inputs[0], new Set(["scenefile3d"])) && !holds(n.inputs[0], new Set(["card3d", "geo3d", "project3d", "pointcloud"])))
+                out[n.id] = "The built-in renderer draws no SceneFile: set renderer to 3D space.";
+            else if (!through(n.inputs[1])) out[n.id] = "No camera wired: it looks from (0, 0, 2) down -Z through a 35 mm lens.";
+        } else if (n.type === "camera3d") {
+            if (n.from_scene && (!through(n.inputs[0]) || through(n.inputs[0]).type !== "scenefile3d")) out[n.id] = "It follows a scene camera: wire a SceneFile into its scene input.";
+            else if (!read.has(n.id)) out[n.id] = "Not used: wire it into a Render3D's camera input (or a Project's, a PointCloud's).";
+        } else if (n.type === "scenefile3d" && !String(n.file || "").trim()) out[n.id] = "No scene yet: pick a scene file, or a 3D tab.";
+        else if (GEO3D.has(n.type) && !read.has(n.id)) out[n.id] = "On its own it shows nothing: wire it into a Scene or a Render3D.";
+    }
+    return out;
 }
 
 // ── groups, tools, backdrops (the graph's own; see imageViewer_compGraph.js) ─────
@@ -1559,7 +1628,16 @@ export function reformatLayout(node, frame, inFmt, scale = 1) {
  * B's). Pictures of other sizes are laid at the bottom left of the one they meet (``conform``).
  */
 /** Nodes whose picture is the comp's size whatever comes in (3D and deep). */
-export const GEO3D = new Set(["camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud"]);
+export const GEO3D = new Set(["camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "scenefile3d", "light3d"]);
+/** A camera of a 3D-space scene by its name (or id): the item, or null. */
+export function sceneCameraIn(scene, name) {
+    const items = ((scene && scene.items) || []).filter((i) => i.kind === "camera");
+    const want = String(name || "").trim();
+    return items.find((i) => i.name === want) || items.find((i) => i.id === want)
+        || items.find((i) => String(i.name || "").toLowerCase() === want.toLowerCase()) || null;
+}
+/** Does the comp have 3D work for the 3D space's renderer (a Render3D not set to built-in)? */
+export const usesEngine3d = (comp) => ((comp && comp.nodes) || []).some((n) => !n.disable && n.type === "render3d" && n.renderer !== "built-in");
 export const DEEP = new Set(["deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"]);
 const PLAIN_SIZE = new Set([...GEO3D, ...DEEP].filter((t) => t !== "project3d"));
 /**
@@ -1916,8 +1994,10 @@ export function cacheKeep(cache, key, value, maxBytes, maxCount) {
     }
 }
 
-const sourceSigOf = (comp, nid, f, ctx, view) => sourceNeeds(comp, nid, f, view).map(({ node: s, frame: sf, deep }) =>
-    `${srcKey(s, sf)}:${tokenOf(deep ? (ctx.deepSource ? ctx.deepSource(s, sf) : null) : ctx.source ? ctx.source(s, sf) : null)}`).join(",");
+const sourceSigOf = (comp, nid, f, ctx, view) => sourceNeeds(comp, nid, f, view).map(({ node: s, frame: sf, deep, scene, engine }) =>
+    engine ? `E${s.id}:${ctx.engine3d ? ctx.engine3d.sig : "0"}`
+        : `${srcKey(s, sf)}:${tokenOf(scene ? (ctx.sceneSource ? ctx.sceneSource(s, sf) : null)
+            : deep ? (ctx.deepSource ? ctx.deepSource(s, sf) : null) : ctx.source ? ctx.source(s, sf) : null)}`).join(",");
 const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key + (ctx.ocio && ctx.ocio(x.spec) ? "+" : "-")).join(",");
 /** The key renderNode keeps node `id`'s result at `frame` under in `ctx.cache` (another renderer - the GPU - keeps
  *  its pictures under the same key, so the two share one cache). */
@@ -2030,7 +2110,29 @@ export function renderNode(comp, id, frame, ctx) {
     // A camera taking a w x h picture; `stereo`: its eye in this view.
     const cameraOf = (cid, f, w, h, stereo) => {
         const c = camNode(cid), p = c ? P3(c, f) : Object.fromEntries(Object.entries(NODE_TYPES.camera3d.params).map(([k, d]) => [k, clone(d.def)]));
+        // Following a camera of a SceneFile: where it stands, its turn and its lens at this frame, live.
+        const sc = c && p.from_scene ? sceneFileOf(c.inputs[0], f) : null;
+        if (sc) {
+            const cam = sceneCameraIn(sc.scene, p.from_scene);
+            const s = cam && sceneCameraSamples(sc.scene, cam.id, sc.frame, sc.frame)[0];
+            if (s) {
+                p.translate = s.t; p.rotate = s.r;
+                if (s.vfov > 0 && s.vfov < 180) p.focal = focalFor(s.vfov, p.haperture, w, h);
+                const clip = Array.isArray(cam.clip) ? cam.clip : null;
+                if (clip && clip[0] > 0) p.near = clip[0];
+                if (clip && clip[1] > 0) p.far = clip[1];
+            }
+        }
         return G3.cameraAt(p, stereo ? eyeOffset(comp, view, p.interaxial) : 0, w, h);
+    };
+    // A SceneFile node's scene as loaded for this draw (ctx.sceneSource) and the scene frame of comp frame f.
+    const sceneFileOf = (nid, f) => {
+        const n = nid && viewNode(nodeById(comp, nid), view);
+        if (!n || n.disable || n.type !== "scenefile3d") return null;
+        const got = ctx.sceneSource ? ctx.sceneSource(n, f) : null;
+        if (!got || !got.scene) return null;
+        const first = Math.round((got.scene.render && got.scene.render.start) || 0);
+        return { node: n, scene: got.scene, key: got.key || n.id, frame: first + Math.round(paramAt(n, "offset", f) || 0) + f };
     };
     const placed = (n, f) => { const p = P3(n, f), u = p.uniform; return G3.trs(p.translate, p.rotate, [p.scale[0] * u, p.scale[1] * u, p.scale[2] * u]); };
     // The scene node `nid` makes: [objects] in world space (see comp3d's renderScene).
@@ -2038,6 +2140,15 @@ export function renderNode(comp, id, frame, ctx) {
         const n = nid && depth < 256 ? viewNode(nodeById(comp, nid), view) : null;
         if (!n || n.disable) return [];
         if (n.type === "scene3d") return [].concat(...n.inputs.map((s) => sceneOf(s, f, depth + 1)));
+        if (n.type === "scenefile3d") {
+            const sc = sceneFileOf(n.id, f);
+            return sc ? [{ kind: "scenefile", id: n.id, key: sc.key, frame: sc.frame }] : [];
+        }
+        if (n.type === "light3d") {
+            const p = P3(n, f);
+            return [{ kind: "light", id: n.id, type: p.light, color: p.color, intensity: p.intensity, cone: p.cone,
+                world: G3.trs(p.translate, p.rotate, [1, 1, 1]) }];
+        }
         if (n.type === "card3d" || n.type === "geo3d") {
             const mesh = n.type === "card3d"
                 ? G3.cardMesh((() => { const F = inFmt(n); return F.height / F.width; })())
@@ -2063,7 +2174,13 @@ export function renderNode(comp, id, frame, ctx) {
         return [];
     };
     const render3d = (n, f, d1) => {
-        const r = G3.renderScene(sceneOf(n.inputs[0], f, d1), cameraOf(n.inputs[1], f, W, H, true), W, H, paramAt(n, "samples", f));
+        const objs = sceneOf(n.inputs[0], f, d1), cam = cameraOf(n.inputs[1], f, W, H, true), ns = paramAt(n, "samples", f);
+        // The 3D space's renderer when the page has one ready (ctx.engine3d); Comp's own otherwise, which draws
+        // cards, shapes and points only (unlit) - a SceneFile and lights need the 3D space.
+        const eng = ctx.engine3d && paramAt(n, "renderer", f) !== "built-in" && ctx.engine3d.ready ? ctx.engine3d : null;
+        let r = eng ? eng.render(objs, cam, W, H, ns, { node: n.id, frame: f }) : null;
+        if (r && !r.deep) r.deep = DP.deepFromImage(r.img, r.depth, 1);
+        if (!r) r = G3.renderScene(objs.filter((o) => o.kind === "mesh" || o.kind === "points"), cam, W, H, ns);
         dmemo.set(`${n.id}@${f}`, r.deep);
         let img = r.img, ex = {};
         if (n.inputs[2]) {
@@ -2286,11 +2403,20 @@ export function renderNode(comp, id, frame, ctx) {
             p.size *= scale; p.maximum *= scale;
             return O.zDefocusImage(src, z, p);
         }
-        case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": {
+        case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": case "scenefile3d": case "light3d": {
             // Geometry on its own: seen through the comp's first Camera, as Render3D would draw it.
-            if (n.type === "camera3d") return X(blank(W, H), {});
             const cam = comp.nodes.find((c) => c.type === "camera3d" && !c.disable);
-            const r = G3.renderScene(sceneOf(n.id, f, d1), cameraOf(cam ? cam.id : null, f, W, H, true), W, H, 1);
+            // A Camera on its own: what the comp's first Render3D using it sees; anything else through the first Camera.
+            let objs, cid;
+            if (n.type === "camera3d") {
+                const user = comp.nodes.find((c) => c.type === "render3d" && !c.disable && c.inputs[1] === n.id);
+                if (!user) return X(blank(W, H), {});
+                objs = sceneOf(user.inputs[0], f, d1); cid = n.id;
+            } else { objs = sceneOf(n.id, f, d1); cid = cam ? cam.id : null; }
+            const c3 = cameraOf(cid, f, W, H, true);
+            const eng = ctx.engine3d && ctx.engine3d.ready ? ctx.engine3d : null;
+            const r = (eng && eng.render(objs, c3, W, H, 1, { node: n.id, frame: f }))
+                || G3.renderScene(objs.filter((o) => o.kind === "mesh" || o.kind === "points"), c3, W, H, 1);
             return X(r.img, {});
         }
         case "project3d": return X(run(n.inputs[0], f, d1), exOf(n.inputs[0], f));
@@ -2506,7 +2632,7 @@ export function mixImages(a, b, t) {
 export function sourcesOf(comp, id) {
     const out = [];
     const seen = new Set();
-    for (const { node } of sourceNeeds(comp, id, 0)) if (!seen.has(node.id)) { seen.add(node.id); out.push(node); }
+    for (const { node, engine, scene } of sourceNeeds(comp, id, 0)) if (!engine && !scene && !seen.has(node.id)) { seen.add(node.id); out.push(node); }
     return out;
 }
 
@@ -2524,6 +2650,10 @@ export function sourceNeeds(comp, id, frame, view = null) {
         if (n.disable) { if (n.inputs.length) walk(n.inputs[0], f, depth + 1, v); return; }
         if (n.type === "read") { out.push({ node: n, frame: f, view: v }); return; }
         if (n.type === "deepread") { out.push({ node: n, frame: f, view: v, deep: true }); return; }
+        // A SceneFile's scene (and the models in it) is loaded before the draw, as a Read's pixels are.
+        if (n.type === "scenefile3d") { out.push({ node: n, frame: f, view: v, scene: true }); return; }
+        // The 3D space's renderer must be up before a Render3D (or geometry viewed on its own) draws with it.
+        if (GEO3D.has(n.type) || n.type === "render3d") out.push({ node: n, frame: f, view: v, engine: true });
         if (n.type === "oneview") { const w = paramAt(n, "view", f) || vs[0] || null; walk(n.inputs[0], f, depth + 1, vs.includes(w) ? w : v); return; }
         if (n.type === "anaglyph" || n.type === "sidebyside") { for (const w of vs.length ? vs.slice(0, 2) : [v]) walk(n.inputs[0], f, depth + 1, w); return; }
         if (n.type === "joinviews") { const i = Math.max(0, vs.indexOf(v)); walk(n.inputs[Math.min(i, 3)] || n.inputs[0], f, depth + 1, v); return; }
