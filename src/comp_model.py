@@ -126,6 +126,10 @@ DEPTH_CHANNELS = ["r", "g", "b", "a", "luminance"]
 FLOW_DETAIL = {"full": 0, "half": 1, "quarter": 2}
 LUM = (0.2126, 0.7152, 0.0722)
 DEFOCUS_SHAPES = ["disc", "polygon"]
+ZD_MATHS = ["direct", "depth", "far = 0", "far = 1", "-direct", "-depth", "far = -0", "far = -1"]
+ZD_OUTPUTS = ["result", "focal plane setup", "layer setup", "filter shape setup"]
+ZD_FILTERS = ["disc", "bladed"]
+ZD_CHANNELS = ["rgba", "rgb", "alpha"]
 LUMA_SOURCES = ["luminance", "max", "red", "green", "blue"]
 KEY_OUTPUTS = ["premultiplied", "matte", "despilled"]
 DESPILL_LIMITS = ["max", "average"]
@@ -376,18 +380,35 @@ NODE_TYPES = {
         "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
     }},
     "zdefocus": {"inputs": ["src"], "params": {
+        "channels": {"kind": "enum", "def": "rgba", "choices": ZD_CHANNELS},
         "channel": {"kind": "chan", "def": "depth.z"},
-        "focus": {"kind": "num", "def": 0.5, "key": True},
-        "dof": {"kind": "num", "def": 0.05, "min": 0, "key": True},
-        "falloff": {"kind": "num", "def": 0.3, "min": 0.001, "key": True},
-        "size": {"kind": "num", "def": 20, "min": 0, "max": 400, "key": True},
-        "layers": {"kind": "int", "def": 6, "min": 2, "max": 16},
-        "shape": {"kind": "enum", "def": "disc", "choices": DEFOCUS_SHAPES},
-        "blades": {"kind": "int", "def": 6, "min": 3, "max": 16},
-        "rotation": {"kind": "num", "def": 0, "key": True},
+        "math": {"kind": "enum", "def": "depth", "choices": ZD_MATHS},
+        "output": {"kind": "enum", "def": "result", "choices": ZD_OUTPUTS},
+        "show_image": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+        "focus": {"kind": "num", "def": 1, "key": True},
+        "focal_point": {"kind": "vec2", "def": None, "key": True},
+        "dof": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "blur_inside": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+        "size": {"kind": "num", "def": 10, "min": 0, "key": True},
+        "maximum": {"kind": "num", "def": 30, "min": 0, "max": 400, "key": True},
+        "fill_foreground": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+        "auto_layers": {"kind": "enum", "def": "on", "choices": ["on", "off"]},
+        "layers": {"kind": "int", "def": 8, "min": 1, "max": 32},
+        "layer_curve": {"kind": "num", "def": 1, "min": -5, "max": 5},
+        "filter": {"kind": "enum", "def": "disc", "choices": ZD_FILTERS},
+        "filter_shape": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
         "aspect": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
-        "threshold": {"kind": "num", "def": 1, "min": 0, "key": True},
-        "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "blades": {"kind": "int", "def": 5, "min": 3, "max": 16},
+        "roundness": {"kind": "num", "def": 0.2, "min": -1, "max": 1, "key": True},
+        "rotation": {"kind": "num", "def": 0, "key": True},
+        "inner_size": {"kind": "num", "def": 0.8, "min": 0, "max": 1, "key": True},
+        "inner_brightness": {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True},
+        "catadioptric": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "catadioptric_size": {"kind": "num", "def": 0.3, "min": 0, "max": 1, "key": True},
+        "gamma": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "bloom": {"kind": "enum", "def": "off", "choices": ["off", "on"]},
+        "bloom_threshold": {"kind": "num", "def": 0.8, "min": 0, "key": True},
+        "bloom_gain": {"kind": "num", "def": 2, "min": 0, "key": True},
     }},
     "glow": {"inputs": ["src"], "params": {
         "threshold": {"kind": "num", "def": 0.8, "key": True},
@@ -659,6 +680,12 @@ def _normalize_level(raw, errors, where, depth):
             for k in ("out", "r", "g", "b", "a"):
                 node.pop(k, None)
             ins = [ins[0] if ins else None, None, ins[1] if len(ins) > 1 else None]
+        if n["type"] == "zdefocus" and "math" not in n and "falloff" in n:
+            # An older ZDefocus (focus / dof / falloff on a 0..1 depth): today's settings with the same blur.
+            up_set, up_drop = z_defocus_upgrade(n)
+            for k in up_drop:
+                node.pop(k, None)
+            node.update(up_set)
         node["inputs"] = [ins[i] if i < len(ins) and isinstance(ins[i], str) else None for i in range(len(inputs_of(node)))]
         if "expr" in node and not isinstance(node["expr"], dict):
             del node["expr"]
@@ -1633,27 +1660,313 @@ def defocus_image(img, p):
     return (acc / total).astype(np.float32)
 
 
-def z_defocus_image(img, z, p):
-    """The page's ``zDefocusImage``: DepthBlur's layers through Defocus's aperture, one plane of depth per pixel."""
-    d = img.astype(np.float64)
-    L = max(2, int(math.floor(p["layers"] + 0.5)))
-    fall = max(p["falloff"], 1e-6)
-    pos = _clamp01((np.abs(z.astype(np.float64) - p["focus"]) - p["dof"] / 2) / fall) * (L - 1)
-    num = np.zeros(d.shape)
-    den = np.zeros(d.shape[:2])
-    for layer in range(L):
-        k = 1 - np.abs(pos - layer)
-        if not (k > 0).any():
+_ZD_INSIDE = 0.25
+
+
+def _zd_coc_of(base, v, e, size):
+    """The page's ``zdCocOf`` on arrays: one pixel's signed blur from its depth and an edge e of the focus slice."""
+    if base == "depth":
+        return np.where(v > 0, size * (1 - e / np.where(v > 0, v, 1.0)), size)
+    if base == "far = 0":
+        if e > 1e-12:
+            return size * (1 - v / e)
+        return np.where(v > 1e-12, -np.inf, 0.0)
+    return size * (v - e)
+
+
+def z_defocus_coc(z, p):
+    """The page's ``zDefocusCoc``: signed circles of confusion (+ behind, - in front, clamped) and the sharp slice."""
+    m = p["math"] if p["math"] in ZD_MATHS else "depth"
+    neg = "-" in m
+    base = m.replace("-", "", 1)
+    size, mx = p["size"], max(0.0, p["maximum"])
+    v = -z.astype(np.float64) if neg else z.astype(np.float64)
+    C = -p["focus"] if neg else p["focus"]
+    half = max(0.0, p["dof"]) / 2
+    lo, hi = C - half, C + half
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        if base == "direct":
+            c = v * size
+            sharp = np.abs(c) < 0.5
+        else:
+            sharp = (v >= lo) & (v <= hi)
+            e = np.where(v < lo, lo, hi)
+            if base == "far = 0":
+                c_lo, c_hi = _zd_coc_of(base, v, lo, size), _zd_coc_of(base, v, hi, size)
+                c = np.where(v < lo, c_lo, c_hi)
+            else:
+                c = _zd_coc_of(base, v, e, size)
+            c = np.where(sharp, 0.0, c)
+            if p["blur_inside"] == "on":
+                pl = _ZD_INSIDE * _zd_coc_of(base, v, C, size)
+                c = np.where(np.abs(pl) > np.abs(c), pl, c)
+        c = np.where(c == c, c, 0.0)
+    return np.clip(c, -mx, mx), sharp
+
+
+def z_layer_sizes(p):
+    """The page's ``zLayerSizes``: blur sizes 0 .. maximum on each side of the focus plane."""
+    mx = max(0.0, p["maximum"])
+    auto = p["auto_layers"] != "off"
+    if auto:
+        L = max(2, min(12, int(math.ceil(mx / 4))))
+    else:
+        L = max(1, min(32, int(math.floor(p["layers"] + 0.5))))
+    curve = 1 if auto else p["layer_curve"]
+    e = 1 + curve if curve >= 0 else 1 / (1 - curve)
+    return [mx * math.pow(k / L, e) for k in range(L + 1)]
+
+
+def z_aperture_rows(D, p):
+    """The page's ``zApertureRows``: [(dy, l, r)] for a blur of diameter D, rows running down."""
+    a = p["aspect"] if p["aspect"] > 0 else 1
+    ax = a if a < 1 else 1.0
+    ay = 1 / a if a > 1 else 1.0
+    r = D / 2
+    rows = []
+    if not r > 0:
+        return rows
+    if p["filter"] != "bladed":
+        rx, ry = r * ax, r * ay
+        R = int(math.ceil(ry))
+        for dy in range(-R, R + 1):
+            if abs(dy) > ry:
+                continue
+            q = dy / ry
+            hw = rx * math.sqrt(max(0.0, 1 - q * q))
+            rows.append((dy, -hw, hw))
+        return rows
+    n = max(3, int(math.floor(p["blades"] + 0.5)))
+    rot = (p["rotation"] * math.pi) / 180
+    rd, M = p["roundness"], 6
+    cx = [r * math.cos(rot + (2 * math.pi * k) / n + math.pi / 2) for k in range(n)]
+    cy = [r * math.sin(rot + (2 * math.pi * k) / n + math.pi / 2) for k in range(n)]
+    pts, ymax = [], 0.0
+    for k in range(n):
+        k1 = (k + 1) % n
+        for j in range(M):
+            t = j / M
+            x = cx[k] + (cx[k1] - cx[k]) * t
+            y = cy[k] + (cy[k1] - cy[k]) * t
+            rp = math.sqrt(x * x + y * y)
+            s = (rp + rd * (r - rp)) / rp if rp > 1e-12 else 1
+            px, py = x * s * ax, -(y * s * ay)
+            pts.append((px, py))
+            ymax = max(ymax, abs(py))
+    R = int(math.ceil(ymax))
+    for dy in range(-R, R + 1):
+        lo, hi = math.inf, -math.inf
+        for k in range(len(pts)):
+            P, Q = pts[k], pts[(k + 1) % len(pts)]
+            if (P[1] <= dy) != (Q[1] <= dy):
+                x = P[0] + ((dy - P[1]) * (Q[0] - P[0])) / (Q[1] - P[1])
+                lo = min(lo, x)
+                hi = max(hi, x)
+        if hi > lo:
+            rows.append((dy, lo, hi))
+    return rows
+
+
+def _zd_sum(s, rows):
+    """The page's ``zdSum``: the sum over the aperture's rows around each pixel (edge repeated) and their area."""
+    spans = [(dy,) + _row_span(l, r) for dy, l, r in rows]
+    if not spans:
+        return s.copy(), 1.0
+    h, w, C = s.shape
+    reach = 1
+    for _, a, b, _, _ in spans:
+        reach = max(reach, abs(a) + 1, abs(b) + 1)
+    total = 0.0
+    for _, a, b, wa, wb in spans:
+        if a == b:
+            total += wa
             continue
-        k = np.where(k > 0, k, 0.0)
-        col = (d * k[..., None]).astype(np.float32)
-        wt = k.astype(np.float32)[..., None]   # one channel: the page blurs four alike, each the same numbers
-        size = (p["size"] * layer) / (L - 1)
-        ap = {"size": size, "shape": p["shape"], "blades": p["blades"], "rotation": p["rotation"], "aspect": p["aspect"]}
-        num = num + defocus_image(col, dict(ap, threshold=p["threshold"], bloom=p["bloom"]))
-        den = den + defocus_image(wt, dict(ap, threshold=1, bloom=0))[..., 0]
-    ok = (den > 1e-6)[..., None]
-    return np.where(ok, num / np.where(ok, den[..., None], 1), d).astype(np.float32)
+        if b - 1 >= a + 1:
+            total += b - 1 - (a + 1) + 1
+        total += wa
+        total += wb
+    Q = np.concatenate([np.repeat(s[:, :1], reach, axis=1), s, np.repeat(s[:, -1:], reach, axis=1)], axis=1)
+    P = np.concatenate([np.zeros((h, 1, C)), np.cumsum(Q, axis=1)], axis=1)
+    ry = max(abs(k[0]) for k in spans)
+    yy = np.clip(np.arange(-ry, h + ry), 0, h - 1)
+    Q, P = Q[yy], P[yy]
+    acc = np.zeros((h, w, C))
+    o = reach
+    for dy, a, b, wa, wb in spans:
+        Qr, Pr = Q[ry + dy:ry + dy + h], P[ry + dy:ry + dy + h]
+        if a == b:
+            acc += wa * Qr[:, o + a:o + a + w]
+            continue
+        if b - 1 >= a + 1:
+            acc += Pr[:, o + b:o + b + w] - Pr[:, o + a + 1:o + a + 1 + w]
+        acc += wa * Qr[:, o + a:o + a + w]
+        acc += wb * Qr[:, o + b:o + b + w]
+    return acc, total
+
+
+def _zd_gauss(s, sigma):
+    out = s.astype(np.float64)
+    if not sigma > 0:
+        return out.copy()
+    for b in boxes_for_gauss(sigma):
+        r = (b - 1) // 2
+        out = _box_axis(out, r, 1)
+        out = _box_axis(out, r, 0)
+    return out
+
+
+def _zd_conv(s, D, p):
+    """The page's ``zdConv``: the stack's mean through the aperture of a blur of diameter D."""
+    if p["filter"] == "bladed":
+        So, To = _zd_sum(s, z_aperture_rows(D, p))
+        b = float(np.clip(p["inner_brightness"], 0, 1))
+        num, den = So, To
+        if b < 1:
+            Si, Ti = _zd_sum(s, z_aperture_rows(D * float(np.clip(p["inner_size"], 0, 1)), p))
+            num = num - (1 - b) * Si
+            den = den - (1 - b) * Ti
+        if p["catadioptric"] == "on":
+            sh = float(np.clip(p["catadioptric_size"], 0, 1))
+            if b < 1:
+                sh = min(sh, float(np.clip(p["inner_size"], 0, 1)))
+            Sh, Th = _zd_sum(s, z_aperture_rows(D * sh, p))
+            num = num - b * Sh
+            den = den - b * Th
+        if den > 1e-9 * To:
+            return num / den
+        return So / To
+    fs = float(np.clip(p["filter_shape"], 0, 1))
+    if fs <= 0:
+        return _zd_gauss(s, (D / 2) / 2)
+    So, To = _zd_sum(s, z_aperture_rows(D, p))
+    if fs >= 1:
+        return So / To
+    return (So / To) * fs + _zd_gauss(s, (D / 2) / 2) * (1 - fs)
+
+
+def _zd_setup(img, sharp, front, lev, p):
+    d = img.astype(np.float64)
+    h, w = d.shape[:2]
+    v = 0.25 + 0.75 * lev
+    r = np.where(sharp, 0.0, np.where(front, v, 0.0))
+    g = np.where(sharp, 1.0, 0.0)
+    b = np.where(sharp, 0.0, np.where(front, 0.0, v))
+    if p["show_image"] != "off":
+        base = LUM[0] * d[..., 0] + LUM[1] * d[..., 1] + LUM[2] * d[..., 2]
+        r, g, b = 0.35 * base + 0.65 * r, 0.35 * base + 0.65 * g, 0.35 * base + 0.65 * b
+    return np.stack([r, g, b, np.ones((h, w))], axis=-1).astype(np.float32)
+
+
+def z_defocus_image(img, z, p):
+    """The page's ``zDefocusImage``: layers of blur sizes from the back to the front, or a setup picture."""
+    d = img.astype(np.float64)
+    h, w = d.shape[:2]
+    out0 = p.get("output") or "result"
+    if out0 == "filter shape setup":
+        s = np.zeros((h, w, 1))
+        s[h // 2, w // 2, 0] = 1
+        k = _zd_conv(s, max(0.0, p["maximum"]), p)[..., 0]
+        mx = max(0.0, float(k.max()))
+        v = k / mx if mx > 0 else np.zeros_like(k)
+        return np.stack([v, v, v, np.ones((h, w))], axis=-1).astype(np.float32)
+    coc, sharp = z_defocus_coc(z.reshape(h, w), p)
+    mx = max(0.0, p["maximum"])
+    sizes = z_layer_sizes(p)
+    L = len(sizes) - 1
+    S = np.array(sizes, dtype=np.float64)
+    ac = np.abs(coc)
+    K = np.zeros((h, w), dtype=np.int64)
+    for j in range(1, L):
+        K = np.where(S[j] <= ac, j, K)
+    span = S[K + 1] - S[K]
+    T = np.clip(np.where(span > 0, (ac - S[K]) / np.where(span > 0, span, 1.0), 0.0), 0, 1)
+    if out0 == "focal plane setup":
+        lev = np.minimum(1.0, ac / mx) if mx > 0 else np.ones((h, w))
+        return _zd_setup(img, sharp, coc < 0, lev, p)
+    if out0 == "layer setup":
+        q = K + (T >= 0.5)
+        lev = S[q] / mx if mx > 0 else np.ones((h, w))
+        return _zd_setup(img, q == 0, coc < 0, lev, p)
+    if not mx > 0:
+        return img
+    col = d.copy()
+    gam = p["gamma"] == "on"
+    if p["bloom"] == "on":
+        thr, gain = p["bloom_threshold"], p["bloom_gain"]
+        Lm = LUM[0] * col[..., 0] + LUM[1] * col[..., 1] + LUM[2] * col[..., 2]
+        m = np.where((Lm > thr) & (Lm > 0), (thr + (Lm - thr) * gain) / np.where(Lm > 0, Lm, 1.0), 1.0)
+        for c in range(3):
+            col[..., c] = col[..., c] * m
+    if gam:
+        for c in range(3):
+            x = col[..., c]
+            col[..., c] = np.where(x > 0, np.power(np.where(x > 0, x, 1.0), 2.2), x)
+    order = [(1, k) for k in range(L, 0, -1)] + [(0, 0)] + [(-1, k) for k in range(1, L + 1)]
+    acc = np.zeros((h, w, 4))
+    A = np.zeros((h, w))
+    fill = p["fill_foreground"] != "off"
+    filled = False
+    for side, k in order:
+        wt = np.where(K == k, 1 - T, np.where(K + 1 == k, T, 0.0))
+        if k > 0:
+            wt = np.where((coc > 0) if side > 0 else (coc < 0), wt, 0.0)
+        if not (wt > 0).any():
+            continue
+        wt = np.where(wt > 0, wt, 0.0)
+        st = np.concatenate([col * wt[..., None], wt[..., None]], axis=-1)
+        if side < 0 and fill and not filled:
+            filled = True
+            g = _zd_gauss(np.concatenate([acc, A[..., None]], axis=-1), max(1.0, mx / 2))
+            den = g[..., 4]
+            ok = den > 1e-6
+            F = g[..., :4] / np.where(ok, den, 1.0)[..., None]
+            acc = np.where(ok[..., None], acc + F * (1 - A)[..., None], acc)
+            A = np.where(ok, 1.0, A)
+        bl = _zd_conv(st, sizes[k], p) if k > 0 else st
+        W = bl[..., 4]
+        acc = bl[..., :4] + acc * (1 - W)[..., None]
+        A = W + A * (1 - W)
+    ok = A > 1e-6
+    res = acc / np.where(ok, A, 1.0)[..., None]
+    if gam:
+        for c in range(3):
+            x = res[..., c]
+            res[..., c] = np.where(x > 0, np.power(np.where(x > 0, x, 1.0), 1 / 2.2), x)
+    ch = p.get("channels") or "rgba"
+    if ch == "alpha":
+        res[..., :3] = d[..., :3]
+    elif ch == "rgb":
+        res[..., 3] = d[..., 3]
+    return np.where(ok[..., None], res, d).astype(np.float32)
+
+
+def z_defocus_upgrade(n):
+    """The page's ``zDefocusUpgrade``: an older ZDefocus's settings as today's (fields to set, fields to drop)."""
+    def num(v, d):
+        return v if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) else d
+    size = num(n.get("size"), 20)
+    fall = max(num(n.get("falloff"), 0.3), 1e-6)
+    bl = num(n.get("bloom"), 0)
+    up = {
+        "math": "far = 1", "size": _round_half_up((size / fall) * 1e4) / 1e4, "maximum": size,
+        "auto_layers": "off", "layers": max(1, int(math.floor(num(n.get("layers"), 6) + 0.5)) - 1), "layer_curve": 0,
+        "filter": "bladed" if n.get("shape") == "polygon" else "disc", "filter_shape": 1, "roundness": 0, "inner_brightness": 1,
+        "blur_inside": "off", "bloom": "on" if bl > 0 else "off", "bloom_threshold": num(n.get("threshold"), 1), "bloom_gain": 1 + bl,
+    }
+    if isinstance(n.get("tracks"), dict):
+        tr = dict(n["tracks"])
+        if tr.get("size"):
+            tr["maximum"] = tr.pop("size")
+        if tr.get("threshold"):
+            tr["bloom_threshold"] = tr.pop("threshold")
+        tr.pop("bloom", None)
+        tr.pop("falloff", None)
+        up["tracks"] = tr
+    return up, ["falloff", "shape", "threshold"]
+
+
+def _round_half_up(v):
+    return math.floor(v + 0.5)
 
 
 def _smooth(e0, e1, x):
@@ -2932,6 +3245,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if z is None:
                 return src
             p["size"] = p["size"] * scale
+            p["maximum"] = p["maximum"] * scale
             return z_defocus_image(src, z, p)
         if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud"):
             if t == "camera3d":

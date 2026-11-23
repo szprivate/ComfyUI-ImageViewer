@@ -287,6 +287,12 @@ test("defocus spreads a point into its aperture, keeping its energy", async () =
     assert.ok(C.NODE_TYPES.defocus && C.HEAVY.has("defocus"));
 });
 
+const zdParams = (over = {}) => {
+    const p = {};
+    for (const [k, d] of Object.entries(C.NODE_TYPES.zdefocus.params)) p[k] = d.def;
+    return Object.assign(p, over);
+};
+
 test("zdefocus leaves the focus sharp and defocuses what is far from it", () => {
     const w = 24, h = 8;
     const img = C.blank(w, h), z = new Float64Array(w * h);
@@ -295,7 +301,7 @@ test("zdefocus leaves the focus sharp and defocuses what is far from it", () => 
         img.data.set([on, on, on, 1], i);
         z[y * w + x] = x < 12 ? 0.5 : 1;
     }
-    const p = { focus: 0.5, dof: 0.1, falloff: 0.3, size: 6, layers: 6, shape: "disc", blades: 6, rotation: 0, aspect: 1, threshold: 1, bloom: 0 };
+    const p = zdParams({ math: "far = 1", focus: 0.5, dof: 0.1, size: 20, maximum: 6, blur_inside: "off" });
     const out = O.zDefocusImage(img, z, p);
     const at = (x) => out.data[(4 * w + x) * 4];
     assert.ok(Math.abs(at(3) - 1) < 1e-6 && Math.abs(at(4)) < 1e-6, "in focus: the stripes stay");
@@ -304,6 +310,63 @@ test("zdefocus leaves the focus sharp and defocuses what is far from it", () => 
     const flat = O.zDefocusImage(img, new Float64Array(w * h).fill(0.5), p);
     assert.deepEqual(Array.from(flat.data), Array.from(img.data));
     assert.ok(C.NODE_TYPES.zdefocus && C.HEAVY.has("zdefocus") && C.MASKABLE.has("zdefocus"));
+});
+
+test("zdefocus maths: depth, 1 / distance, 0..1 and direct give the blur its sign and size", () => {
+    const coc = (math, v, over = {}) => O.zDefocusCoc(new Float64Array([v]), zdParams({ math, size: 10, maximum: 50, blur_inside: "off", ...over })).coc[0];
+    // depth: the distance; behind the focus grows towards size, in front beyond it.
+    assert.ok(Math.abs(coc("depth", 4, { focus: 2 }) - 5) < 1e-9);
+    assert.ok(Math.abs(coc("depth", 1, { focus: 2 }) + 10) < 1e-9);
+    assert.ok(Math.abs(coc("depth", 0, { focus: 2 }) - 10) < 1e-9, "0: nothing there, as far as can be");
+    // far = 0: 1 / distance, so 0.25 is the distance 4: the same blur as depth's.
+    assert.ok(Math.abs(coc("far = 0", 0.25, { focus: 0.5 }) - 5) < 1e-9);
+    assert.ok(Math.abs(coc("far = -0", -0.25, { focus: -0.5 }) - 5) < 1e-9);
+    assert.ok(Math.abs(coc("-depth", -4, { focus: -2 }) - 5) < 1e-9);
+    assert.ok(Math.abs(coc("far = 1", 0.7, { focus: 0.5 }) - 2) < 1e-9);
+    assert.ok(Math.abs(coc("direct", 0.5) - 5) < 1e-9 && Math.abs(coc("-direct", 0.5) + 5) < 1e-9);
+    // The depth of field: sharp inside it, the blur measured from its edge outside it; clamped to maximum.
+    const r = O.zDefocusCoc(new Float64Array([2.4, 4]), zdParams({ math: "depth", focus: 2, dof: 1, size: 10, maximum: 3, blur_inside: "off" }));
+    assert.equal(r.coc[0], 0); assert.equal(r.sharp[0], 1);
+    assert.equal(r.coc[1], 3); assert.equal(r.sharp[1], 0);
+    // Blur inside: a little blur within the depth of field too.
+    const b = O.zDefocusCoc(new Float64Array([2.4]), zdParams({ math: "depth", focus: 2, dof: 1, size: 10, maximum: 30 }));
+    assert.ok(b.coc[0] > 0 && b.sharp[0] === 1);
+});
+
+test("zdefocus's focal plane setup colours the depth of field without blurring", () => {
+    const w = 3, h = 1, img = C.blank(w, h);
+    img.data.fill(0.5);
+    const z = new Float64Array([1, 2, 4]);
+    const out = O.zDefocusImage(img, z, zdParams({ math: "depth", focus: 2, dof: 0.2, size: 10, maximum: 10, output: "focal plane setup", show_image: "off" }));
+    const px = (i) => Array.from(out.data.slice(i * 4, i * 4 + 4));
+    assert.ok(px(0)[0] > 0.9 && px(0)[1] === 0 && px(0)[2] === 0, "in front: red");
+    assert.deepEqual(px(1), [0, 1, 0, 1], "in focus: green");
+    assert.ok(px(2)[2] > 0.25 && px(2)[0] === 0 && px(2)[1] === 0, "behind: blue");
+    const over = O.zDefocusImage(img, z, zdParams({ math: "depth", focus: 2, dof: 0.2, output: "focal plane setup" }));
+    assert.ok(over.data[4] > 0 && over.data[5] < 1, "show image: the picture under the colours");
+});
+
+test("zdefocus: a blurred foreground spreads over what is behind it, a blurred background not over a sharp foreground", () => {
+    const w = 40, h = 1, img = C.blank(w, h), z = new Float64Array(w);
+    for (let x = 0; x < w; x++) { const fg = x < 20; img.data.set(fg ? [1, 0, 0, 1] : [0, 0, 1, 1], x * 4); z[x] = fg ? 1 : 10; }
+    // Focus on the near (red) half: the far (blue) half blurs but stays off the red.
+    const a = O.zDefocusImage(img, z, zdParams({ math: "depth", focus: 1, size: 12, maximum: 12, blur_inside: "off" }));
+    assert.ok(a.data[18 * 4 + 2] < 1e-6, "no blue on the sharp red edge");
+    // Focus on the far half: the near red blurs over the blue.
+    const b = O.zDefocusImage(img, z, zdParams({ math: "depth", focus: 10, size: 12, maximum: 12, blur_inside: "off" }));
+    assert.ok(b.data[22 * 4] > 0.05, "red over the blue beside it");
+});
+
+test("an older zdefocus is read as today's with the same circles of confusion", () => {
+    const comp = { comp: 1, format: { width: 8, height: 8 }, nodes: [{ id: "ZDefocus1", type: "zdefocus", inputs: [null], channel: "depth.z",
+        focus: 0.5, dof: 0.05, falloff: 0.3, size: 20, layers: 6, shape: "polygon", blades: 6, rotation: 0, aspect: 1, threshold: 1, bloom: 0 }], output: null };
+    const n = C.normalizeComp(comp).comp.nodes[0];
+    assert.equal(n.math, "far = 1"); assert.equal(n.maximum, 20); assert.ok(Math.abs(n.size - 20 / 0.3) < 1e-3);
+    assert.equal(n.filter, "bladed"); assert.equal(n.layers, 5); assert.equal(n.falloff, undefined); assert.equal(n.shape, undefined);
+    const z = new Float64Array([0.5, 0.6, 0.9]);
+    const c = O.zDefocusCoc(z, zdParams(n)).coc;
+    const old = (v) => Math.min(1, Math.max(0, (Math.abs(v - 0.5) - 0.025) / 0.3)) * 20;
+    for (let i = 0; i < 3; i++) assert.ok(Math.abs(c[i] - old(z[i])) < 1e-3, `${z[i]}: ${c[i]} vs ${old(z[i])}`);
 });
 
 test("keyers, erode / dilate, laplacian and channel ops", async () => {
