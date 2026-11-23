@@ -25,7 +25,7 @@ import { COMP_SUFFIX, addLayer, isCompPath, makeNode, sourceName } from "./image
 import { decodeDeep } from "./imageViewer_compDeep.js";
 import { cameraKeys, sceneCameraSamples, sceneCameras } from "./imageViewer_compCamImport.js";
 import { showInstallLog } from "./imageViewer_installLog.js";
-import { Comp3DEngine } from "./imageViewer_comp3dEngine.js";
+import { Comp3DEngine, isModelFile, modelScene } from "./imageViewer_comp3dEngine.js";
 
 export const COMP_PREFIX = "comp:";
 /** The dock panels of a comp tab, and the editor part each one holds. */
@@ -1291,7 +1291,11 @@ export const CompPanelMixin = {
 
     /** The comp tab's 3D renderer (made on first use; it lives in the tab's element, hidden). */
     _cpEngine(rec) {
-        if (!rec.engine) rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); } });
+        if (!rec.engine) rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); },
+            // How the 3D space finds a model's file, so a SceneFile's models (and a model file on its own) load.
+            hooks: { srcUrl: (src) => this.buildImgUrl(src, { noColor: true }),
+                resolveResource: (name, frame) => this._modelResourceUrl ? this._modelResourceUrl(name, frame) : null,
+                plateInfo: (src) => this.plateInfo(src), plateFrameUrl: (src, n) => this.plateFrameUrl(src, n) } });
         return rec.engine;
     },
 
@@ -1308,7 +1312,8 @@ export const CompPanelMixin = {
     /**
      * A SceneFile's scene, loaded into the tab's 3D renderer: {scene, key} (the same object while nothing changed,
      * so the comp's cache keeps its pictures), or null. "tab:<name>" is a scene open in a 3D tab, followed live
-     * (previzChanged -> compScenesChanged); a path is read through /imageviewer/scene, looked at again every 5 s.
+     * (previzChanged -> compScenesChanged); a path is read through /imageviewer/scene, looked at again every 5 s; a model file (glb, fbx, obj, abc ...) is a scene of
+     * that one model (modelScene).
      */
     async _cpLoadScene(rec, n) {
         const file = String((n && n.file) || "").trim();
@@ -1326,7 +1331,12 @@ export const CompPanelMixin = {
             rec.sceneFiles = rec.sceneFiles || new Map();
             const had = rec.sceneFiles.get(file);
             if (had && performance.now() - had.t < 5000) ({ scene, key } = had);
-            else {
+            else if (isModelFile(file)) {
+                // A model file on its own (what the 3D space's Import Model takes): one model item at the origin.
+                scene = had ? had.scene : modelScene(file);
+                key = had ? had.key : `model:${file}`;
+                rec.sceneFiles.set(file, { t: Infinity, scene, key, text: "" });
+            } else {
                 const res = await api.fetchApi(`/imageviewer/scene?${new URLSearchParams({ path: file })}`);
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok || !data.scene) throw new Error(data.error || `HTTP ${res.status}`);

@@ -478,9 +478,10 @@ NODE_TYPES = {
         "faces": {"kind": "enum", "def": "both", "choices": G3.PROJECT_FACES},
     }},
     "scene3d": {"inputs": ["1", "2", "3", "4"], "params": {}},
-    "scenefile3d": {"inputs": [], "params": {
+    "scenefile3d": {"inputs": ["img"], "params": {
         "file": {"kind": "file", "def": ""},
         "offset": {"kind": "int", "def": 0},
+        "objects": {"kind": "text", "def": ""},
     }},
     "light3d": {"inputs": [], "params": {
         "light": {"kind": "enum", "def": "point", "choices": G3.LIGHT_TYPES},

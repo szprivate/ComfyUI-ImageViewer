@@ -356,9 +356,10 @@ export const NODE_TYPES = {
         faces: { kind: "enum", def: "both", choices: G3.PROJECT_FACES, help: "front: only surfaces facing the projecting camera take the picture" },
     } },
     scene3d: { label: "Scene", cat: "3D", inputs: ["1", "2", "3", "4"], params: {} },
-    scenefile3d: { label: "SceneFile", cat: "3D", inputs: [], params: {
-        file: { kind: "file", def: "", help: "A scene of the 3D space (.usda, .usdc, .json), or tab:<name> for a scene open in a 3D tab (followed live)" },
+    scenefile3d: { label: "SceneFile", cat: "3D", inputs: ["img"], params: {
+        file: { kind: "file", def: "", help: "A scene of the 3D space (.usda, .usdc, .json), any model the 3D space imports (.glb, .gltf, .fbx, .obj, .stl, .ply, .usdz, .abc, splats), or tab:<name> for a scene open in a 3D tab (followed live)" },
         offset: { kind: "int", def: 0, help: "Frames to slide the scene by: comp frame 0 is the scene's first frame plus this" },
+        objects: { kind: "text", def: "", label: "picture on", help: "With a Project (or a picture) wired into img: the items or model parts it goes on, by name, comma separated; empty: every mesh of the scene" },
     } },
     light3d: { label: "Light", cat: "3D", inputs: [], params: {
         light: { kind: "enum", def: "point", choices: G3.LIGHT_TYPES, help: "point, spot (along its -Z), directional (along its -Z) or ambient" },
@@ -2142,7 +2143,16 @@ export function renderNode(comp, id, frame, ctx) {
         if (n.type === "scene3d") return [].concat(...n.inputs.map((s) => sceneOf(s, f, depth + 1)));
         if (n.type === "scenefile3d") {
             const sc = sceneFileOf(n.id, f);
-            return sc ? [{ kind: "scenefile", id: n.id, key: sc.key, frame: sc.frame }] : [];
+            if (!sc) return [];
+            const ob = { kind: "scenefile", id: n.id, key: sc.key, frame: sc.frame, tex: null, proj: null, faces: "both", objects: paramAt(n, "objects", f) || "" };
+            // A Project wired into img puts its picture on the scene's own meshes through its camera, a picture on their UVs.
+            const src = n.inputs[0] && viewNode(nodeById(comp, n.inputs[0]), view);
+            if (src && !src.disable && src.type === "project3d") {
+                const img = run(src.inputs[0], f, depth + 1);
+                ob.proj = { img, cam: cameraOf(src.inputs[1], f, img.w, img.h, false) };
+                ob.faces = paramAt(src, "faces", f);
+            } else if (n.inputs[0]) ob.tex = run(n.inputs[0], f, depth + 1);
+            return [ob];
         }
         if (n.type === "light3d") {
             const p = P3(n, f);
@@ -2651,7 +2661,7 @@ export function sourceNeeds(comp, id, frame, view = null) {
         if (n.type === "read") { out.push({ node: n, frame: f, view: v }); return; }
         if (n.type === "deepread") { out.push({ node: n, frame: f, view: v, deep: true }); return; }
         // A SceneFile's scene (and the models in it) is loaded before the draw, as a Read's pixels are.
-        if (n.type === "scenefile3d") { out.push({ node: n, frame: f, view: v, scene: true }); return; }
+        if (n.type === "scenefile3d") { out.push({ node: n, frame: f, view: v, scene: true }); walk(n.inputs[0], f, depth + 1, v); return; }
         // The 3D space's renderer must be up before a Render3D (or geometry viewed on its own) draws with it.
         if (GEO3D.has(n.type) || n.type === "render3d") out.push({ node: n, frame: f, view: v, engine: true });
         if (n.type === "oneview") { const w = paramAt(n, "view", f) || vs[0] || null; walk(n.inputs[0], f, depth + 1, vs.includes(w) ? w : v); return; }

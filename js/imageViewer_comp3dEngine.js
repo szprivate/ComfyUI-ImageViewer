@@ -14,14 +14,15 @@
 //
 // Unlit unless the scene has lights: a Card shows its picture as it is (Comp's renderer's look); with a Light node
 // (or a SceneFile's lights) cards and shapes are lit (diffuse; a light's intensity 1 at right angles gives the
-// picture's own colour). A Projection is always unlit.
+// picture's own colour). A Projection is always unlit. A SceneFile wired to a Project (or a picture) puts it on its
+// own meshes (all of them, or the ones its `objects` names) for the draw, unlit too; see sceneFileMeshes.
 //
 // render() is synchronous (renderNode is): everything slow - three.js, the models of a SceneFile - is made ready
 // before the draw by ensure() and prepareScene(), which the editor awaits with the Reads (sourceNeeds' `engine` and
 // `scene` needs). `sig` changes whenever what render() would draw changes for other reasons than its arguments, and
 // is part of every 3D node's cache key.
 import { Model3DView } from "./imageViewer_model3d.js";
-import { parseScene } from "./imageViewer_scene3d.js";
+import { MODEL_IMPORT_EXTS, makeModelItem, parseScene } from "./imageViewer_scene3d.js";
 import { RoomMixin } from "./imageViewer_comp3dRoom.js";
 
 const MAX_SAMPLES = 4;
@@ -104,6 +105,91 @@ const GENERIC_DEPTH = {
     fragmentShader: "varying float vDepth;\nvoid main() { gl_FragColor = vec4(vDepth, 0.0, 0.0, 1.0); }",
 };
 
+// A SceneFile's own meshes with a picture of Comp's on them (Sebastian 2026-11-23: "enable to project onto actual
+// meshes as well"): three's unlit MeshBasicMaterial, so skinned, morphed and instanced meshes deform as they do in
+// the 3D space, with its colour replaced at the end by the projected picture (the arithmetic of FRAG above) or, wired
+// without a Project, the picture on the mesh's own UVs. Its faces' outward side comes from the derivatives of the
+// world position (the mesh's normals may be missing or smoothed), turned by gl_FrontFacing. The meshes stay solid:
+// their depth is laid first (render's hold-out pass), so a part the picture does not reach is a transparent hole that
+// hides the mesh's own far side and what is behind it, and depth.z is the mesh's wherever it is.
+const MESH_PROJ_PARS = `
+uniform sampler2D ivMap;
+uniform bool ivProj;
+uniform mat4 ivProjView;
+uniform float ivPk;
+uniform float ivPky;
+uniform float ivPsx;
+uniform vec3 ivProjPos;
+uniform bool ivFrontOnly;
+varying vec3 ivWorld;
+varying vec2 ivUv;
+`;
+const MESH_PROJ_VERT = `
+    vec4 ivW = vec4(transformed, 1.0);
+#ifdef USE_INSTANCING
+    ivW = instanceMatrix * ivW;
+#endif
+    ivWorld = (modelMatrix * ivW).xyz;
+    ivUv = uv;
+`;
+const MESH_PROJ_FRAG = `
+    vec4 ivC;
+    if (ivProj) {
+        vec4 q = ivProjView * vec4(ivWorld, 1.0);
+        float d = -q.z;
+        vec2 puv = vec2((ivPk * q.x / d + ivPsx + 1.0) * 0.5, (ivPky * q.y / d + 1.0) * 0.5);
+        bool off = d <= 0.0 || puv.x < 0.0 || puv.y < 0.0 || puv.x > 1.0 || puv.y > 1.0;
+        if (ivFrontOnly) {
+            vec3 fn = normalize(cross(dFdx(ivWorld), dFdy(ivWorld)));
+            if (dot(fn, cameraPosition - ivWorld) < 0.0) fn = -fn;
+            if (!gl_FrontFacing) fn = -fn;
+            if (dot(fn, ivProjPos - ivWorld) <= 0.0) off = true;
+        }
+        ivC = off ? vec4(0.0) : texture2D(ivMap, puv);
+    } else ivC = texture2D(ivMap, ivUv);
+    if (ivC.a <= 0.0) discard;
+    gl_FragColor = ivC;
+`;
+
+/** Which of the view's meshes a SceneFile object (sceneOf's {kind: "scenefile", id, objects}) puts its picture on:
+ *  every mesh of that SceneFile's items but cameras and lights, or with `objects` (names, comma separated) the
+ *  items of those names and the nodes inside a model of those names, with what is under them. */
+export function sceneFileMeshes(entries, ob) {
+    const want = String(ob.objects || "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+    const out = new Set();
+    const usable = (o) => o.isMesh && !o.isLine && !o.isPoints && !o.isSprite && o.name !== "splatbounds" && o.name !== "worldsky"
+        && !(o.userData && (o.userData.imageViewerNoShadow || o.userData.imageViewerSplat || o.userData.imageViewerSplatBounds || o.userData.imageViewerLightGlyph));
+    const all = (root) => root.traverse((o) => { if (usable(o)) out.add(o); });
+    for (const [id, entry] of entries) {
+        const parts = String(id).split("::");
+        if (parts[0] !== ob.id) continue;
+        const it = (entry && entry.item) || {}, root = entry && (entry.top || entry.root);
+        if (!root || it.kind === "camera" || it.kind === "light") continue;
+        if (!want.length || want.includes(String(it.name || "").toLowerCase()) || want.includes(parts.slice(1).join("::").toLowerCase())) { all(root); continue; }
+        root.traverse((o) => { if (o !== root && o.name && want.includes(String(o.name).toLowerCase())) all(o); });
+    }
+    return [...out];
+}
+
+/** A scene file of the 3D space (read by /imageviewer/scene): USD stages and the older JSON scenes. */
+export const SCENE_FILE_EXTS = [".usda", ".usdc", ".usd", ".json"];
+
+/** Is `path` a model a SceneFile opens on its own, as the 3D space's Import Model does (glTF, FBX, OBJ, STL, PLY,
+ *  USDZ, Alembic, splats)? A .usd / .usda / .usdc is read as a scene instead (a foreign stage becomes its items). */
+export function isModelFile(path) {
+    const m = /\.[^./\\]+$/.exec(String(path || "").trim().toLowerCase());
+    return !!m && MODEL_IMPORT_EXTS.includes(m[0]) && !SCENE_FILE_EXTS.includes(m[0]);
+}
+
+/** The scene a SceneFile makes of one model file: the model at the origin, named after the file. */
+export function modelScene(path) {
+    const file = String(path || "").trim();
+    const name = file.split(/[\\/]/).pop().replace(/\.[^.]+$/, "") || "model";
+    const item = makeModelItem({ path: file, name, kind: "model" }, name);
+    item.id = "model";
+    return { items: [item], render: { start: 0 } };
+}
+
 /** A row-major 4 x 4 (comp3d's) as three's Matrix4 (whose set() takes rows). */
 const mat4 = (THREE, m) => new THREE.Matrix4().set(...m);
 
@@ -170,14 +256,17 @@ export function mergeScenes(entries) {
 }
 
 export class Comp3DEngine {
-    /** host: an element of the page the hidden view lives in. onChange(): what it draws changed (a scene arrived). */
-    constructor(host, { onChange } = {}) {
+    /** host: an element of the page the hidden view lives in. onChange(): what it draws changed (a scene arrived).
+     *  hooks: the Model3DView hooks that find a model's file (srcUrl, resolveResource, plateInfo, plateFrameUrl) -
+     *  without srcUrl a SceneFile's models were never loaded, only its shapes drawn. */
+    constructor(host, { onChange, hooks } = {}) {
         this.box = host.ownerDocument.createElement("div");
         this.box.className = "comp3d-engine";
         // Never shown: a view of its own, drawn into float targets. 1 x 1 keeps the canvas small.
         Object.assign(this.box.style, { position: "absolute", width: "1px", height: "1px", overflow: "hidden", visibility: "hidden", pointerEvents: "none", left: "-10px", top: "-10px" });
         host.append(this.box);
         this.onChange = onChange || null;
+        this.hooks = hooks || {};
         this.view = null;
         this.ready = false;
         this.why = "";
@@ -200,7 +289,7 @@ export class Comp3DEngine {
         if (this._ensuring) return this._ensuring;
         this._ensuring = (async () => {
             try {
-                this.view = new Model3DView(this.box, {});
+                this.view = new Model3DView(this.box, Object.assign({}, this.hooks));
                 await this.view.ensure();
                 const r = this.view.renderer, gl = r && r.getContext();
                 // WebGL 2 asked without `instanceof`: popped out, the context comes from the other window's realm,
@@ -310,6 +399,31 @@ export class Comp3DEngine {
             defines: depth ? { DEPTH_PASS: 1 } : {} }, depth ? { blending: THREE.NoBlending } : Object.assign({ transparent: true }, blend)));
     }
 
+    /** The material a SceneFile's meshes are drawn with while it carries a picture (MESH_PROJ_* above). */
+    _sceneFileMaterial(THREE, ob) {
+        const img = ob.proj ? ob.proj.img : ob.tex;
+        const u = { ivMap: { value: this._texture(THREE, img) }, ivProj: { value: !!ob.proj }, ivProjView: { value: new THREE.Matrix4() },
+            ivPk: { value: 1 }, ivPky: { value: 1 }, ivPsx: { value: 0 }, ivProjPos: { value: new THREE.Vector3() }, ivFrontOnly: { value: ob.faces === "front" } };
+        if (ob.proj) {
+            const c = ob.proj.cam;
+            u.ivProjView.value = mat4(THREE, c.view);
+            u.ivPk.value = c.k; u.ivPky.value = c.ky; u.ivPsx.value = c.sx;
+            u.ivProjPos.value.set(c.pos[0], c.pos[1], c.pos[2]);
+        }
+        const m = new THREE.MeshBasicMaterial({ side: THREE.DoubleSide, transparent: true, premultipliedAlpha: false, blending: THREE.CustomBlending,
+            blendEquation: THREE.AddEquation, blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor, blendSrcAlpha: THREE.OneFactor,
+            blendDstAlpha: THREE.OneMinusSrcAlphaFactor });
+        m.onBeforeCompile = (sh) => {
+            Object.assign(sh.uniforms, u);
+            sh.vertexShader = sh.vertexShader.replace("#include <common>", "#include <common>\n" + MESH_PROJ_PARS)
+                .replace("#include <project_vertex>", "#include <project_vertex>\n" + MESH_PROJ_VERT);
+            sh.fragmentShader = sh.fragmentShader.replace("#include <common>", "#include <common>\n" + MESH_PROJ_PARS)
+                .replace("#include <dithering_fragment>", "#include <dithering_fragment>\n" + MESH_PROJ_FRAG);
+        };
+        m.customProgramCacheKey = () => "imageviewer-comp-mesh-proj";
+        return m;
+    }
+
     _meshOf(THREE, ob) {
         const P = ob.pos, U = ob.uv, T = ob.tri, nt = T.length / 3;
         const pos = new Float32Array(nt * 9), uv = new Float32Array(nt * 6), fn = new Float32Array(nt * 9);
@@ -406,6 +520,16 @@ export class Comp3DEngine {
         }
         v.scene.add(group);
 
+        // A SceneFile wired to a Project (or a picture): its meshes take the picture for this draw.
+        const swapped = [];   // [mesh, its own material, the picture's material]
+        for (const ob of files) {
+            if (!ob.proj && !ob.tex) continue;
+            const cm = this._sceneFileMaterial(THREE, ob);
+            const meshes = sceneFileMeshes(v._entries, ob);
+            for (const mesh of meshes) { swapped.push([mesh, mesh.material, cm]); mesh.material = cm; }
+            if (!meshes.length) cm.dispose();
+        }
+
         // The camera: Comp's, its matrices as they are.
         const camera = this._cam || (this._cam = new THREE.PerspectiveCamera());
         camera.matrixAutoUpdate = false;
@@ -440,7 +564,15 @@ export class Comp3DEngine {
             const ct = this._target("color", SW, SH);
             R.setRenderTarget(ct);
             R.clear(true, true, true);
+            if (swapped.length) {
+                // Hold-out: the picture's meshes' depth first, so only their nearest surface takes the picture.
+                const hold = this._holdMat || (this._holdMat = new THREE.MeshBasicMaterial({ colorWrite: false, side: THREE.DoubleSide }));
+                R.autoClear = false;
+                for (const [o] of swapped) { o.material = hold; R.render(o, camera); }
+                for (const [o, , c] of swapped) o.material = c;
+            }
             R.render(v.scene, camera);
+            R.autoClear = autoClear;
             const px = new Float32Array(SW * SH * 4);
             R.readRenderTargetPixels(ct, 0, 0, SW, SH, px);
             const img = downsample(px, SW, SH, n);
@@ -482,6 +614,9 @@ export class Comp3DEngine {
             for (let i = overlays.length - 1; i >= 0; i--) { const [obj, key, value] = overlays[i]; obj[key] = value; }
             v._rendering = keepRendering;
             for (const r of hidden) r.visible = true;
+            const mats = new Set();
+            for (const [o, own, c] of swapped) { o.material = own; mats.add(c); }
+            for (const m of mats) m.dispose();
             v.scene.remove(group);
             group.traverse((o) => {
                 if (o.geometry) o.geometry.dispose();

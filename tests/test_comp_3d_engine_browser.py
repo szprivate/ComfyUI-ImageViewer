@@ -14,6 +14,8 @@ import socket
 import subprocess
 import time
 import unittest
+import sys
+import tempfile
 import urllib.request
 
 try:
@@ -22,6 +24,8 @@ except ImportError:  # pragma: no cover
     sync_playwright = None
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rig_fixture  # noqa: E402
 
 RUN = """async () => {
   const C = await import('/extensions/viewer/imageViewer_compModel.js');
@@ -67,6 +71,65 @@ RUN = """async () => {
   const img = C.renderNode(sc, 'render3d1', 0, { engine3d: eng, sceneSource: () => got });
   out.scene = stats(img);
   out.needs = C.sourceNeeds(sc, 'render3d1', 0).map((x) => ({ id: x.node.id, scene: !!x.scene, engine: !!x.engine }));
+  // A Project wired into the SceneFile: the picture lands on the scene's own box, through the projecting camera.
+  const colours = (img) => {
+    let r = 0, g = 0, b = 0, n = 0, a = 0;
+    for (let i = 0; i < img.w * img.h; i++) { const al = img.data[i * 4 + 3]; a += al;
+      if (al > 0.99) { r += img.data[i * 4]; g += img.data[i * 4 + 1]; b += img.data[i * 4 + 2]; n++; } }
+    return { alpha: a, n, red: n ? r / n : 0, green: n ? g / n : 0, blue: n ? b / n : 0 };
+  };
+  const projected = (projCam, faces, objects, viaProject = true) => {
+    const pic = N('constant', 'pic', [], { color: [0, 1, 0, 1] });
+    const pcam = N('camera3d', 'pcam', [], projCam);
+    const pr = N('project3d', 'proj1', ['pic', 'pcam'], { faces });
+    const sfp = N('scenefile3d', 'sf1', [viaProject ? 'proj1' : 'pic'], { file: 'tab:x', objects });
+    const c = comp([pic, pcam, pr, sfp, N('camera3d', 'camera3d1', ['sf1'], { from_scene: 'shotCam' }),
+      N('render3d', 'render3d1', ['sf1', 'camera3d1', null], { samples: 1 })], 'render3d1');
+    const im = C.renderNode(c, 'render3d1', 0, { engine3d: eng, sceneSource: () => got });
+    return Object.assign(colours(im), { z: im.ch && im.ch['depth.z'] ? im.ch['depth.z'].filter((v) => v > 0).length : 0 });
+  };
+  out.plain = colours(img);
+  out.proj = projected({ translate: [0, 0, 4] }, 'both', '');
+  out.named = projected({ translate: [0, 0, 4] }, 'both', 'Box');
+  out.otherName = projected({ translate: [0, 0, 4] }, 'both', 'Nothing');
+  out.behindBoth = projected({ translate: [0, 0, -4], rotate: [0, 180, 0] }, 'both', '');
+  out.behindFront = projected({ translate: [0, 0, -4], rotate: [0, 180, 0] }, 'front', '');
+  out.uvs = projected({ translate: [0, 0, 4] }, 'both', '', false);
+  out.after = colours(C.renderNode(sc, 'render3d1', 0, { engine3d: eng, sceneSource: () => got }));
+  out.projNeeds = C.sourceNeeds(comp([N('constant', 'pic', [], {}), N('camera3d', 'pcam', [], {}), N('project3d', 'proj1', ['pic', 'pcam']),
+    N('scenefile3d', 'sf1', ['proj1'], { file: 'tab:x' }), N('render3d', 'render3d1', ['sf1', null, null])], 'render3d1'), 'render3d1', 0)
+    .map((x) => x.node.id);
+  eng.dispose();
+  return out;
+}"""
+
+# A SceneFile naming a model file (a skinned glTF, as the 3D space's Import Model takes it) and a Project on it.
+MODEL = """async () => {
+  const C = await import('/extensions/viewer/imageViewer_compModel.js');
+  const E = await import('/extensions/viewer/imageViewer_comp3dEngine.js');
+  const P = window.__panel;
+  const eng = new E.Comp3DEngine(document.body, { hooks: { srcUrl: (src) => P.buildImgUrl(src, { noColor: true }) } });
+  if (!(await eng.ensure())) return { skip: eng.why };
+  const N = (type, id, inputs, params = {}) => Object.assign(C.makeNode({ nodes: [] }, type, params), { id, inputs });
+  const file = 'D:/out/hero.glb';
+  const out = { isModel: E.isModelFile(file), usdIsScene: !E.isModelFile('D:/out/shot.usda'), abc: E.isModelFile('x/cache.abc'),
+    fbx: E.isModelFile('C:\\a\\b.FBX'), png: E.isModelFile('a.png') };
+  const scene = E.modelScene(file);
+  out.item = { kind: scene.items[0].kind, name: scene.items[0].name, path: scene.items[0].src.path };
+  await eng.prepareScene('sf1', scene, 'model:' + file);
+  const got = { scene, key: 'model:' + file };
+  const render = (withProject) => {
+    const nodes = [N('constant', 'pic', [], { color: [0, 1, 0, 1] }), N('camera3d', 'pcam', [], { translate: [0, 1, 5] }),
+      N('project3d', 'proj1', ['pic', 'pcam']), N('scenefile3d', 'sf1', [withProject ? 'proj1' : null], { file }),
+      N('camera3d', 'cam', [], { translate: [0, 1, 5] }), N('render3d', 'render3d1', ['sf1', 'cam', null], { samples: 1 })];
+    const im = C.renderNode({ comp: 1, format: { width: 64, height: 64, fps: 24, frames: 1 }, nodes, output: 'render3d1' }, 'render3d1', 0,
+      { engine3d: eng, sceneSource: () => got });
+    let n = 0, g = 0, r = 0;
+    for (let i = 0; i < im.w * im.h; i++) if (im.data[i * 4 + 3] > 0.99) { n++; g += im.data[i * 4 + 1]; r += im.data[i * 4]; }
+    return { n, green: n ? g / n : 0, red: n ? r / n : 0 };
+  };
+  out.plain = render(false);
+  out.proj = render(true);
   eng.dispose();
   return out;
 }"""
@@ -193,8 +256,11 @@ def _free_port():
 class Comp3DEngineTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        with open(os.path.join(cls.tmp, "hero.glb"), "wb") as fh:
+            fh.write(rig_fixture.build(prefix="mixamorig:"))
         cls.port = _free_port()
-        env = dict(os.environ, PORT=str(cls.port))
+        env = dict(os.environ, PORT=str(cls.port), HARNESS_MEDIA_DIR=cls.tmp)
         cls.server = subprocess.Popen(["node", os.path.join(ROOT, "tests", "harness", "server.mjs"), ROOT], env=env,
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for _ in range(50):
@@ -250,6 +316,54 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertGreater(st["lit"]["green"], 10, "the green light lights the card")
         self.assertGreater(st["scene"]["alpha"], 50, "the SceneFile's box is in the picture")
         self.assertEqual([n for n in st["needs"] if n["scene"]], [{"id": "sf1", "scene": True, "engine": False}])
+        self.assertEqual(errors, [])
+
+    def test_a_project_puts_its_picture_on_a_scenefiles_own_meshes(self):
+        pg = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(RUN)
+        finally:
+            pg.close()
+        if "skip" in st:
+            self.skipTest(st["skip"])
+        plain, proj = st["plain"], st["proj"]
+        self.assertGreater(plain["n"], 50)
+        self.assertGreater(proj["n"], 50, "the box still covers the picture")
+        self.assertAlmostEqual(proj["green"], 1, delta=0.02, msg="the projected picture, unlit, as it is")
+        self.assertLess(proj["red"], 0.02)
+        self.assertGreater(proj["z"], 50, "depth.z where the picture covers the box")
+        self.assertAlmostEqual(st["named"]["green"], 1, delta=0.02, msg="named by the item's name")
+        self.assertAlmostEqual(st["otherName"]["green"], plain["green"], delta=0.02, msg="another name: the box keeps its look")
+        self.assertAlmostEqual(st["behindBoth"]["green"], 1, delta=0.02, msg="both: the picture goes through to the faces turned away")
+        self.assertLess(st["behindFront"]["n"], 5, "front: only the faces the projector sees take it")
+        self.assertAlmostEqual(st["uvs"]["green"], 1, delta=0.02, msg="a picture without a Project: on the mesh's UVs")
+        self.assertAlmostEqual(st["after"]["alpha"], plain["alpha"], delta=1)
+        self.assertAlmostEqual(st["after"]["green"], plain["green"], delta=0.01, msg="the box's own material is back afterwards")
+        self.assertIn("proj1", st["projNeeds"], "what is wired into the SceneFile is walked for its sources")
+        self.assertEqual(errors, [])
+
+    def test_a_scenefile_opens_a_model_file_and_takes_a_projection(self):
+        pg = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(MODEL)
+        finally:
+            pg.close()
+        if "skip" in st:
+            self.skipTest(st["skip"])
+        self.assertEqual((st["isModel"], st["usdIsScene"], st["abc"], st["fbx"], st["png"]), (True, True, True, True, False))
+        self.assertEqual(st["item"], {"kind": "model", "name": "hero", "path": "D:/out/hero.glb"})
+        self.assertGreater(st["plain"]["n"], 20, "the model is in the picture")
+        self.assertGreater(st["proj"]["n"], 20, "the projected model still covers the picture")
+        self.assertAlmostEqual(st["proj"]["green"], 1, delta=0.02, msg="the picture on the skinned model's own mesh")
+        self.assertLess(st["proj"]["red"], 0.02)
         self.assertEqual(errors, [])
 
     def test_a_scenefile_follows_a_3d_tab_live(self):
