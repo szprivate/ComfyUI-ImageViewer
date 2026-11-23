@@ -39,11 +39,17 @@ SETUP = """async () => {
   v.setPaneLayout('single');
   const box = await P.previzAddMesh('box');
   const shape = await P.previzAddPrimitive('sphere');
+  const steps = P._undoState().past.length;        // add mesh, add sphere
   shape.position = [-3, 0, 0];
   await P.previzChanged({ reload: true });
   v.resetView();
   const cam = v.activeCameraObject();
   cam.position.set(3, 4, 5); v.controls.target.set(0, 0.5, 0); cam.lookAt(0, 0.5, 0); v.controls.update();
+  // The view looks through the scene's default camera: its place is written
+  // back into the scene, or the next reload puts the camera where resetView
+  // left it. The camera moves are the setup's, not steps of the tests.
+  v._reportCamera(false);
+  P._undoState().past.length = steps;
   P.previzSelect(box.id);
   v.setGizmoMode('translate');
   v.requestRender();
