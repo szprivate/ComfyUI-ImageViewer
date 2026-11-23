@@ -2500,7 +2500,7 @@ def roto_write(m, src, sex, target, premult, defs=None):
     return write_target(base, ex, P, target, defs)
 
 
-# Every node that makes a picture from what comes in has a "write into" (the page's NO_WRITE / WRITE_PARAM).
+# Every node that makes a picture from what comes in has an "output" (the page's NO_WRITE / WRITE_PARAM).
 NO_WRITE = {"shuffle", "addchannels", "removechannels", "copy", "channelmerge", "output", "write", "metadata",
             "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph",
             "sidebyside", "tracker", "planartracker"} | GEO3D | DEEP
