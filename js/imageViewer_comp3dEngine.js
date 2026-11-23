@@ -24,6 +24,7 @@
 import { Model3DView } from "./imageViewer_model3d.js";
 import { MODEL_IMPORT_EXTS, makeModelItem, parseScene } from "./imageViewer_scene3d.js";
 import { RoomMixin } from "./imageViewer_comp3dRoom.js";
+import { TraceMixin } from "./imageViewer_comp3dTrace.js";
 
 const MAX_SAMPLES = 4;
 
@@ -633,6 +634,7 @@ export class Comp3DEngine {
 
     dispose() {
         if (this._room) this.closeRoom();
+        this.traceDispose();
         for (const t of this._tex.values()) t.tex.dispose();
         this._tex.clear();
         for (const t of Object.values(this._targets)) t.dispose();
@@ -645,3 +647,5 @@ export class Comp3DEngine {
 
 // The 3D room of Comp's viewer: the same view, brought on screen.
 Object.defineProperties(Comp3DEngine.prototype, Object.getOwnPropertyDescriptors(RoomMixin));
+// Render3D's path traced renderer (imageViewer_comp3dTrace.js).
+Object.defineProperties(Comp3DEngine.prototype, Object.getOwnPropertyDescriptors(TraceMixin));

@@ -11,7 +11,7 @@ PROJECT_FACES = ["both", "front"]
 DEPTH_MODES = ["distance", "inverse"]
 DEPTH_OUT = ["depth.z", "none"]
 LIGHT_TYPES = ["point", "spot", "directional", "ambient"]
-RENDERERS = ["3D space", "built-in"]
+RENDERERS = ["3D space", "path traced", "built-in"]
 
 D2R = math.pi / 180
 

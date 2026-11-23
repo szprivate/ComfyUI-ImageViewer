@@ -1291,11 +1291,15 @@ export const CompPanelMixin = {
 
     /** The comp tab's 3D renderer (made on first use; it lives in the tab's element, hidden). */
     _cpEngine(rec) {
-        if (!rec.engine) rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); },
-            // How the 3D space finds a model's file, so a SceneFile's models (and a model file on its own) load.
-            hooks: { srcUrl: (src) => this.buildImgUrl(src, { noColor: true }),
-                resolveResource: (name, frame) => this._modelResourceUrl ? this._modelResourceUrl(name, frame) : null,
-                plateInfo: (src) => this.plateInfo(src), plateFrameUrl: (src, n) => this.plateFrameUrl(src, n) } });
+        if (!rec.engine) {
+            rec.engine = new Comp3DEngine(rec.el, { onChange: () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); },
+                // How the 3D space finds a model's file, so a SceneFile's models (and a model file on its own) load.
+                hooks: { srcUrl: (src) => this.buildImgUrl(src, { noColor: true }),
+                    resolveResource: (name, frame) => this._modelResourceUrl ? this._modelResourceUrl(name, frame) : null,
+                    plateInfo: (src) => this.plateInfo(src), plateFrameUrl: (src, n) => this.plateFrameUrl(src, n) } });
+            // A trace running: the info line says how far it is (the picture is kept, so this costs little).
+            rec.engine.onProgress = () => { if (rec.editor && rec.editor.rerender) rec.editor.rerender(); };
+        }
         return rec.engine;
     },
 

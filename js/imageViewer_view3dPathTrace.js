@@ -33,7 +33,7 @@ export const PT_RESUME_MS = 300;
 const MOVE_KEY = "imageviewer.viewer.ptRasterWhileMoving";
 
 let _ptPromise = null;
-function loadPathTracer() {
+export function loadPathTracer() {
     if (!_ptPromise) {
         _ptPromise = import(api.apiURL("/imageviewer/lib/three/three-gpu-pathtracer.module.js"))
             .catch((e) => { _ptPromise = null; throw e; });

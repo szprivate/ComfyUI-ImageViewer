@@ -155,7 +155,9 @@ class Comp:
                 got = (n.get("results") or {}).get("frames") if isinstance(n.get("results"), dict) else None
                 row["results"] = len(got) if isinstance(got, dict) else 0
             out.append(row)
+        warn = warnings_3d(self.data)
         return {"path": self.path, "format": self.format, "output": self.output, "nodes": out,
+                **({"warnings": warn} if warn else {}),
                 "writes": [n["id"] for n in self.nodes("write")],
                 # Every type "add" takes, so a reader never has to guess (the promo run's agent did not find
                 # depthblur and built depth of field from a plain blur).
@@ -309,6 +311,23 @@ class Comp:
             self.data["output"] = o["id"] if o else None
         return self
 
+    def card_setup(self, after, renderer=None, camera=None):
+        """A picture into 3D at once (the node menu's starter): ``after`` -> Card -> Render3D, with a Camera looking
+        at the card, the Render3D taking over what read ``after``. Returns {render, card, camera} ids."""
+        a = self.node(after)
+        if a["type"] in ("output", "render3d") or a["type"] in GEO_3D or a["type"].startswith("deep"):
+            raise CompError(f"{a['id']} is not a picture: a Card takes a picture")
+        takers = [(n, i) for n in self.data["nodes"] for i, s in enumerate(n.get("inputs") or []) if s == a["id"]]
+        x, y = a.get("x", 0), a.get("y", 0)
+        card = self.add("card3d", [a["id"]], x=x, y=y + 70)
+        cam = self.add("camera3d", x=x + 190, y=y + 70, **(camera or {}))
+        render = self.add("render3d", [card, cam], x=x, y=y + 140, **({"renderer": renderer} if renderer else {}))
+        for n, i in takers:
+            n["inputs"][i] = render
+        if self.data.get("output") == a["id"]:
+            self.data["output"] = render
+        return {"render": render, "card": card, "camera": cam}
+
     def set_output(self, nid):
         n = self.node(nid)
         if n["type"] != "output":
@@ -359,11 +378,14 @@ class Comp:
                     self.set_output(ref(o["node"]))
                 elif kind == "format":
                     self.set_format(**{k: o[k] for k in ("width", "height", "fps", "frames") if k in o})
+                elif kind == "card_setup":
+                    got = self.card_setup(ref(o["node"]), o.get("renderer"), o.get("camera"))
+                    made.extend([got["card"], got["camera"], got["render"]])
                 elif kind == "rename":
                     self.set(ref(o["node"]), name=o.get("name"))
                 else:
                     raise CompError(f"op {k}: unknown op {kind!r} (add, connect, disconnect, set, key, unkey, remove, "
-                                    "output, format, rename)")
+                                    "output, format, rename, card_setup)")
         except (KeyError, TypeError) as e:
             self.data = before
             raise CompError(f"an op is missing a field: {e}") from e
@@ -429,3 +451,58 @@ class Comp:
                 writer.close(False)
             src.close()
         return out
+
+
+# ── 3D: what would draw nothing as wired (the page's warnings3d, imageViewer_compModel.js) ────────────────────
+GEO_3D = {"camera3d", "card3d", "geo3d", "project3d", "scene3d", "scenefile3d", "light3d", "pointcloud"}
+_SEEN_3D = {"card3d", "geo3d", "project3d", "pointcloud", "scenefile3d"}
+
+
+def warnings_3d(data):
+    """The 3D nodes of the comp's top level that draw nothing as they are wired: {id: why} (the page's own rules)."""
+    nodes = (data or {}).get("nodes") or []
+    by = {n.get("id"): n for n in nodes}
+
+    def through(nid, k=0):
+        n = by.get(nid) if nid else None
+        if not n or k > 64:
+            return None
+        if n.get("type") == "dot" or (n.get("disable") and (n.get("inputs") or [None])[0]):
+            return through(n["inputs"][0], k + 1)
+        return n
+
+    read = {t["id"] for n in nodes for s in n.get("inputs") or [] for t in [through(s)] if t}
+
+    def holds(nid, want, k=0):
+        n = through(nid)
+        if not n or n.get("disable") or k > 64:
+            return False
+        if n.get("type") in want:
+            return True
+        return n.get("type") == "scene3d" and any(holds(s, want, k + 1) for s in n.get("inputs") or [])
+
+    out = {}
+    for n in nodes:
+        if n.get("disable"):
+            continue
+        t, ins = n.get("type"), (n.get("inputs") or []) + [None, None]
+        if t == "render3d":
+            if not through(ins[0]):
+                out[n["id"]] = "Nothing to render: wire a Card, a Shape, a SceneFile or a Scene into its scene input."
+            elif not holds(ins[0], _SEEN_3D):
+                out[n["id"]] = "Its scene holds nothing to see: lights and cameras alone draw nothing."
+            elif n.get("renderer") == "built-in" and holds(ins[0], {"scenefile3d"}) and not holds(ins[0], _SEEN_3D - {"scenefile3d"}):
+                out[n["id"]] = "The built-in renderer draws no SceneFile: set renderer to 3D space."
+            elif not through(ins[1]):
+                out[n["id"]] = "No camera wired: it looks from (0, 0, 2) down -Z through a 35 mm lens."
+        elif t == "camera3d":
+            src = through(ins[0])
+            if n.get("from_scene") and (not src or src.get("type") != "scenefile3d"):
+                out[n["id"]] = "It follows a scene camera: wire a SceneFile into its scene input."
+            elif n["id"] not in read:
+                out[n["id"]] = "Not used: wire it into a Render3D's camera input (or a Project's, a PointCloud's)."
+        elif t == "scenefile3d" and not str(n.get("file") or "").strip():
+            out[n["id"]] = "No scene yet: pick a scene file, or a 3D tab."
+        elif t in GEO_3D - {"camera3d"} and n["id"] not in read:
+            out[n["id"]] = "On its own it shows nothing: wire it into a Scene or a Render3D."
+    return out
