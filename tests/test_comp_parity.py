@@ -413,6 +413,21 @@ def new_node_cases(sources):
     c.extend(warp_cases(sources))
     c.extend(extra_cases(sources))
     c.extend(graph_cases(sources))
+    c.extend(own_size_cases(sources))
+    return c
+
+
+def own_size_cases(sources):
+    """A Read is its file's own size (``size``), not the comp's: a small one merged over a full one, graded on
+    its own, its file of another size than the node knows (laid in by ``fit``), at the proxy's half scale."""
+    c = []
+    N = node
+    small = {"Read1": sources["Read1"], "Read2": src(5, 12, 9)}
+    c.append(({"comp": comp([read(1), read(2, size=[12, 9]), merge(1, "Read1", "Read2"), out("Merge1")])}, small))
+    c.append(({"comp": comp([read(2, size=[12, 9]), N("grade", 1, ["Read2", None], gain=1.5),
+                             N("blur", 1, ["grade1", None], size=2), out("blur1")])}, small))
+    c.append(({"comp": comp([read(2, size=[20, 11], fit="fill"), out("Read2")])}, small))
+    c.append(({"comp": comp([read(1), read(2, size=[12, 9]), merge(1, "Read1", "Read2"), out("Merge1")]), "scale": 0.5}, small))
     return c
 
 

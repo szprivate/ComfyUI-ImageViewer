@@ -84,6 +84,17 @@ class NukeScript(unittest.TestCase):
         self.assertEqual(t["center"], "{20 40}")
         self.assertEqual(t["rotate"], "-30")
 
+    def test_a_read_of_its_own_size_is_written_without_a_reformat(self):
+        c = comp([{"id": "R", "type": "read", "inputs": [], "file": "missing_plate.png", "size": [64, 40]},
+                  {"id": "G", "type": "grade", "inputs": ["R"], "gain": 2},
+                  {"id": "Output1", "type": "output", "inputs": ["G"]}])
+        text, _ = N.build(c, bake=False)
+        self.assertEqual([k for cls, k, _ in blocks(text) if cls == "Reformat"], [])
+        old = comp([{"id": "R", "type": "read", "inputs": [], "file": "missing_plate.png"},
+                    {"id": "Output1", "type": "output", "inputs": ["R"]}])
+        text, _ = N.build(old, bake=False)
+        self.assertEqual(len([k for cls, k, _ in blocks(text) if cls == "Reformat"]), 1)   # not looked at yet: the comp's size
+
     def test_a_reformat_is_one_reformat_and_what_follows_works_in_its_size(self):
         c = comp([{"id": "C", "type": "constant", "inputs": []},
                   {"id": "R", "type": "reformat", "inputs": ["C"], "width": 40, "height": 30, "center": "off"},

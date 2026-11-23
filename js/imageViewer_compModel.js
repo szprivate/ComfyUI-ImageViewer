@@ -66,7 +66,7 @@ export const NODE_TYPES = {
         file: { kind: "file", def: "" },
         offset: { kind: "int", def: 0, help: "Frames to slide the footage by: +10 starts it 10 frames later" },
         colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; or any colourspace of the OCIO config, converted to the working space" },
-        fit: { kind: "enum", def: "fit", choices: FITS, help: "How a picture of another size is laid into the comp" },
+        fit: { kind: "enum", def: "fit", choices: FITS, help: "The Read gives the file at its own size; this is only how a file that is not the size it last had (changed on disk) is laid in" },
         missing: { kind: "enum", def: "black", choices: MISSING_FRAMES, help: "A frame of a sequence that is not on disk: black, the nearest frame there is (hold), or the render stops (error)" },
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
@@ -1530,6 +1530,15 @@ export function reformatLayout(node, frame, inFmt, scale = 1) {
 export const GEO3D = new Set(["camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud"]);
 export const DEEP = new Set(["deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten", "render3d"]);
 const PLAIN_SIZE = new Set([...GEO3D, ...DEEP].filter((t) => t !== "project3d"));
+/**
+ * A Read's picture is its file's own size (`n.size` = [w, h], kept on the node by the editor and the server
+ * when they learn it); a Read that has not been looked at yet takes the comp's size. The comp's width / height
+ * is only the size of what has none of its own (Constant, a Reformat's default, nothing plugged in).
+ */
+export function readSize(n) {
+    const z = n && n.size;
+    return Array.isArray(z) && z.length === 2 && z.every((v) => Number.isInteger(v) && v >= 1 && v <= 65536) ? z : null;
+}
 export function formatAt(comp, id, depth = 0) {
     if (!depth) { comp = G.flattenComp(comp); id = G.resolveId(comp, id); }
     const F = { width: comp.format.width, height: comp.format.height };
@@ -1540,7 +1549,8 @@ export function formatAt(comp, id, depth = 0) {
     if (!n.disable && n.type === "stmap" && n.inputs[1]) return formatAt(comp, n.inputs[1], depth + 1);
     if (EX.VFX_KINDS[n.type]) { const z = EX.vfxSize(n); if (z) return z; }
     if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
-    if (n.disable || n.type !== "reformat") return n.type === "read" || n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
+    if (n.type === "read") { const z = readSize(n); return z ? { width: z[0], height: z[1] } : F; }
+    if (n.disable || n.type !== "reformat") return n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
 }
@@ -2058,8 +2068,10 @@ export function renderNode(comp, id, frame, ctx) {
             const src = ctx.source ? ctx.source(n, f) : null;
             // A source may come shrunk (the page's proxy): `ow` x `oh` is the file's own size then.
             const k = src ? scale * (src.ow ? src.ow / src.w : 1) : 1;
-            if (!src) return O.withBox(blank(W, H), [0, 0, 0, 0]);
-            const img = resample(src, fitMatrix(src.w, src.h, W, H, n.fit || "fit", k), W, H);
+            // Its own size (formatAt): the file 1:1; `fit` only matters when the file is not the size the node knows.
+            const F = formatAt(comp, n.id), rw = Math.max(1, Math.round(F.width * scale)), rh = Math.max(1, Math.round(F.height * scale));
+            if (!src) return O.withBox(blank(rw, rh), [0, 0, 0, 0]);
+            const img = resample(src, fitMatrix(src.w, src.h, rw, rh, n.fit || "fit", k), rw, rh);
             return O.withBox(img, O.scanBox(img));
         }
         case "constant": {

@@ -822,8 +822,24 @@ export function createCompEditor(host, opts = {}) {
     /** The pixels `needs` names (C.sourceNeeds) into `pics`: Reads by srcKey, DeepReads' deep pictures by "deep:" + it. */
     const loadNeeds = (needs, pics, scale) => Promise.all(needs.map(async ({ node: n, frame: nf, deep }) => {
         const load = deep ? o.loadDeep : o.loadSource;
-        pics.set((deep ? "deep:" : "") + C.srcKey(n, nf), load ? await load(n, nf, { scale, format: fmt() }).catch(() => null) : null);
+        const stored = !deep && n.type === "read" ? G.flatNode(st.comp, n.id) : null;
+        const pic = load ? await load(n, nf, { scale, format: stored ? C.formatAt(st.comp, n.id) : fmt() }).catch(() => null) : null;
+        pics.set((deep ? "deep:" : "") + C.srcKey(n, nf), pic);
+        if (stored && pic) learnReadSize(stored, pic.ow || pic.w, pic.oh || pic.h);
     }));
+    /**
+     * A Read is its file's own size: when its pixels say another size than the node knows (a new file, the
+     * first look), the node keeps the new one (`size`, not an undo step - it is what the file is) and the
+     * picture is made again at it.
+     */
+    function learnReadSize(n, w, h) {
+        if (!(w >= 1 && h >= 1)) return;
+        const z = C.readSize(n);
+        if (z && z[0] === w && z[1] === h) return;
+        n.size = [w, h];
+        st.dirty = true;
+        refresh(["bar", "props", "stage", "graph"]);
+    }
     async function draw() {
         if (!st.comp) return;
         const gen = ++renderGen;
@@ -3236,7 +3252,10 @@ export function createCompEditor(host, opts = {}) {
                 line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
                     : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : inf.kind === "comp" ? "A comp (its Output, rendered)" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`
                     + (inf.gaps ? ` ${inf.gaps} frame${inf.gaps > 1 ? "s" : ""} missing in it.` : "")
-                    + (inf.timecode ? ` Timecode ${inf.timecode}.` : "") + (n.local ? " Reads its local copy." : "");
+                    + (inf.timecode ? ` Timecode ${inf.timecode}.` : "") + (n.local ? " Reads its local copy." : "")
+                    + (n.type === "read" ? (C.readSize(n) ? ` ${C.readSize(n)[0]} × ${C.readSize(n)[1]} (its own size).` : "") : "");
+                // The size the file says: the node keeps it (a Read is its file's own size).
+                if (n.type === "read" && inf && inf.width >= 1 && inf.height >= 1) learnReadSize(n, inf.width, inf.height);
             }).catch(() => { line.textContent = ""; });
         }
         if (n.type === "write") {

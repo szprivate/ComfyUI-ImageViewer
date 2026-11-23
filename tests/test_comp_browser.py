@@ -178,10 +178,11 @@ class CompBrowserTests(unittest.TestCase):
             const m = e.addNode('merge'); m.inputs = [bg.id, read.id, null]; out.inputs = [m.id]; e.refresh(); }}""")
         pg.wait_for_function(f"() => {self.ED}.lastRender().ms >= 0 && document.querySelector('*')", timeout=5000)
         pg.wait_for_timeout(800)
-        left, right = self.pixel(pg, 0.25, 0.5), self.pixel(pg, 0.75, 0.5)
+        # The plate is its own 160 x 90 (not the comp's size), laid at the bottom left of the 1920 x 1080 background.
+        left, right = self.pixel(pg, 0.02, 0.97), self.pixel(pg, 0.5, 0.5)
         self.assertGreater(left[0], 200, left)           # the red plate over
         self.assertLess(left[2], 40, left)
-        self.assertGreater(right[2], 200, right)         # the blue background where the plate is clear
+        self.assertGreater(right[2], 200, right)         # the blue background beyond it
         # Layers: the same graph as a stack, one layer over the background.
         pg.evaluate("() => __panel.setPanelDocked('compLayers', true)")
         pg.wait_for_timeout(200)
@@ -213,7 +214,8 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(nodes[0]["isSequence"])
         from PIL import Image
         px = np.asarray(Image.open(files[0]).convert("RGBA"))
-        self.assertEqual(tuple(px[20, 20])[:3], (255, 0, 0))
+        self.assertEqual(tuple(px[-20, 20])[:3], (255, 0, 0))     # the plate at its own size, bottom left
+        self.assertEqual(tuple(px[20, 20])[:3], (0, 0, 255))
         # Leaving the tab gives the viewport back and puts the comp's panels away.
         pg.evaluate("() => __panel.closeTab(__panel.activeTab)")
         st = pg.evaluate("""() => ({ graph: __panel.isPanelDocked('compGraph'), mode: __panel.viewport.classList.contains('comp-mode') })""")
@@ -1958,6 +1960,25 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.compPropsPanel.querySelector('.cp-open').click()")
         pg.wait_for_function("(n) => __panel.shadowRoot.querySelectorAll('*').length > n + 5", arg=before, timeout=5000)
         self.assertEqual(self.errors, [])
+
+    def test_a_read_is_its_files_own_size_not_the_comps(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        fmt = pg.evaluate(f"() => {ED}.comp().format")
+        self.assertNotEqual((fmt["width"], fmt["height"]), (160, 90))
+        rid = pg.evaluate(f"""(file) => {{ const e = {ED}; e.select([]);
+            const r = e.addNode('read', {{ file }}); e.view(r.id); e.select([r.id]); e.refresh(); return r.id; }}""", self.png)
+        pg.wait_for_function(f"() => JSON.stringify({ED}.node('{rid}').size) === '[160,90]'", timeout=8000)
+        # Viewed on its own the picture is the file's 160 x 90, its right half transparent (not stretched to the comp).
+        pg.wait_for_timeout(500)
+        size = pg.evaluate(f"async () => (await import('/extensions/viewer/imageViewer_compModel.js')).formatAt({ED}.comp(), '{rid}')")
+        self.assertEqual(size, {"width": 160, "height": 90})
+        info = pg.evaluate("() => __panel.compPropsPanel.ownerDocument && [...__panel.shadowRoot.querySelectorAll('.cp-info, .mg-info')].map((x) => x.textContent).join(' ')")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-read-own-size.png"))
+        self.assertEqual(self.errors, [], info)
 
     def test_the_layers_show_a_read_before_it_is_wired_and_the_bottom_layers_footage(self):
         pg = self.page()
