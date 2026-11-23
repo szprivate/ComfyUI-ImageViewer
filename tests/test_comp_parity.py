@@ -313,6 +313,16 @@ def new_node_cases(sources):
     for kw in ({"size": 7.3}, {"size": 9, "shape": "polygon", "blades": 6, "rotation": 17, "aspect": 1.4},
                {"size": 6, "shape": "polygon", "blades": 5, "bloom": 3, "threshold": 0.3}, {"size": 0.6}):
         c.append(one(node("defocus", 1, ["Read1"], **kw)))
+    # ZDefocus: the depth is a channel of the picture itself (depth.z by default); the aperture's shape and bloom.
+    zdepth = lambda: node("lumakeyer", 1, ["Read1"], write="depth.z", low=0.1)
+    for kw in ({"focus": 0.4, "dof": 0.1, "falloff": 0.25, "size": 6, "layers": 5},
+               {"focus": 0.4, "size": 7, "shape": "polygon", "blades": 5, "rotation": 17, "aspect": 1.4, "bloom": 3, "threshold": 0.3},
+               {"channel": "r", "focus": 0.4, "size": 5}, {"size": 0.6}):
+        c.append(({"comp": comp([read(1), zdepth(), node("zdefocus", 1, ["lumakeyer1"], **kw), out("zdefocus1")])}, sources))
+    c.append(({"comp": comp([read(1), zdepth(), node("zdefocus", 1, ["lumakeyer1"], focus=0.4, size=6), out("zdefocus1")]), "scale": 0.5}, sources))
+    c.append(one(node("zdefocus", 1, ["Read1"], size=6)))   # no depth channel: the picture passes
+    c.append(({"comp": comp([read(1), read(2), zdepth(), node("zdefocus", 1, ["lumakeyer1", "Read2"], focus=0.4, size=6, mix=0.6, mask_channel="g"),
+                             out("zdefocus1")])}, sources))
     cc = [
         {"master_hue": 25, "master_saturation": 140, "master_contrast": 120, "master_brightness": 0.02},
         {"shadows_hue": -40, "midtones_saturation": 50, "highlights_contrast": 80, "shadow_end": 0.35, "highlight_start": 0.6,

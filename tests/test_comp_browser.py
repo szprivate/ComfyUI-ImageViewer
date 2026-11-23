@@ -338,7 +338,7 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(pg.evaluate(f"() => {self.ED}.state.graph.s"), zoom, "the graph did not zoom")
         # Typing finds it: by name, by category, by id; Enter adds it.
         pg.keyboard.type("defo")
-        self.assertEqual(menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.dataset.type)"), ["defocus"])
+        self.assertEqual(menu.evaluate("(m) => [...m.querySelectorAll('.cp-tmrow')].map((d) => d.dataset.type)"), ["defocus", "zdefocus"])
         pg.keyboard.press("Enter")
         self.assertFalse(graph.evaluate("(g) => !!g.querySelector('.cp-tabmenu')"))
         self.assertTrue(pg.evaluate(f"() => {self.ED}.comp().nodes.some((n) => n.type === 'defocus')"))
@@ -654,6 +654,79 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(ins, [["Constant1"], ["Blur1"]])
         pg.evaluate(f"() => {ED}.undo()")
         self.assertEqual(pg.evaluate(f"() => {{ const c = {ED}.comp(); return c.nodes.find((n) => n.id === c.output).inputs; }}"), ["Constant1"])
+        self.assertEqual(self.errors, [])
+
+    def test_a_wire_dropped_on_a_node_goes_into_its_first_free_input(self):
+        """A wire need not land on a tiny port: anywhere on a node's body connects to its first free input (the
+        mask aside), the node lit up while the drag is over it; a drag off an input takes a source's body alike."""
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.evaluate(f"""() => {{ const e = {ED}; e.select([]); e.addNode('blur'); e.select([]); e.addNode('merge');
+            e.setNodes({{ Blur1: {{ x: 320, y: 40 }}, Merge1: {{ x: 320, y: 170 }} }}); e.select([]); e.refresh(); }}""")
+        pg.wait_for_timeout(200)
+        graph = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        centre = "(g, sel) => { const r = g.querySelector(sel).getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }"
+        out = graph.evaluate(centre, ".cp-node[data-id=Blur1] .cp-port.out")
+        body = graph.evaluate(centre, ".cp-node[data-id=Merge1]")
+        ins = lambda: pg.evaluate(f"() => {ED}.comp().nodes.find((n) => n.id === 'Merge1').inputs")
+        # Onto the body: the first input (B).
+        pg.mouse.move(*out); pg.mouse.down(); pg.mouse.move(*body, steps=8)
+        self.assertEqual(graph.evaluate("(g) => { const d = g.querySelector('.cp-node.cp-drop'); return d ? d.dataset.id : null; }"),
+                         "Merge1", "the node lights up under the wire")
+        pg.mouse.up()
+        self.assertEqual(ins(), ["Blur1", None, None])
+        # B taken: the same drop goes into A.
+        pg.evaluate(f"""() => {{ const e = {ED}; e.comp().nodes.find((n) => n.id === 'Merge1').inputs = ['Constant1', null, null]; e.refresh(); }}""")
+        pg.mouse.move(*out); pg.mouse.down(); pg.mouse.move(*body, steps=8); pg.mouse.up()
+        self.assertEqual(ins(), ["Constant1", "Blur1", None])
+        # B and A taken: the mask is not offered, nothing connects.
+        pg.evaluate(f"""() => {{ const e = {ED}; e.comp().nodes.find((n) => n.id === 'Merge1').inputs = ['Constant1', 'Constant1', null]; e.refresh(); }}""")
+        pg.mouse.move(*out); pg.mouse.down(); pg.mouse.move(*body, steps=8)
+        self.assertIsNone(graph.evaluate("(g) => { const d = g.querySelector('.cp-node.cp-drop'); return d ? d.dataset.id : null; }"))
+        pg.mouse.up()
+        self.assertEqual(ins(), ["Constant1", "Constant1", None])
+        # A drag off an empty input onto a source's body: its output feeds that input.
+        pg.evaluate(f"""() => {{ const e = {ED}; e.comp().nodes.find((n) => n.id === 'Merge1').inputs = [null, 'Blur1', null]; e.refresh(); }}""")
+        port = graph.evaluate(centre, '.cp-node[data-id=Merge1] .cp-port.in[data-port="0"]')
+        srcbody = graph.evaluate(centre, ".cp-node[data-id=Blur1]")
+        pg.mouse.move(*port); pg.mouse.down(); pg.mouse.move(*srcbody, steps=8); pg.mouse.up()
+        self.assertEqual(ins(), ["Blur1", "Blur1", None])
+        # Letting an existing edge go on empty space still disconnects it.
+        pg.mouse.move(*port); pg.mouse.down()
+        empty = graph.evaluate("(g) => { const r = g.getBoundingClientRect(); return [r.right - 20, r.bottom - 20]; }")
+        pg.mouse.move(*empty, steps=8); pg.mouse.up()
+        self.assertEqual(ins(), [None, "Blur1", None])
+        self.assertEqual(self.errors, [])
+
+    def test_with_nothing_selected_a_new_node_goes_where_the_pointer_is(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.evaluate(f"() => {ED}.select([])")
+        pg.wait_for_timeout(200)
+        at = pg.evaluate(f"""() => {{ const g = __panel.compGraphPanel.querySelector('.cp-graph'); const r = g.getBoundingClientRect();
+            const st = {ED}.state.graph; const px = r.left + r.width * 0.8, py = r.top + r.height * 0.7;
+            return [px, py, (px - r.left - st.x) / st.s, (py - r.top - st.y) / st.s]; }}""")
+        pg.mouse.click(*at[:2])          # empty graph: nothing selected, the pointer here
+        self.assertEqual(pg.evaluate(f"() => {ED}.selection()"), [])
+        pg.keyboard.press("Tab")
+        pg.keyboard.type("blur")
+        pg.keyboard.press("Enter")
+        xy = pg.evaluate(f"""() => {{ const n = {ED}.comp().nodes.find((x) => x.type === 'blur'); return [n.x + 60, n.y + 15]; }}""")
+        self.assertLess(abs(xy[0] - at[2]), 16, f"the node's centre near the pointer: {xy} vs {at[2:]}")
+        self.assertLess(abs(xy[1] - at[3]), 16, f"the node's centre near the pointer: {xy} vs {at[2:]}")
+        # With the new node selected, the next one goes in under it as before, not at the pointer.
+        pg.mouse.move(at[0] - 200, at[1] - 150)
+        pg.keyboard.press("Tab")
+        pg.keyboard.type("grade")
+        pg.keyboard.press("Enter")
+        rel = pg.evaluate(f"""() => {{ const c = {ED}.comp(); const b = c.nodes.find((x) => x.type === 'blur'), g = c.nodes.find((x) => x.type === 'grade');
+            return [g.x - b.x, g.y - b.y]; }}""")
+        self.assertEqual(rel[0], 0)
+        self.assertTrue(60 <= rel[1] <= 80, rel)
         self.assertEqual(self.errors, [])
 
     def test_a_history_item_without_a_path_dropped_on_the_graph_is_a_read(self):

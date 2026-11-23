@@ -90,7 +90,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | Tracking | Tracker (1–4 points), PlanarTracker |
 | Colour | Grade, ColorCorrect (per-range HSL / RGB, hue wheels, two secondaries), CDL, LUT, HueCurves, Clamp, Log2Lin, ColorMatch, OCIOColorSpace, OCIODisplay |
 | Keying | Keyer, LumaKeyer, ChromaKeyer, DifferenceKeyer, Despill, CoreEdge, EdgeExtend, LightWrap, Erode/Dilate, Premult, Unpremult |
-| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, Glow, LensFlare, Laplacian, Grain, Degrain, Regrain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
+| Filter and light | Blur, MotionBlur, DepthBlur, Defocus, ZDefocus (depth-channel defocus), Glow, LensFlare, Laplacian, Grain, Degrain, Regrain, Denoise, Sharpen, Median, EdgeDetect, EdgeBlur |
 | Time | Retime (nearest, mix or vector blend), Vectors (optical flow), FrameHold, FrameRange, TimeOffset, AppendClip, TimeBlur |
 | Channels | Shuffle, AddChannels, Remove |
 | 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, Project, PointCloud, Render |

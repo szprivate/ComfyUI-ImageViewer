@@ -287,6 +287,25 @@ test("defocus spreads a point into its aperture, keeping its energy", async () =
     assert.ok(C.NODE_TYPES.defocus && C.HEAVY.has("defocus"));
 });
 
+test("zdefocus leaves the focus sharp and defocuses what is far from it", () => {
+    const w = 24, h = 8;
+    const img = C.blank(w, h), z = new Float64Array(w * h);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 4, on = x % 2 ? 1 : 0;
+        img.data.set([on, on, on, 1], i);
+        z[y * w + x] = x < 12 ? 0.5 : 1;
+    }
+    const p = { focus: 0.5, dof: 0.1, falloff: 0.3, size: 6, layers: 6, shape: "disc", blades: 6, rotation: 0, aspect: 1, threshold: 1, bloom: 0 };
+    const out = O.zDefocusImage(img, z, p);
+    const at = (x) => out.data[(4 * w + x) * 4];
+    assert.ok(Math.abs(at(3) - 1) < 1e-6 && Math.abs(at(4)) < 1e-6, "in focus: the stripes stay");
+    assert.ok(Math.abs(at(19) - 0.5) < 0.15 && Math.abs(at(20) - 0.5) < 0.15, "out of focus: the stripes are grey");
+    // Everything in focus: the picture as it is.
+    const flat = O.zDefocusImage(img, new Float64Array(w * h).fill(0.5), p);
+    assert.deepEqual(Array.from(flat.data), Array.from(img.data));
+    assert.ok(C.NODE_TYPES.zdefocus && C.HEAVY.has("zdefocus") && C.MASKABLE.has("zdefocus"));
+});
+
 test("keyers, erode / dilate, laplacian and channel ops", async () => {
     const K = await import("../js/imageViewer_compMatte.js");
     const px = (...v) => ({ w: v.length / 4, h: 1, data: Float32Array.from(v) });

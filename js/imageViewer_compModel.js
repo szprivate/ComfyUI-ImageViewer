@@ -285,6 +285,20 @@ export const NODE_TYPES = {
         threshold: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Brighter than this is a highlight" },
         bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
     } },
+    zdefocus: { label: "ZDefocus", cat: "Filter", inputs: ["src"], params: {
+        channel: { kind: "chan", def: "depth.z", help: "Where the picture holds its depth (no such channel: the picture passes)" },
+        focus: { kind: "num", def: 0.5, key: true, step: 0.01, help: "The depth in focus" },
+        dof: { kind: "num", def: 0.05, min: 0, key: true, step: 0.01, help: "How deep the sharp part is" },
+        falloff: { kind: "num", def: 0.3, min: 0.001, key: true, step: 0.01, help: "How much further it takes to reach the full blur" },
+        size: { kind: "num", def: 20, min: 0, max: 400, key: true, step: 0.5, help: "The fullest aperture's diameter, in pixels of the comp" },
+        layers: { kind: "int", def: 6, min: 2, max: 16, help: "Aperture sizes between none and the fullest: more is smoother and slower" },
+        shape: { kind: "enum", def: "disc", choices: O.DEFOCUS_SHAPES },
+        blades: { kind: "int", def: 6, min: 3, max: 16, help: "The aperture's sides (polygon)" },
+        rotation: { kind: "num", def: 0, key: true, step: 1, help: "The aperture turned, in degrees (polygon)" },
+        aspect: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.05, help: "Above 1 wider, as an anamorphic lens" },
+        threshold: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Brighter than this is a highlight" },
+        bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
+    } },
     // ── 3D (imageViewer_comp3d.js): geometry and cameras are not pictures; Render 3D makes one ──
     camera3d: { label: "Camera", cat: "3D", inputs: [], params: {
         translate: { kind: "vec3", def: [0, 0, 2], key: true, step: 0.01, help: "Where it stands, in scene units (y up)" },
@@ -437,7 +451,7 @@ export const NODE_TYPES = {
  */
 export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
     "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer", "chromakeyer",
-    "keyer", "motionblur", "depthblur", "defocus"]);
+    "keyer", "motionblur", "depthblur", "defocus", "zdefocus"]);
 /** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
 export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
 for (const t of MASKABLE) maskable(t);
@@ -451,7 +465,7 @@ function maskable(t) {
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
 export const TYPE_ORDER = ["read", "constant", "roto", "paint", "merge", "copy", "transform", "reformat", "crop", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "keyer", "lumakeyer", "chromakeyer", "blur", "glow", "erode", "laplacian",
-    "motionblur", "depthblur", "defocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write",
+    "motionblur", "depthblur", "defocus", "zdefocus", "lensflare", "shuffle", "addchannels", "removechannels", "channelmerge", "channelmath", "premult", "unpremult", "retime", "vectors", "metadata", "write",
     "camera3d", "card3d", "geo3d", "project3d", "scene3d", "pointcloud", "render3d",
     "deepread", "deepfromimage", "deepmerge", "deepholdout", "deepcrop", "deepflatten",
     "oneview", "joinviews", "anaglyph", "sidebyside", "output",
@@ -463,7 +477,7 @@ Object.assign(NODE_TYPES, EX.EXTRA_TYPES);
 for (const t of EX.EXTRA_MASKABLE) { MASKABLE.add(t); if (NODE_TYPES[t].params.mix) OWN_MIX.add(t); maskable(t); }
 TYPE_ORDER.splice(TYPE_ORDER.indexOf("metadata"), 0, ...EX.EXTRA_ORDER);
 /** Nodes whose result is kept between renders (keyed by their whole upstream): they take long. */
-export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus", ...EX.EXTRA_HEAVY]);
+export const HEAVY = new Set(["vectors", "motionblur", "depthblur", "defocus", "zdefocus", ...EX.EXTRA_HEAVY]);
 export const NODE_W = 120;
 export const NODE_H = 30;
 
@@ -1093,7 +1107,7 @@ export function nodeKeyFrames(node) {
 // ── the stack the Layers panel shows ─────────────────────────────────────────
 
 const CHAIN = new Set(["transform", "paint", "reformat", "cornerpin", "tracker", "planartracker", "stmap", "vectorwarp", "lensdistortion", "gridwarp", "glow", "lensflare", "grade", "colorcorrect", "ocio_colorspace", "ocio_display", "lumakeyer", "chromakeyer", "erode", "laplacian", "channelmerge", "channelmath", "blur", "crop", "shuffle", "addchannels", "removechannels", "premult", "unpremult", "retime", "keyer", "vectors",
-    "motionblur", "depthblur", "defocus", "copy", ...EX.EXTRA_CHAIN]);
+    "motionblur", "depthblur", "defocus", "zdefocus", "copy", ...EX.EXTRA_CHAIN]);
 
 /**
  * The comp as layers, top first: [{ kind: "layer" | "background" | "group", merge?, chain: [ids top-down],
@@ -2195,6 +2209,15 @@ export function renderNode(comp, id, frame, ctx) {
             for (const k of Object.keys(NODE_TYPES.depthblur.params)) p[k] = paramAt(n, k, f);
             p.size *= scale;
             return O.depthBlurImage(src, conform(run(n.inputs[1], f, d1), src.w, src.h), p);
+        }
+        case "zdefocus": {
+            const src = run(n.inputs[0], f, d1);
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.zdefocus.params)) p[k] = paramAt(n, k, f);
+            const z = CH.channelOf(src, exOf(n.inputs[0], f), p.channel || "depth.z");
+            if (!z) return src;
+            p.size *= scale;
+            return O.zDefocusImage(src, z, p);
         }
         case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": {
             // Geometry on its own: seen through the comp's first Camera, as Render3D would draw it.

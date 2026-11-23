@@ -60,6 +60,7 @@ const CSS = `
   font-weight:600;color:#111;cursor:grab;box-shadow:0 1px 3px #0008;white-space:nowrap;overflow:visible}
 .cp-node .cp-nm{overflow:hidden;text-overflow:ellipsis;max-width:${C.NODE_W - 12}px;pointer-events:none}
 .cp-node.sel{outline:2px solid #ffcf3a;outline-offset:1px}
+.cp-node.cp-drop{outline:2px solid #ff6a1a;outline-offset:1px}
 .cp-node.viewed{box-shadow:0 0 0 2px #ff3b3b,0 1px 3px #0008}
 .cp-node.viewed:after{content:"";position:absolute;left:-7px;top:9px;width:0;height:0;border:6px solid transparent;border-left:7px solid #ff3b3b}
 .cp-vtag{position:absolute;right:100%;margin-right:9px;top:7px;font-size:10px;font-weight:700;color:#fff;background:#ff3b3b;border-radius:2px;padding:0 4px;pointer-events:none;letter-spacing:.03em}
@@ -409,7 +410,7 @@ export function createCompEditor(host, opts = {}) {
     // In and out of a panel are buttons at its top left (Add here): the list Tab opens.
     const gbar = el(doc, "div", "cp-gbar");
     const addBtn = el(doc, "button", "mg-btn cp-add");
-    addBtn.title = "Add a node (Tab) - with a node selected, it goes in under it";
+    addBtn.title = "Add a node (Tab) - with a node selected, it goes in under it; else at the pointer";
     addBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg><span>Add</span>';
     addBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
     addBtn.addEventListener("click", (e) => { e.stopPropagation(); tabMenu({ left: 6, top: 34 }); });
@@ -1316,7 +1317,7 @@ export function createCompEditor(host, opts = {}) {
                 box.append(p);
                 if (ins.length > 1) { const l = el(doc, "span", "cp-plabel", label); l.style.left = portX(n, i) + "px"; box.append(l); }
             });
-            if (n.type !== "output" && n.type !== "group_output") { const p = el(doc, "div", "cp-port out"); p.dataset.out = n.id; p.title = "Drag onto an input to connect"; box.append(p); }
+            if (n.type !== "output" && n.type !== "group_output") { const p = el(doc, "div", "cp-port out"); p.dataset.out = n.id; p.title = "Drag onto a node (or an input) to connect"; box.append(p); }
             if (!isDot && n.type !== "group_input") {
                 const isViewed = fid(n.id) === viewed, isOut = fid(n.id) === st.comp.output;
                 const eye = el(doc, "span", "cp-eye", "👁");
@@ -1401,6 +1402,7 @@ export function createCompEditor(host, opts = {}) {
         });
     }
     async function insertToolNamed(name, place) {
+        if (!place && !primary() && st.gmouse) place = st.gmouse;
         let tool;
         try { tool = (await o.tools("get", { name })).tool; } catch (e) { toast("The tool could not be read: " + (e.message || e), "error"); return; }
         mutate(() => {
@@ -1611,6 +1613,12 @@ export function createCompEditor(host, opts = {}) {
             if (moved) { st.dirty = true; renderBar(); renderGraph(); }
         };
     }
+    /** A node's first free input, the mask aside (-1: none). Where a wire dropped on the node's body goes. */
+    function freePort(n) {
+        const ins = C.inputsOf(n);
+        for (let i = 0; i < ins.length; i++) if (ins[i] !== "mask" && !n.inputs[i]) return i;
+        return -1;
+    }
     function dragWire(e, srcId, from) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
         const src = srcId ? node(srcId) : null;
@@ -1621,20 +1629,54 @@ export function createCompEditor(host, opts = {}) {
             if (from && !src) ghost.setAttribute("d", wirePath(x, y, fixed[0], fixed[1]));
             else ghost.setAttribute("d", wirePath(...C.outXY(src), x, y));
         };
+        const hitAt = (ev) => (graph.getRootNode().elementFromPoint ? graph.getRootNode() : doc).elementFromPoint(ev.clientX, ev.clientY);
+        // The node a wire would land on when not on a port: lit up while the drag is over it.
+        const bodyAt = (ev) => {
+            const hit = hitAt(ev);
+            const box = hit && hit.closest ? hit.closest(".cp-node") : null;
+            const n = box ? node(box.dataset.id) : null;
+            if (!n || (src && n.id === src.id)) return null;
+            if (from && !src) return n.id === from.dst || n.type === "output" || n.type === "group_output" ? null : n;
+            return freePort(n) >= 0 ? n : null;
+        };
+        let dropBox = null;
+        const mark = (ev) => {
+            const n = bodyAt(ev);
+            const box = n ? world.querySelector(`.cp-node[data-id="${cssId(n.id)}"]`) : null;
+            if (box !== dropBox) {
+                if (dropBox) dropBox.classList.remove("cp-drop");
+                dropBox = box;
+                if (box) box.classList.add("cp-drop");
+            }
+        };
         draw_(...gxy(e));
-        graph.onpointermove = (ev) => draw_(...gxy(ev));
+        graph.onpointermove = (ev) => { draw_(...gxy(ev)); mark(ev); };
         graph.onpointerup = (ev) => {
             graph.onpointermove = null;
             ghost.remove();
-            const hit = (graph.getRootNode().elementFromPoint ? graph.getRootNode() : doc).elementFromPoint(ev.clientX, ev.clientY);
+            if (dropBox) { dropBox.classList.remove("cp-drop"); dropBox = null; }
+            const hit = hitAt(ev);
             const port = hit && hit.classList && hit.classList.contains("in") ? hit : null;
             const outHit = hit && hit.dataset && hit.dataset.out ? hit.dataset.out : null;
-            if (from && !src && outHit) { mutate(() => { if (!C.connect(gc(), from.dst, from.port, outHit)) toast("That would make a loop", "warn"); }); return; }
+            const body = bodyAt(ev);
+            if (from && !src) {
+                // A drag off an input: a source's output port or its body alike.
+                const s = outHit || (body ? body.id : null);
+                if (s) { mutate(() => { if (!C.connect(gc(), from.dst, from.port, s)) toast("That would make a loop", "warn"); }); return; }
+                renderGraph();
+                return;
+            }
             if (port && src) {
                 const dst = port.dataset.id, p = Number(port.dataset.port);
                 mutate(() => {
                     if (from) C.disconnect(gc(), from.dst, from.port);
                     if (!C.connect(gc(), dst, p, src.id)) toast("That would make a loop", "warn");
+                });
+            } else if (body && src) {
+                const p = freePort(body);
+                mutate(() => {
+                    if (from) C.disconnect(gc(), from.dst, from.port);
+                    if (!C.connect(gc(), body.id, p, src.id)) toast("That would make a loop", "warn");
                 });
             } else if (from && src) mutate(() => C.disconnect(gc(), from.dst, from.port));
             else renderGraph();
@@ -1758,6 +1800,8 @@ export function createCompEditor(host, opts = {}) {
     }
     root.addEventListener("pointerdown", (e) => { if (menuEl && !e.composedPath().includes(menuEl)) closeMenus(); }, true);
     function addNodeAt(type, at) {
+        // Nothing selected: the new node goes where the pointer is on the graph, else a free spot.
+        if (!at && !primary() && st.gmouse) at = st.gmouse;
         if ((type === "group_input" || type === "group_output") && !st.scope.length) { toast("Inputs and outputs belong inside a group", "warn"); return; }
         if (type === "group_output" && gc().nodes.some((x) => x.type === "group_output")) { toast("A group has one output", "warn"); return; }
         if (type === "backdrop" && !at && st.sel.some((id) => node(id))) {
@@ -1861,7 +1905,7 @@ export function createCompEditor(host, opts = {}) {
      *  name, its category or its id finds it - and below it the actions given, then every node by category. The
      *  list scrolls (the graph's wheel zooms everywhere else) and is as tall as the room below it in the graph.
      *  ``at``: where it opens in the graph ({left, top}); ``place``: where a new node goes in the graph's own
-     *  coordinates (null: under the selected node); ``actions``: [[label, fn]] shown first. */
+     *  coordinates (null: under the selected node, or at the pointer with none selected); ``actions``: [[label, fn]] shown first. */
     function tabMenu(at, { place = null, actions = [] } = {}) {
         closeMenus();
         const m = el(doc, "div", "cp-tabmenu");

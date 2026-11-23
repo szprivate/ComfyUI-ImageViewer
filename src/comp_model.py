@@ -375,6 +375,20 @@ NODE_TYPES = {
         "threshold": {"kind": "num", "def": 1, "min": 0, "key": True},
         "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
     }},
+    "zdefocus": {"inputs": ["src"], "params": {
+        "channel": {"kind": "chan", "def": "depth.z"},
+        "focus": {"kind": "num", "def": 0.5, "key": True},
+        "dof": {"kind": "num", "def": 0.05, "min": 0, "key": True},
+        "falloff": {"kind": "num", "def": 0.3, "min": 0.001, "key": True},
+        "size": {"kind": "num", "def": 20, "min": 0, "max": 400, "key": True},
+        "layers": {"kind": "int", "def": 6, "min": 2, "max": 16},
+        "shape": {"kind": "enum", "def": "disc", "choices": DEFOCUS_SHAPES},
+        "blades": {"kind": "int", "def": 6, "min": 3, "max": 16},
+        "rotation": {"kind": "num", "def": 0, "key": True},
+        "aspect": {"kind": "num", "def": 1, "min": 0.1, "max": 10, "key": True},
+        "threshold": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "bloom": {"kind": "num", "def": 0, "min": 0, "key": True},
+    }},
     "glow": {"inputs": ["src"], "params": {
         "threshold": {"kind": "num", "def": 0.8, "key": True},
         "softness": {"kind": "num", "def": 0.2, "min": 0, "key": True},
@@ -1588,6 +1602,29 @@ def defocus_image(img, p):
     return (acc / total).astype(np.float32)
 
 
+def z_defocus_image(img, z, p):
+    """The page's ``zDefocusImage``: DepthBlur's layers through Defocus's aperture, one plane of depth per pixel."""
+    d = img.astype(np.float64)
+    L = max(2, int(math.floor(p["layers"] + 0.5)))
+    fall = max(p["falloff"], 1e-6)
+    pos = _clamp01((np.abs(z.astype(np.float64) - p["focus"]) - p["dof"] / 2) / fall) * (L - 1)
+    num = np.zeros(d.shape)
+    den = np.zeros(d.shape[:2])
+    for layer in range(L):
+        k = 1 - np.abs(pos - layer)
+        if not (k > 0).any():
+            continue
+        k = np.where(k > 0, k, 0.0)
+        col = (d * k[..., None]).astype(np.float32)
+        wt = k.astype(np.float32)[..., None]   # one channel: the page blurs four alike, each the same numbers
+        size = (p["size"] * layer) / (L - 1)
+        ap = {"size": size, "shape": p["shape"], "blades": p["blades"], "rotation": p["rotation"], "aspect": p["aspect"]}
+        num = num + defocus_image(col, dict(ap, threshold=p["threshold"], bloom=p["bloom"]))
+        den = den + defocus_image(wt, dict(ap, threshold=1, bloom=0))[..., 0]
+    ok = (den > 1e-6)[..., None]
+    return np.where(ok, num / np.where(ok, den[..., None], 1), d).astype(np.float32)
+
+
 def _smooth(e0, e1, x):
     if not e1 > e0:
         return np.where(x < e0, 0.0, 1.0)
@@ -2416,7 +2453,7 @@ _TWO_IN = {"merge", "copy", "channelmerge"}
 # Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
 MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
             "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
-            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus"] + list(_X.EXTRA_MASKABLE)
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus", "zdefocus"] + list(_X.EXTRA_MASKABLE)
 OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
 for _mt in MASKABLE:
     _md = NODE_TYPES[_mt]
@@ -2792,6 +2829,14 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p = P(n, f, NODE_TYPES["depthblur"]["params"])
             p["size"] = p["size"] * scale
             return depth_blur_image(src, conform(run(ins[1], f, d1), src.shape[1], src.shape[0]), p)
+        if t == "zdefocus":
+            src = run(ins[0], f, d1)
+            p = P(n, f, NODE_TYPES["zdefocus"]["params"])
+            z = channel_of(src, ex_of(ins[0], f), p["channel"] or "depth.z")
+            if z is None:
+                return src
+            p["size"] = p["size"] * scale
+            return z_defocus_image(src, z, p)
         if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud"):
             if t == "camera3d":
                 return blank(W, H), {}

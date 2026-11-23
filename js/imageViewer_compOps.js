@@ -578,3 +578,47 @@ export function defocusImage(img, p) {
     }
     return out;
 }
+
+/**
+ * A defocus that grows with the distance from the focus, as DepthBlur, but through the aperture (Defocus's
+ * shape and bloom): `z` is one plane of depth per pixel; each pixel's circle of confusion is
+ * clamp((|z - focus| - dof / 2) / falloff, 0, 1) of `size`. The picture is defocused at `layers` sizes from
+ * 0 to `size` and each pixel takes the two nearest, weighted by where its circle lies between them.
+ */
+export function zDefocusImage(img, z, p) {
+    const w = img.w, h = img.h, d = img.data, N = w * h;
+    const L = Math.max(2, Math.round(p.layers));
+    const pos = new Float64Array(N);
+    const fall = Math.max(p.falloff, 1e-6);
+    for (let i = 0; i < N; i++) pos[i] = clamp01((Math.abs(z[i] - p.focus) - p.dof / 2) / fall) * (L - 1);
+    const num = new Float64Array(N * 4), den = new Float64Array(N);
+    for (let l = 0; l < L; l++) {
+        const col = blank(w, h), wt = blank(w, h);
+        let any = false;
+        for (let i = 0; i < N; i++) {
+            const k = 1 - Math.abs(pos[i] - l);
+            if (k <= 0) continue;
+            any = true;
+            const j = i * 4;
+            col.data[j] = d[j] * k; col.data[j + 1] = d[j + 1] * k; col.data[j + 2] = d[j + 2] * k; col.data[j + 3] = d[j + 3] * k;
+            wt.data[j] = k;
+        }
+        if (!any) continue;
+        const size = (p.size * l) / (L - 1);
+        const ap = { size, shape: p.shape, blades: p.blades, rotation: p.rotation, aspect: p.aspect };
+        const bc = defocusImage(col, { ...ap, threshold: p.threshold, bloom: p.bloom });
+        const bw = defocusImage(wt, { ...ap, threshold: 1, bloom: 0 });
+        for (let i = 0; i < N; i++) {
+            const j = i * 4;
+            num[j] += bc.data[j]; num[j + 1] += bc.data[j + 1]; num[j + 2] += bc.data[j + 2]; num[j + 3] += bc.data[j + 3];
+            den[i] += bw.data[j];
+        }
+    }
+    const out = blank(w, h), o = out.data;
+    for (let i = 0; i < N; i++) {
+        const j = i * 4;
+        if (den[i] > 1e-6) { o[j] = num[j] / den[i]; o[j + 1] = num[j + 1] / den[i]; o[j + 2] = num[j + 2] / den[i]; o[j + 3] = num[j + 3] / den[i]; }
+        else { o[j] = d[j]; o[j + 1] = d[j + 1]; o[j + 2] = d[j + 2]; o[j + 3] = d[j + 3]; }
+    }
+    return out;
+}

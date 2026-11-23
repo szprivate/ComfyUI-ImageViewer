@@ -32,7 +32,7 @@ LABELS = {"read": "Read", "constant": "Constant", "roto": "Roto", "paint": "Pain
           "lensdistortion": "LensDistortion", "gridwarp": "GridWarp", "tracker": "Tracker", "planartracker": "PlanarTracker", "grade": "Grade", "colorcorrect": "ColorCorrect", "ocio_colorspace": "OCIOColorSpace",
           "ocio_display": "OCIODisplay", "keyer": "Keyer", "lumakeyer": "LumaKeyer", "chromakeyer": "ChromaKeyer", "blur": "Blur",
           "glow": "Glow", "erode": "Erode/Dilate", "laplacian": "Laplacian", "motionblur": "MotionBlur", "depthblur": "DepthBlur",
-          "defocus": "Defocus", "lensflare": "LensFlare", "shuffle": "Shuffle", "addchannels": "AddChannels",
+          "defocus": "Defocus", "zdefocus": "ZDefocus", "lensflare": "LensFlare", "shuffle": "Shuffle", "addchannels": "AddChannels",
           "removechannels": "Remove", "channelmerge": "ChannelMerge", "channelmath": "ChannelMath", "premult": "Premult",
           "unpremult": "Unpremult", "retime": "Retime", "vectors": "Vectors", "metadata": "Metadata", "write": "Write",
           "camera3d": "Camera", "card3d": "Card", "geo3d": "Shape", "project3d": "Project", "scene3d": "Scene",
