@@ -601,6 +601,7 @@ export const CompPanelMixin = {
             room3d: (stage, api) => this._cpEngine(rec).openRoom(stage, api),
             room3dClose: () => { if (rec.engine) rec.engine.closeRoom(); },
             room3dSync: () => { if (rec.engine) rec.engine.roomSync(); },
+            room3dKey: (k) => !!(rec.engine && rec.engine.roomKey(k)),
             playing: () => !!this.isPlaying,
             onCache: () => { if (this.activeTab === key && this.queueCacheMarks) this.queueCacheMarks(); },
             ocioInfo: () => this._cpOcioInfo(),

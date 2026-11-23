@@ -51,7 +51,14 @@ export const RoomMixin = {
         const group = new THREE.Group();
         group.name = "comp3d-room";
         v.scene.add(group);
-        const gizmo = new TransformControls(v.camera, v.canvas);
+        // The room is looked at through the free camera: a SceneFile's scene may name a camera of its own, which the
+        // perspective view would otherwise look through (and navigating would move it). Put back by closeRoom.
+        if (v.paneThroughId) {
+            const through = Object.getPrototypeOf(v).paneThroughId;
+            v.paneThroughId = function (kind = this.paneActiveKind()) { return kind === "persp" ? null : through.call(this, kind); };
+        }
+        // The camera the room is seen through (the viewport's pane camera, which navigation moves).
+        const gizmo = new TransformControls(v.activeCameraObject ? v.activeCameraObject() : v.camera, v.canvas);
         gizmo.setSpace("local");
         const helper = gizmo.getHelper ? gizmo.getHelper() : gizmo;
         helper.name = "comp3d-room-gizmo";
@@ -68,11 +75,8 @@ export const RoomMixin = {
         gizmo.addEventListener("objectChange", () => { if (room.drag && room.id) api.gizmo(room.id, this._roomPatch(), "move"); });
         // W / E / R as everywhere in the 3D space, while the pointer is over the room.
         room.keys = (e) => {
-            if (!this._room || e.ctrlKey || e.metaKey || e.altKey) return;
-            const k = e.key.toLowerCase(), mode = k === "w" ? "translate" : k === "e" ? "rotate" : k === "r" ? "scale" : null;
-            if (!mode || !this.box.matches(":hover")) return;
-            if (mode === "scale" && room.id && !(ROOM_MOVABLE[(api.paramsOf(room.id) || {}).type] || []).includes("scale")) return;
-            gizmo.setMode(mode); e.preventDefault(); e.stopPropagation(); v.requestRender();
+            if (!this._room || e.ctrlKey || e.metaKey || e.altKey || !this.box.matches(":hover")) return;
+            if (this.roomKey(e.key.toLowerCase())) { e.preventDefault(); e.stopPropagation(); }
         };
         this.doc.addEventListener("keydown", room.keys, true);
         // The picture's own presses (pan, paint, pick) stay out of the room: what reaches the box stops there.
@@ -80,6 +84,17 @@ export const RoomMixin = {
         for (const ev of ROOM_STOPPED) this.box.addEventListener(ev, room.stop);
         v._resize();
         this.roomSync();
+        return true;
+    },
+
+    /** W / E / R: the gizmo's move / turn / scale (scale only on what has one). True when it was the room's. */
+    roomKey(k) {
+        const room = this._room;
+        const mode = k === "w" ? "translate" : k === "e" ? "rotate" : k === "r" ? "scale" : null;
+        if (!room || !mode) return false;
+        if (mode === "scale" && room.id && !(ROOM_MOVABLE[(room.api.paramsOf(room.id) || {}).type] || []).includes("scale")) return true;
+        room.gizmo.setMode(mode);
+        this.view.requestRender();
         return true;
     },
 
@@ -96,6 +111,7 @@ export const RoomMixin = {
         this._roomClear(room);
         v.scene.remove(room.group);
         if (v.controls) v.controls.enabled = true;
+        if (Object.prototype.hasOwnProperty.call(v, "paneThroughId")) delete v.paneThroughId;
         if (v.grid) v.grid.visible = false;
         this.box.classList.remove("comp3d-room");
         Object.assign(this.box.style, { position: "absolute", width: "1px", height: "1px", visibility: "hidden", pointerEvents: "none", left: "-10px", top: "-10px", zIndex: "" });
@@ -142,6 +158,8 @@ export const RoomMixin = {
             if (last.cam) room.group.add(this._roomFrustum(THREE, last.cam));
             if (!room.framed) { room.framed = true; this._roomFrame(last); }
         }
+        const seen = v.activeCameraObject ? v.activeCameraObject() : v.camera;
+        if (room.gizmo.camera !== seen) room.gizmo.camera = seen;
         // The gizmo on the selected node that it can move.
         const id = room.api.selected();
         const p = id ? room.api.paramsOf(id) : null;
@@ -195,8 +213,9 @@ export const RoomMixin = {
         const dir = e.clone().sub(centre);
         if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
         dir.normalize().add(new THREE.Vector3(0.6, 0.5, 0)).normalize();
-        v.camera.position.copy(centre).addScaledVector(dir, size * 1.6);
-        v.camera.lookAt(centre);
+        const cam = v.activeCameraObject ? v.activeCameraObject() : v.camera;
+        cam.position.copy(centre).addScaledVector(dir, size * 1.6);
+        cam.lookAt(centre);
         if (v.controls) { v.controls.target.copy(centre); v.controls.update(); }
         v.requestRender();
     },
