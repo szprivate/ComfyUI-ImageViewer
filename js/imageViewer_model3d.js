@@ -46,6 +46,9 @@ import { View3DMeasureMixin } from "./imageViewer_view3dMeasure.js";
 import { View3DPickPointMixin } from "./imageViewer_view3dPickPoint.js";
 import { View3DMeshEditMixin } from "./imageViewer_view3dMeshEdit.js";
 import { View3DMeshToolsMixin } from "./imageViewer_view3dMeshTools.js";
+// A selection box stands this share of the object's size outside it (imageViewer_model3d.js _refreshAlsoBoxes).
+const BOX_PAD = 0.03;
+
 
 let _libsPromise = null;
 
@@ -745,6 +748,13 @@ export class Model3DView {
         this._tumbleEnd(e);
         const d = this._downAt;
         this._downAt = null;
+        // A right click that did not drag (a drag pans): the context menu for what is under it.
+        if (d && d.button === 2 && !d.alt && this.scene3d && this.hooks.onContextMenu && !this._walk
+            && Math.abs(e.clientX - d.x) <= 4 && Math.abs(e.clientY - d.y) <= 4) {
+            const hit = this._me ? null : this._pick(e);
+            this.hooks.onContextMenu({ id: hit, x: e.clientX, y: e.clientY, meshEditing: !!this._me });
+            return;
+        }
         if (!d || d.button !== 0 || d.alt || !this.scene3d) return;
         if (this._me) return;
         if (this._mqJustBoxed) { this._mqJustBoxed = false; return; }
@@ -2549,7 +2559,25 @@ export class Model3DView {
             const entry = this._entries.get(id);
             if (!entry) continue;
             box.setFromObject(entry.root);
-            box.visible = entry.root.visible;
+            // Drawn a little outside the object, so it never sits on its edges and reads as
+            // an edge selection; and not at all while a mesh is edited (its own overlay shows that).
+            const pos = box.geometry.attributes.position;
+            if (pos && pos.count === 8) {
+                const a = pos.array;
+                let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+                for (let i = 0; i < 24; i += 3) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k], a[i + k]); hi[k] = Math.max(hi[k], a[i + k]); }
+                if (Number.isFinite(lo[0])) {
+                    const size = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+                    const pad = size * BOX_PAD;
+                    for (let i = 0; i < 24; i += 3) for (let k = 0; k < 3; k++) {
+                        const mid = (lo[k] + hi[k]) / 2;
+                        a[i + k] += a[i + k] >= mid ? pad : -pad;
+                    }
+                    pos.needsUpdate = true;
+                    box.geometry.computeBoundingSphere();
+                }
+            }
+            box.visible = entry.root.visible && !this._me;
         }
     }
 

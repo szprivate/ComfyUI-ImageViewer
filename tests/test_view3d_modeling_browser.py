@@ -444,7 +444,8 @@ class ModelingTests(unittest.TestCase):
             pg.close()
         self.assertEqual(self.errors, [])
         self.assertEqual((ring["mode"], len(ring["sel"])), ("edge", 4))
-        self.assertEqual((bevelled["verts"], bevelled["faces"]), (24, 18))
+        # The four sides and four bevel faces; top and bottom take the cut corners in (octagons, no triangles).
+        self.assertEqual((bevelled["verts"], bevelled["faces"]), (16, 10))
         self.assertEqual(bevel_closed, 0)
         self.assertEqual(len(one["sel"]), 1)
         self.assertEqual((cut["verts"], cut["faces"]), (12, 10))
@@ -556,7 +557,7 @@ class ModelingTests(unittest.TestCase):
         self.assertEqual(agent["bevel"], [True, True])
         self.assertAlmostEqual(agent["move"], 1.25, places=4)
         self.assertEqual(agent["set"], [1, "cylinder"])
-        self.assertEqual(agent["info"], [True, 5])             # the bottom and the bevels' four corner triangles in its plane
+        self.assertEqual(agent["info"], [True, 1])             # the bottom: the bevels leave no corner triangles in its plane
         self.assertIn("op is one of", agent["err"])
         self.assertEqual(mirror, [True, 12, 10])
 

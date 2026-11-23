@@ -33,6 +33,69 @@ const COLORS = {
     face: 0xff8a1f,
 };
 
+const SEL_EDGE_PX = 3.5;        // selected edges are drawn this many pixels wide
+
+/**
+ * Lines a few pixels wide, whatever the zoom: WebGL draws every line one pixel
+ * wide, so each segment is a flat strip turned to face the screen, widened in
+ * the vertex shader by `width` pixels of the viewport it is drawn into (a split
+ * layout draws each pane into its own viewport).
+ */
+export function thickLines(THREE, segments, color, width = SEL_EDGE_PX) {
+    const n = segments.length;
+    const own = new Float32Array(n * 12), a = new Float32Array(n * 12), b = new Float32Array(n * 12);
+    const side = new Float32Array(n * 4), end = new Float32Array(n * 4);
+    const index = [];
+    segments.forEach(([p, q], k) => {
+        for (let j = 0; j < 4; j++) {
+            const i = k * 4 + j;
+            own.set(j < 2 ? p : q, i * 3);
+            a.set(p, i * 3); b.set(q, i * 3);
+            side[i] = j % 2 ? 1 : -1;
+            end[i] = j < 2 ? 0 : 1;
+        }
+        const o = k * 4;
+        index.push(o, o + 1, o + 3, o, o + 3, o + 2);
+    });
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(own, 3));
+    g.setAttribute("aStart", new THREE.BufferAttribute(a, 3));
+    g.setAttribute("aEnd", new THREE.BufferAttribute(b, 3));
+    g.setAttribute("aSide", new THREE.BufferAttribute(side, 1));
+    g.setAttribute("aWhich", new THREE.BufferAttribute(end, 1));
+    g.setIndex(index);
+    const mat = new THREE.ShaderMaterial({
+        uniforms: { uColor: { value: new THREE.Color().setRGB(color[0], color[1], color[2]) },
+                    uRes: { value: new THREE.Vector2(1, 1) }, uWidth: { value: width } },
+        vertexShader: `
+            attribute vec3 aStart; attribute vec3 aEnd; attribute float aSide; attribute float aWhich;
+            uniform vec2 uRes; uniform float uWidth;
+            void main() {
+                vec4 ca = projectionMatrix * modelViewMatrix * vec4(aStart, 1.0);
+                vec4 cb = projectionMatrix * modelViewMatrix * vec4(aEnd, 1.0);
+                vec4 c = aWhich < 0.5 ? ca : cb;
+                vec2 d = (cb.xy / cb.w - ca.xy / ca.w) * uRes;
+                d = length(d) > 1e-6 ? normalize(d) : vec2(1.0, 0.0);
+                vec2 nrm = vec2(-d.y, d.x);
+                c.xy += nrm * aSide * uWidth / uRes * c.w;
+                c.z -= 0.0004 * c.w;          // a hair in front of the thin line and the faces
+                gl_Position = c;
+            }`,
+        fragmentShader: `uniform vec3 uColor; void main() { gl_FragColor = vec4(uColor, 1.0); }`,
+        side: THREE.DoubleSide, depthWrite: false, toneMapped: false, fog: false,
+    });
+    const mesh = new THREE.Mesh(g, mat);
+    const vp = new THREE.Vector4();
+    mesh.onBeforeRender = (renderer) => {
+        renderer.getCurrentViewport(vp);
+        mat.uniforms.uRes.value.set(Math.max(1, vp.z), Math.max(1, vp.w));
+        mat.uniforms.uWidth.value = width * (renderer.getPixelRatio ? renderer.getPixelRatio() : 1);
+    };
+    mesh.raycast = () => {};          // an overlay: never picked
+    mesh.frustumCulled = false;
+    return mesh;
+}
+
 /** The edit options kept per viewer. */
 export function cleanMeshEditOptions(raw) {
     const o = raw && typeof raw === "object" ? raw : {};
@@ -268,6 +331,7 @@ export const View3DMeshEditMixin = {
         this._meshRefresh(entry);
         this._meAfterBuild(entry);
         this._syncSelection();
+        if (this._refreshAlsoBoxes) this._refreshAlsoBoxes();     // no selection boxes while editing
         this._meTell();
         this.requestRender();
         return true;
@@ -289,6 +353,7 @@ export const View3DMeshEditMixin = {
         this.root.classList.remove("mesh-editing");
         if (this._meBar) { this._meBar.remove(); this._meBar = null; }
         this._syncSelection();
+        if (this._refreshAlsoBoxes) this._refreshAlsoBoxes();
         this._meTell();
         this.requestRender();
     },
@@ -365,7 +430,7 @@ export const View3DMeshEditMixin = {
             if (c.geometry) c.geometry.dispose();
             if (c.material) c.material.dispose();
         }
-        me.pts = me.lines = me.faces = null;
+        me.pts = me.lines = me.faces = me.thick = null;
     },
 
     /** Points, edge lines and the selected faces, from the working mesh. */
@@ -421,6 +486,14 @@ export const View3DMeshEditMixin = {
         me.lines = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ vertexColors: true, toneMapped: false, fog: false }));
         me.lines.renderOrder = 2;
         me.group.add(me.lines);
+        // The selected edges (and a selected face's) drawn wider, so what is picked reads at a glance.
+        const lit = me.edges.filter(([a, b]) => { const key = MD.edgeKey(a, b); return esel.has(key) || faceEdges.has(key); });
+        if (lit.length) {
+            me.thick = thickLines(THREE, lit.map(([a, b]) => [work.v[a], work.v[b]]), COLORS.edgeSel);
+            me.thick.userData.edges = lit;
+            me.thick.renderOrder = 3;
+            me.group.add(me.thick);
+        }
 
         if (fsel && fsel.size) {
             const tri = [];
@@ -808,6 +881,18 @@ export const View3DMeshEditMixin = {
             (me.edges || []).forEach(([x, y], k) => { a.array.set(me.work.v[x], k * 6); a.array.set(me.work.v[y], k * 6 + 3); });
             a.needsUpdate = true;
         }
+        if (me.thick) {
+            const g2 = me.thick.geometry;
+            const [own, a0, b0] = ["position", "aStart", "aEnd"].map((n) => g2.attributes[n]);
+            me.thick.userData.edges.forEach(([x, y], k) => {
+                const p = me.work.v[x], q = me.work.v[y];
+                for (let j = 0; j < 4; j++) {
+                    const i = (k * 4 + j) * 3;
+                    own.array.set(j < 2 ? p : q, i); a0.array.set(p, i); b0.array.set(q, i);
+                }
+            });
+            own.needsUpdate = a0.needsUpdate = b0.needsUpdate = true;
+        }
         if (me.faces) {
             const tri = [];
             for (const fi of me.sel) {
@@ -858,7 +943,7 @@ export const View3DMeshEditMixin = {
         btn("Face", "Faces (3)", () => this.meshEditSetMode("face"), "face");
         sep();
         btn("Bridge", "Join two holes, or two groups of faces, with a band of faces", () => this._meOp("bridge"));
-        btn("Fill", "Close the holes the selection touches (all of them with nothing selected)", () => this._meOp("fill"));
+        btn("Fill Hole", "Close the holes the selection touches with a face (every hole with nothing selected)", () => this._meOp("fill"));
         btn("Connect", "Split a face between the selected vertices, or the middles of the selected edges", () => this._meOp("connect"));
         sep();
         btn("Subdivide", "Split every face once, rounding the mesh (the whole mesh)", () => this._meOp("subdivide"));
