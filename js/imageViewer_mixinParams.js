@@ -1,7 +1,10 @@
 // imageViewer_mixinParams.js
-// Parameters panel: rendering node widgets, monitoring canvas selection.
+// Parameters panel: rendering node widgets, monitoring canvas selection. The panel comes in instances
+// (imageViewer_paramsInstance.js): this one stays the timeshare slot it always was (tools, Channel Box and
+// comp settings take its body over); every further one is a node view of its own, pinned by its own padlock.
 import { app } from "../../scripts/app.js";
 import { isParamLocked } from "./imageViewer_paramLocks.js";
+import { createParamsInstance, buildParamInput } from "./imageViewer_paramsInstance.js";
 
 export const ParamsMixin = {
 
@@ -114,6 +117,13 @@ export const ParamsMixin = {
     // compete with layout work during idle cycles.
 
     startParamMonitor() {
+        // Further Parameters views: each follows the selection until its own padlock pins it to a node.
+        this._dockMakers().params = (v, id, saved) => {
+            const d = (v._dockRootEl && v._dockRootEl.ownerDocument) || (v.paramsPanel && v.paramsPanel.ownerDocument) || document;
+            const host = d.createElement("div");
+            host.className = "params-panel";
+            return createParamsInstance(v, host, {}, saved);
+        };
         let running = true;
         const tick  = () => {
             if (!running) return;
@@ -123,6 +133,13 @@ export const ParamsMixin = {
             // open or not (ToolsMixin._toolFollowSelection).
             try { this._toolFollowSelection?.(app?.canvas?.selected_nodes); }
             catch (e) { console.warn("imageViewer: tool selection follow failed", e); }
+
+            // The instances follow the selection on their own, whatever mode this panel is in.
+            if (this._dockInstancesOf) {
+                for (const { inst } of this._dockInstancesOf("params")) {
+                    try { inst.tick(); } catch (e) { console.warn("imageViewer: a parameters instance failed to follow", e); }
+                }
+            }
 
             if (!this.isPanelDocked || !this.isPanelDocked("params")) return;
             // A drawing tool has the panel (ToolsMixin._toolShowDock).
@@ -271,82 +288,10 @@ export const ParamsMixin = {
         this.paramRefreshCurves?.();
     },
 
-    // Build the appropriate input element for a given widget
+    // Build the appropriate input element for a given widget (shared with the instances; this one's edits
+    // go to the canvas selection).
     _buildParamInput(w, node, isConnected) {
-        let input;
-
-        if (w.type === "toggle" || w.type === "BOOLEAN") {
-            input = document.createElement("input");
-            input.type    = "checkbox";
-            input.checked = !!w.value;
-            input.onchange = (e) => { this.applyToSelectedNodes(w.name, e.target.checked); };
-
-        } else if (w.type === "combo" || (w.options && w.options.values)) {
-            input = document.createElement("select");
-            input.className = "param-input";
-            const frag = document.createDocumentFragment();
-            (w.options.values || []).forEach(o => {
-                const opt = document.createElement("option");
-                opt.value = o; opt.innerText = o;
-                if (o === w.value) opt.selected = true;
-                frag.appendChild(opt);
-            });
-            input.appendChild(frag);
-            input.onchange = (e) => { this.applyToSelectedNodes(w.name, e.target.value); };
-
-        } else if (w.type === "number" || typeof w.value === "number") {
-            input = document.createElement("input");
-            input.className = "param-input";
-            input.type  = "number";
-            input.value = w.value;
-            if (w.options) {
-                if (w.options.min  !== undefined) input.min  = w.options.min;
-                if (w.options.max  !== undefined) input.max  = w.options.max;
-                if (w.options.step !== undefined) input.step = w.options.step;
-            }
-            const intStep = w.options && Number.isInteger(w.options.step);
-            input.oninput = (e) => {
-                const val = intStep ? parseInt(e.target.value) : parseFloat(e.target.value);
-                this.applyToSelectedNodes(w.name, val);
-            };
-
-        } else {
-            // treat long strings or explicit multiline options as textarea
-            const wantsMultiline = (w.options && w.options.multiline) ||
-                                   (typeof w.value === 'string' &&
-                                    (w.value.includes('\n') || w.value.length > 50));
-            if (wantsMultiline) {
-                input = document.createElement("textarea");
-                input.rows = 4;
-            } else {
-                input = document.createElement("input");
-                input.type = "text";
-            }
-            input.className = "param-input";
-            input.value     = w.value != null ? w.value : "";
-            input.oninput   = (e) => { this.applyToSelectedNodes(w.name, e.target.value); };
-
-            // Auto-size for long strings
-            if (typeof w.value === 'string') {
-                const len = w.value.length;
-                if (len > 100) {
-                    const maxW   = this.paramsContent ? this.paramsContent.clientWidth - 20 : null;
-                    let estWidth = Math.min(800, Math.max(200, len * 7));
-                    if (maxW && estWidth > maxW) estWidth = maxW;
-                    input.style.width = `${estWidth}px`;
-                }
-                if (input.tagName === 'TEXTAREA') {
-                    input.rows = Math.min(10, Math.max(4, w.value.split("\n").length));
-                }
-            }
-        }
-
-        if (isConnected) {
-            input.disabled    = true;
-            input.title       = "Controlled by input connection";
-            input.style.opacity = "0.5";
-        }
-
-        return input;
+        return buildParamInput(w, node, isConnected,
+            (name, value) => this.applyToSelectedNodes(name, value), document, this.paramsContent);
     },
 };

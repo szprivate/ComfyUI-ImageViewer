@@ -520,11 +520,11 @@ textarea.param-input {
     min-height: 60px;
     overflow: auto;
 }
-#params-lock-btn {
+.params-lock-btn {
     background: transparent; border: none; color: #888; cursor: pointer;
     font-size: 14px; padding: 0 4px; margin-left: auto; flex-shrink: 0;
 }
-#params-lock-btn:hover { color: #fff; }
+.params-lock-btn:hover { color: #fff; }
 
 /* Keyed node parameters (imageViewer_paramAnim.js), in Nuke's colours: an
    animated value on light blue, a deeper blue on a frame that has a key. */
@@ -1989,6 +1989,8 @@ textarea.param-input {
 .viewport.comp-mode .imageviewer-toolbar,
 .viewport.motion-mode .imageviewer-toolbar { display: none !important; }
 .motion-part-panel > .mg-slot, .motion-part-panel > .comp-slot { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
+/* An extra Node Graph panel (imageViewer_compGraphView.js): the view's .cp-graph fills it as a slot does. */
+.comp-graph-view { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; background: #1b1b1f; }
 .mg-note { padding: 14px; color: #8a8a92; font: 12px/1.4 system-ui, sans-serif; }
 .mg-open-state { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; padding: 24px; text-align: center; color: #d8d8dc; font: 13px/1.5 system-ui, "Segoe UI", sans-serif; }

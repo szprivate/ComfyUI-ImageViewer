@@ -245,7 +245,7 @@ line.cp-shuf2-wire.temp{stroke-dasharray:4 3}
 .cp-swatches span{width:18px;height:18px;border-radius:3px;border:1px solid #0008;cursor:pointer}
 .cp-swatches span:hover{outline:2px solid #fff}
 `;
-const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8",
+export const CAT_COLOR = { Image: "#9aa6b8", Merge: "#6f9fe0", Transform: "#b39ddb", Color: "#86c98a", Filter: "#e0a060", Other: "#c8c8c8",
     Channel: "#9b8a6a", Time: "#d98fb0", Keyer: "#5fc4b8", Draw: "#d6c86a",
     "3D": "#7fb3d5", Deep: "#8c7fd5", Views: "#d5a07f", VFX: "#e07fa8" };
 const KIND_ICON = { layer: "▣", background: "▤", group: "⧉" };
@@ -407,6 +407,9 @@ export function createCompEditor(host, opts = {}) {
     root.append(bar, stage);
     host.append(root);
     const graph = el(doc, "div", "cp-graph"); graph.tabIndex = 0;
+    // Further views of the same graph (dock instances of the Node Graph panel, imageViewer_compGraphView.js):
+    // each draws itself after every graph render, with a viewport of its own.
+    const graphViews = new Set();
     const world = el(doc, "div", "cp-world");
     const wires = svgEl(doc, "svg", { class: "cp-wires" });
     world.append(wires);
@@ -1391,6 +1394,7 @@ export function createCompEditor(host, opts = {}) {
         }
         placeWorld();
         if (!st.graph.fitted && graph.clientWidth) frameAll();
+        for (const fn of graphViews) fn();
     }
     // ── groups: going in and out, making and taking apart, the tool library ──
     function renderCrumbs() {
@@ -3860,6 +3864,9 @@ export function createCompEditor(host, opts = {}) {
             refresh(["props"]);
         },
         frameAll,
+        /** Another view of this graph (a dock instance): fn() is called after every graph render. */
+        addGraphView(fn) { graphViews.add(fn); },
+        removeGraphView(fn) { graphViews.delete(fn); },
         select: (ids) => select(ids),
         selection: () => st.sel.slice(),
         addNodeAt: (type, at) => addNodeAt(type, at),

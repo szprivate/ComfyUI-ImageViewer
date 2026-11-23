@@ -54,6 +54,12 @@ const _dockId = (id) => {
 const dockBase = (id) => { const i = id.indexOf("@"); return i < 0 ? id : id.slice(0, i); };
 const dockInstN = (id) => { const i = id.indexOf("@"); return i < 0 ? 1 : (parseInt(id.slice(i + 1), 10) || 1); };
 const dockIsInstance = (id) => id.indexOf("@") >= 0;
+// The kinds that come in instances. A saved layout may name one before its maker has registered (the makers
+// register when their panel first initialises): the entry is kept regardless, and the element made once the
+// maker is there. The Edit, Paint, Motion and Comp panels (except the Node Graph) are NOT here: one editor
+// DOM is seated into them; nor is agentChat, which mounts the page's one chat host.
+const MULTI_KINDS = new Set(["history", "browser", "params", "previz", "layers3d", "picker", "mmGuide", "mmPlate",
+    "animLayers", "curves", "dopeSheet", "clips", "rotoCurves", "paramCurves", "compGraph"]);
 
 // The dockable panels, and the room each one needs to stay usable.
 const DOCK_PANELS = {
@@ -196,7 +202,7 @@ export const DockMixin = {
         this._dockKnown = (id) => {
             const b = dockBase(id);
             if (!DOCK_PANELS[b]) return false;
-            return b === id || !!(this._dockInstMakers && this._dockInstMakers[b]);
+            return b === id || MULTI_KINDS.has(b);
         };
         const doc = main.ownerDocument;
         // The rails of the old markup: the tree draws splits of its own. (A rail element a cached older page still
@@ -267,7 +273,21 @@ export const DockMixin = {
 
     /** The makers registered by the panel kinds that can multiply: base id -> (viewer, id, saved) => instance. */
     _dockMakers() {
-        return this._dockInstMakers || (this._dockInstMakers = {});
+        if (!this._dockInstMakers) {
+            const self = this;
+            this._dockInstMakers = new Proxy({}, {
+                set(t, k, fn) {
+                    t[k] = fn;
+                    // A restored layout may already name instances of this kind: make their elements now.
+                    if (self.dockLayout && DT.isTreeLayout(self.dockLayout)
+                        && DT.panels(self.dockLayout.root).some((p) => dockIsInstance(p.id) && dockBase(p.id) === k)) {
+                        self.applyDockLayout();
+                    }
+                    return true;
+                },
+            });
+        }
+        return this._dockInstMakers;
     },
 
     _dockCanMulti(base) {
@@ -300,6 +320,8 @@ export const DockMixin = {
         inst.el.dataset.panel = id;
         this._dockInstEls.set(id, inst.el);
         this._dockInsts.set(id, inst);
+        // Made mid-pass (a maker registered late, a layout restored): the notice below must wake it.
+        if (this._dockShown) this._dockShown.delete(id);
         this._ensurePanelTitlebar(id);
         return inst.el;
     },

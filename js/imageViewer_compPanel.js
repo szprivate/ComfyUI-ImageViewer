@@ -16,6 +16,7 @@
 // /imageviewer/comp_render), and where a render lands: the History, and the ComfyUI canvas as a loader node.
 import { api } from "../../scripts/api.js";
 import { createCompEditor } from "./imageViewer_compEditor.js";
+import { createCompGraphView } from "./imageViewer_compGraphView.js";
 import { canvasContext, notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 import { uploadPicture } from "./imageViewer_atlasDrops.js";
 import { addRecentDoc } from "./imageViewer_recentDocs.js";
@@ -71,8 +72,44 @@ export function asSequencePattern(path, isSeq) {
 export const CompPanelMixin = {
 
     _cpState() {
-        if (!this._cp) this._cp = { tabs: {}, want: {}, host: null, cache: new Map(), cacheBytes: 0, infos: new Map(), last: {} };
+        if (!this._cp) {
+            this._cp = { tabs: {}, want: {}, host: null, cache: new Map(), cacheBytes: 0, infos: new Map(), last: {} };
+            // Further Node Graph panels: another view of the SAME graph (own pan/zoom, shared model and undo).
+            this._dockMakers().compGraph = (v, id, saved) => v._cpGraphInstance(id, saved);
+        }
         return this._cp;
+    },
+
+    /** One extra Node Graph panel: hosts a view of whichever comp tab is up, re-attached as tabs change. */
+    _cpGraphInstance(id, saved) {
+        const v = this;
+        const doc = (this._dockRootEl && this._dockRootEl.ownerDocument) || (this.viewport && this.viewport.ownerDocument) || document;
+        const host = doc.createElement("div");
+        host.className = "curves-panel motion-part-panel comp-graph-panel";
+        let view = null, editor = null, seed = saved || null;
+        const note = (text) => {
+            const n = doc.createElement("div");
+            n.className = "mg-note";
+            n.textContent = text;
+            return n;
+        };
+        const attach = (ed) => {
+            ed = ed || null;
+            if (ed === editor) { if (view) view.render(); return; }
+            if (view) { view.dispose(); view = null; }
+            editor = ed;
+            host.replaceChildren();
+            if (!ed) { host.append(note("Open a comp to see its node graph here.")); return; }
+            view = createCompGraphView(host, ed, seed);
+            seed = null;
+        };
+        return {
+            el: host,
+            attach,
+            wake() { const rec = v._cpActive(); attach(rec && rec.editor); },
+            save() { return view ? view.save() : seed; },
+            dispose() { if (view) { view.dispose(); view = null; } editor = null; },
+        };
     },
 
     isCompTab(key = this.activeTab) {
@@ -442,6 +479,10 @@ export const CompPanelMixin = {
             else slot.replaceChildren(this._cpNote(slot.ownerDocument, "Open a comp to see its " + (part === "graph" ? "node graph" : part) + "."));
         }
         this._cpSeatBottom(rec);
+        // The extra Node Graph panels look at the same comp: re-attach them to this tab's editor.
+        if (this._dockInstancesOf) {
+            for (const { inst } of this._dockInstancesOf("compGraph")) inst.attach(rec && rec.editor);
+        }
         if (rec && rec.editor) this._viewerWindow().requestAnimationFrame(() => rec.editor.relayout && rec.editor.relayout());
     },
 
