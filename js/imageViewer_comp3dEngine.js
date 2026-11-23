@@ -172,8 +172,7 @@ export function mergeScenes(entries) {
 export class Comp3DEngine {
     /** host: an element of the page the hidden view lives in. onChange(): what it draws changed (a scene arrived). */
     constructor(host, { onChange } = {}) {
-        this.doc = host.ownerDocument;
-        this.box = this.doc.createElement("div");
+        this.box = host.ownerDocument.createElement("div");
         this.box.className = "comp3d-engine";
         // Never shown: a view of its own, drawn into float targets. 1 x 1 keeps the canvas small.
         Object.assign(this.box.style, { position: "absolute", width: "1px", height: "1px", overflow: "hidden", visibility: "hidden", pointerEvents: "none", left: "-10px", top: "-10px" });
@@ -190,6 +189,9 @@ export class Comp3DEngine {
         this._targets = {};
         this._ensuring = null;
     }
+
+    /** The document the engine is in NOW: popped out, the box moves into the other window's document. */
+    get doc() { return this.box.ownerDocument; }
 
     get sig() { return `${this.ready ? 1 : 0}.${this._rev}`; }
 

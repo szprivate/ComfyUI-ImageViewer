@@ -156,6 +156,33 @@ ROOM = """async () => {
 }"""
 
 
+# Side by side: the room beside the picture, Alt + left tumbling about the Card under the pointer, F framing it.
+SPLIT = ROOM.split("  const btn")[0] + """  ed.setRoomSplit(true);
+  const btn = (rec.el && rec.el.querySelector('.cp-3d')) || P.shadowRoot.querySelector('.cp-3d');
+  btn.click();
+  for (let i = 0; i < 60 && !(rec.engine.roomInfo() && rec.engine.roomInfo().objects >= 2); i++) await sleep(100);
+  await sleep(300);
+  const box = rec.engine.box, side = box.parentNode, stage = side.parentNode.querySelector('.cp-stage');
+  const v = rec.engine.view;
+  const c = v.canvas.getBoundingClientRect();
+  const p = v.libs.THREE ? new v.libs.THREE.Vector3(0, 0, 0) : null;
+  const card0 = ed.comp().nodes.find(n => n.type === 'card3d');
+  p.set(...(card0.translate || [0, 0, 0])).project(v.activeCameraObject());
+  const ev = { clientX: c.left + (p.x + 1) / 2 * c.width, clientY: c.top + (1 - p.y) / 2 * c.height };
+  const hit = v._surfaceUnder(ev);
+  ed.select([card.id]);
+  await sleep(200);
+  const framed = rec.engine.roomKey('f');
+  const t = v.controls.target.toArray();
+  const out = { ready: true, inSide: side.classList.contains('cp-roomside'), sideW: side.clientWidth, stageW: stage.clientWidth,
+    hit: !!hit, framed, target: t, cardAt: card0.translate || [0, 0, 0] };
+  await ed.setRoom(false);
+  out.sideShown = getComputedStyle(side).display;
+  ed.setRoomSplit(false);
+  return out;
+}"""
+
+
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -272,6 +299,26 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertEqual(st["hidden"], "hidden")
         self.assertEqual(st["warn"], 0)
         self.assertEqual(errors, [])
+
+    def test_the_room_beside_the_picture_tumbles_about_what_is_under_the_pointer(self):
+        pg = self.browser.new_page(viewport={"width": 1400, "height": 900})
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(SPLIT)
+        finally:
+            pg.close()
+        self.assertNotIn("error", st, st)
+        if not st["ready"]:
+            self.skipTest("no float render targets")
+        self.assertTrue(st["inSide"], "side by side: the room is beside the picture")
+        self.assertGreater(st["sideW"], 200)
+        self.assertGreater(st["stageW"], 200, "the picture keeps its half")
+        self.assertTrue(st["hit"], "the Card under the pointer is what Alt + left tumbles about")
+        self.assertTrue(st["framed"])
+        for a, b in zip(st["target"], st["cardAt"]):
+            self.assertAlmostEqual(a, b, places=3)
+        self.assertEqual(st["sideShown"], "none", "closed, the side goes away")
 
     def test_the_renderer_starts_in_another_window(self):
         # Popped out, the engine's canvas belongs to the other window: its WebGL 2 context is not an instance of

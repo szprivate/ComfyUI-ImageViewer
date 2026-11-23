@@ -57,6 +57,18 @@ export const RoomMixin = {
             const through = Object.getPrototypeOf(v).paneThroughId;
             v.paneThroughId = function (kind = this.paneActiveKind()) { return kind === "persp" ? null : through.call(this, kind); };
         }
+        // Alt + left tumbles about what is under the pointer, as in the 3D space: the room's own objects count too
+        // (they are not scene items, which is all the view's own look asks).
+        v._surfaceUnder = function (e) {
+            const own = Object.getPrototypeOf(this)._surfaceUnder.call(this, e);
+            if (own || !this._room3d) return own;
+            const rect = this.canvas.getBoundingClientRect();
+            const ndc = new THREE.Vector2(((e.clientX - rect.left) / rect.width) * 2 - 1, -((e.clientY - rect.top) / rect.height) * 2 + 1);
+            const ray = new THREE.Raycaster();
+            ray.setFromCamera(ndc, this.activeCameraObject());
+            const hit = ray.intersectObjects(this._room3d.children, true).find((h) => h.object.isMesh || h.object.isPoints);
+            return hit ? hit.point : null;
+        };
         // The camera the room is seen through (the viewport's pane camera, which navigation moves).
         const gizmo = new TransformControls(v.activeCameraObject ? v.activeCameraObject() : v.camera, v.canvas);
         gizmo.setSpace("local");
@@ -65,6 +77,7 @@ export const RoomMixin = {
         v.scene.add(helper);
         const proxy = new THREE.Object3D();
         v.scene.add(proxy);
+        v._room3d = group;
         const room = this._room = { api, group, gizmo, helper, proxy, id: null, built: null, framed: false, drag: false };
         gizmo.addEventListener("change", () => v.requestRender());
         gizmo.addEventListener("dragging-changed", (e) => {
@@ -87,9 +100,11 @@ export const RoomMixin = {
         return true;
     },
 
-    /** W / E / R: the gizmo's move / turn / scale (scale only on what has one). True when it was the room's. */
+    /** W / E / R: the gizmo's move / turn / scale (scale only on what has one); F frames the selection, else all.
+     *  True when it was the room's. */
     roomKey(k) {
         const room = this._room;
+        if (room && k === "f") { this._roomFrame(this._last, room.id && room.gizmo.object ? room.proxy : null); return true; }
         const mode = k === "w" ? "translate" : k === "e" ? "rotate" : k === "r" ? "scale" : null;
         if (!room || !mode) return false;
         if (mode === "scale" && room.id && !(ROOM_MOVABLE[(room.api.paramsOf(room.id) || {}).type] || []).includes("scale")) return true;
@@ -112,6 +127,8 @@ export const RoomMixin = {
         v.scene.remove(room.group);
         if (v.controls) v.controls.enabled = true;
         if (Object.prototype.hasOwnProperty.call(v, "paneThroughId")) delete v.paneThroughId;
+        if (Object.prototype.hasOwnProperty.call(v, "_surfaceUnder")) delete v._surfaceUnder;
+        v._room3d = null;
         if (v.grid) v.grid.visible = false;
         this.box.classList.remove("comp3d-room");
         Object.assign(this.box.style, { position: "absolute", width: "1px", height: "1px", visibility: "hidden", pointerEvents: "none", left: "-10px", top: "-10px", zIndex: "" });
@@ -203,17 +220,29 @@ export const RoomMixin = {
         return l;
     },
 
-    /** The free view looks at what is there from behind and above the render camera. */
-    _roomFrame(last) {
+    /** The free view looks at what is there from behind and above the render camera. With `only` (F with something
+     *  selected): that object fills the view, seen from where the view already looks. */
+    _roomFrame(last, only) {
         const v = this.view, { THREE } = v.libs;
+        const cam = v.activeCameraObject ? v.activeCameraObject() : v.camera;
+        if (only) {
+            const c = only.getWorldPosition(new THREE.Vector3());
+            const s = Math.max(0.5, only.getWorldScale(new THREE.Vector3()).length());
+            const back = cam.position.clone().sub(v.controls ? v.controls.target : c);
+            if (back.lengthSq() < 1e-9) back.set(0, 0, 1);
+            cam.position.copy(c).addScaledVector(back.normalize(), s * 2.2);
+            cam.lookAt(c);
+            if (v.controls) { v.controls.target.copy(c); v.controls.update(); }
+            v.requestRender();
+            return;
+        }
         const box = new THREE.Box3().setFromObject(this._room.group);
         const centre = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
         const size = box.isEmpty() ? 2 : Math.max(1, box.getSize(new THREE.Vector3()).length());
-        const e = last.cam && last.cam.pos ? new THREE.Vector3(...last.cam.pos) : new THREE.Vector3(0, 0, 2);
+        const e = last && last.cam && last.cam.pos ? new THREE.Vector3(...last.cam.pos) : new THREE.Vector3(0, 0, 2);
         const dir = e.clone().sub(centre);
         if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
         dir.normalize().add(new THREE.Vector3(0.6, 0.5, 0)).normalize();
-        const cam = v.activeCameraObject ? v.activeCameraObject() : v.camera;
         cam.position.copy(centre).addScaledVector(dir, size * 1.6);
         cam.lookAt(centre);
         if (v.controls) { v.controls.target.copy(centre); v.controls.update(); }
