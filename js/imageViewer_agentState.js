@@ -241,7 +241,7 @@ export const AgentStateMixin = {
             tracks: ts ? { total: ts.tracks, on: ts.on, fewest_on_a_frame: ts.leastPerFrame } : { total: 0 },
             solve: sv ? { rms_px: sv.rms, verdict: MM.solveVerdict(sv.rms), focal_mm: fmm } : null,
             built: !!(mm.scene && mm.scene.group),
-            plate_main: !!this._mmPlateMain,
+            plate_main: !!(this._mmPlateMainShown && this._mmPlateMainShown()),
             busy: st.busy ? String(st.busy.what || "busy") : "",
         };
     },

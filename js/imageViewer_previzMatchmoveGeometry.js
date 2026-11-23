@@ -71,7 +71,7 @@ export const PrevizMatchmoveGeometryMixin = {
         if (!tid) throw new Error("Pick one track on the plate first (the one whose spot you will click on the geometry).");
         const view = this._model3d;
         if (!view || !view.pickPointBegin) throw new Error("The 3D view is not up.");
-        if (this.matchmovePlateMain && this._mmPlateMain) this.matchmovePlateMain(false);       // the 3D view must be seen
+        if (this._mmPlateMainShown && this._mmPlateMainShown()) this.matchmovePlateMain(false);       // the 3D view must be seen
         return new Promise((resolve) => {
             st.pinPick = { id: tid };
             view.pickPointBegin({
