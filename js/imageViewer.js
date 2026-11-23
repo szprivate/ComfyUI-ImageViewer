@@ -1963,6 +1963,30 @@ app.registerExtension({
             } catch (err) { console.warn("imageViewer: comp request not run", err); }
         });
 
+        // A render job no page started needs a Render3D frame (comp_routes' page_3d): draw it here if the comp
+        // can be (compServeNeed3d decides; the first page that answers serves the job).
+        api.addEventListener("imageviewer.comp.need3d", (e) => {
+            try {
+                const d = e.detail || {};
+                const owned = d.owner && globalViewerPanel;
+                if (!owned) { const bridge = window.imageViewerApi || {}; try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ } }
+                globalViewerPanel?.compServeNeed3d?.(d);
+            } catch (err) { console.warn("imageViewer: comp 3D frame not drawn", err); }
+        });
+        // The page agentY opens in a headless browser to draw 3D frames when no viewer page is open
+        // (?imageviewer_serve3d=1): it asks for the frames rather than waiting for the event.
+        try {
+            if (new URLSearchParams(window.location.search).get("imageviewer_serve3d")) {
+                const start = () => {
+                    const bridge = window.imageViewerApi || {};
+                    try { if (bridge.show) bridge.show(); } catch (_) { /* already up */ }
+                    if (globalViewerPanel && globalViewerPanel.compServe3dPoll) globalViewerPanel.compServe3dPoll(true);
+                    else setTimeout(start, 500);
+                };
+                setTimeout(start, 500);
+            }
+        } catch (_) { /* no URL */ }
+
         // An agent opened a comp (POST /imageviewer/push with a .comp.json).
         api.addEventListener("imageviewer.comp.open", (e) => {
             try {
