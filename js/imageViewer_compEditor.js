@@ -50,6 +50,7 @@ const BAR_ICONS = {
     fit: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>',
     undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
     redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/>',
+    region: '<path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
     left: '<path d="m15 18-6-6 6-6"/>',
     right: '<path d="m9 18 6-6-6-6"/>',
 };
@@ -152,6 +153,13 @@ const CSS = `
 .cp-exp-tk{position:absolute;top:0;width:1px;height:3px;background:#ffffff38}
 .cp-exp-tk.major{height:5px;background:#ffffff66}
 .cp-exp-n{position:absolute;top:6px;transform:translateX(-50%);font:9px/9px ui-monospace,Menlo,Consolas,monospace;color:#7a7a82}
+.cp-over .cp-rg-line{fill:none;stroke:#ff6600;stroke-width:1px;stroke-dasharray:5 3;vector-effect:non-scaling-stroke}
+.cp-over .cp-rg-line.solid{stroke-dasharray:none}
+.cp-over .cp-rg-sq{fill:#0009;stroke:#ff6600;stroke-width:1.5px;vector-effect:non-scaling-stroke;pointer-events:all}
+.cp-over .cp-rg-sq:hover{stroke:#fff}
+.cp-over .cp-rg-sq[data-crop=tl],.cp-over .cp-rg-sq[data-crop=br]{cursor:nwse-resize}
+.cp-over .cp-rg-sq[data-crop=tr],.cp-over .cp-rg-sq[data-crop=bl]{cursor:nesw-resize}
+.cp-over .cp-rg-move{fill:transparent;pointer-events:all;cursor:move}
 .cp-pop{position:absolute;z-index:40}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
@@ -408,6 +416,46 @@ export function createCompEditor(host, opts = {}) {
         return gpu;
     }
     /** The part of the picture on screen (pixels of the picture at `scale`), or null when most of it shows. */
+    // ── the render region (the bar's region button, Alt+W): only a box of the picture is worked ──
+    // Kept per viewer as shares of the picture on show (left, top, right, bottom; y down), so it fits any size.
+    const REGION_KEY = "imageviewer.comp.region";
+    st.region = (() => {
+        try {
+            const r = JSON.parse(localStorage.getItem(REGION_KEY) || "null");
+            if (r && Array.isArray(r.box) && r.box.length === 4 && r.box.every(Number.isFinite)) return { on: !!r.on, box: r.box };
+        } catch (_) { /* not kept */ }
+        return { on: false, box: [0.25, 0.25, 0.75, 0.75] };
+    })();
+    const keepRegion = () => { try { localStorage.setItem(REGION_KEY, JSON.stringify(st.region)); } catch (_) { /* not kept */ } };
+    function setRegion(on, box) {
+        if (box) st.region.box = cleanRegion(box);
+        st.region.on = !!on;
+        keepRegion(); renderBar(); renderOverlay(); queueRender();
+    }
+    /** A box of shares held inside the picture, at least 2 % each way, its corners in order. */
+    function cleanRegion(b) {
+        const cl = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+        let [x0, y0, x1, y1] = b.map(cl);
+        if (x1 < x0) [x0, x1] = [x1, x0];
+        if (y1 < y0) [y0, y1] = [y1, y0];
+        if (x1 - x0 < 0.02) { x1 = Math.min(1, x0 + 0.02); x0 = x1 - 0.02; }
+        if (y1 - y0 < 0.02) { y1 = Math.min(1, y0 + 0.02); y0 = y1 - 0.02; }
+        return [x0, y0, x1, y1];
+    }
+    /** The region in pixels of a picture at `scale` ([x0, y0, x1, y1], y down), or null while it is off. */
+    function regionPx(scale) {
+        if (!st.region.on) return null;
+        const vf = viewFmt(), b = st.region.box;
+        return [Math.floor(b[0] * vf.width * scale), Math.floor(b[1] * vf.height * scale), Math.ceil(b[2] * vf.width * scale), Math.ceil(b[3] * vf.height * scale)];
+    }
+    /** What is worked of the picture: the part on screen, and of it only the region when that is on. */
+    function workRegion(scale) {
+        const vis = visibleRegion(scale), rg = regionPx(scale);
+        if (!rg) return vis;
+        if (!vis) return rg;
+        const r = [Math.max(vis[0], rg[0]), Math.max(vis[1], rg[1]), Math.min(vis[2], rg[2]), Math.min(vis[3], rg[3])];
+        return r[2] > r[0] && r[3] > r[1] ? r : [0, 0, 0, 0];
+    }
     function visibleRegion(scale) {
         if (st.zoom.fit) return null;
         const vf = viewFmt(), Wd = stage.clientWidth || 1, Hd = stage.clientHeight || 1;
@@ -757,11 +805,14 @@ export function createCompEditor(host, opts = {}) {
         proxy.value = st.proxy;
         proxy.title = "The picture's resolution while you work (the render is always full size)";
         proxy.onchange = () => { st.proxy = proxy.value; queueRender(); };
-        const gpuBtn = tb("cpu", "", "GPU: work the picture on the graphics card (the render is always made on the server)", () => {
+        const gpuBtn = btn("GPU", "Work the picture on the graphics card (the render is always made on the server)", () => {
             const on = !gpuWanted();
             try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ }
             gpuWhy = ""; gpuTried = false; gpuBtn.classList.toggle("on", on); queueRender();
         }, gpuWanted() ? "on cp-gpu" : "cp-gpu");
+        const regionBtn = tb("region", "", st.region.on
+            ? "Region render on: only the box is worked (Alt+W). Drag its edges, corners or the centre mark; a click here: the whole picture again"
+            : "Region render: work only a box of the picture, for a quicker look at a part of it (Alt+W)", () => setRegion(!st.region.on), "cp-region" + (st.region.on ? " on" : ""));
         let disp = null;
         if (st.ocio && st.ocio.available && st.ocio.displays.length) {
             disp = el(doc, "select", "mg-btn cp-display");
@@ -843,7 +894,7 @@ export function createCompEditor(host, opts = {}) {
             tb("undo", "", "Undo (Ctrl+Z)", undo, "cp-undo"), tb("redo", "", "Redo (Ctrl+Shift+Z)", redo, "cp-redo"),
             // Everything that only changes how the picture is LOOKED AT, together on the right by Fit.
             el(doc, "span", "mg-spacer"),
-            proxy, gpuBtn, el(doc, "span", "mg-sep"), ...(disp ? [disp] : []), chanBtn, el(doc, "span", "mg-sep"), exp, el(doc, "span", "mg-sep"), eyes,
+            proxy, gpuBtn, regionBtn, el(doc, "span", "mg-sep"), ...(disp ? [disp] : []), chanBtn, el(doc, "span", "mg-sep"), exp, el(doc, "span", "mg-sep"), eyes,
             vtBtn,
             ...(has3d() && o.room3d ? [tb("box", "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d cp-wide" + (st.room ? " on" : "")),
                 tb("columns", "", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
@@ -1064,7 +1115,7 @@ export function createCompEditor(host, opts = {}) {
         lastPics = { pics, scale, frame: f };
         const t0 = performance.now();
         const tLoad = t0 - tAsk;
-        const roi = visibleRegion(scale);
+        const roi = workRegion(scale);
         const { img, ctx: rctx, how } = picture(id, f, scale, pics, roi, false);
         lastRoi = img.roi || null;
         lastHow = how;
@@ -1096,6 +1147,8 @@ export function createCompEditor(host, opts = {}) {
         const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
             color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
+        const rgn = regionPx(scale);
+        if (rgn) blankOutside(data.data, img.w, img.h, rgn);
         const marked = viewTools.afterEncode(shownImg, data.data, scale);
         ctx.putImageData(data, 0, 0);
         layoutCanvas();
@@ -1111,8 +1164,19 @@ export function createCompEditor(host, opts = {}) {
         const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
-        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}`;
+        info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}${st.region.on ? (lastHow === "cpu" ? " · region (the CPU works the whole picture)" : " · region") : ""}`;
         roomAfterDraw();
+    }
+    /** The region render: the pixels outside the box shown black (the GPU leaves them unworked; the CPU works them all). */
+    function blankOutside(px, w, h, r) {
+        const x0 = Math.max(0, Math.min(w, r[0])), x1 = Math.max(x0, Math.min(w, r[2])), y0 = Math.max(0, Math.min(h, r[1])), y1 = Math.max(y0, Math.min(h, r[3]));
+        for (let y = 0; y < h; y++) {
+            const row = y * w * 4, inside = y >= y0 && y < y1;
+            for (let x = 0; x < w; x++) {
+                if (inside && x >= x0 && x < x1) { x = x1 - 1; continue; }
+                const i = row + x * 4; px[i] = px[i + 1] = px[i + 2] = 0; px[i + 3] = 255;
+            }
+        }
     }
     /** Frame f of node id is in the cache under the key renderNode used: remembered for the timeline's marks. */
     function noteFrame(id, f, scale, keysUsed) {
@@ -1189,7 +1253,7 @@ export function createCompEditor(host, opts = {}) {
         over.style.transform = canvas.style.transform;
         // A picture worked only over the part on screen: panned or zoomed past it, it is made again.
         if (lastRoi) {
-            const want = visibleRegion(lastScale);
+            const want = workRegion(lastScale);
             if (!want || want[0] < lastRoi[0] || want[1] < lastRoi[1] || want[2] > lastRoi[2] || want[3] > lastRoi[3]) queueRender();
         }
         if (o.onView) o.onView();
@@ -1256,7 +1320,51 @@ export function createCompEditor(host, opts = {}) {
         stage.classList.toggle("painting", paintTool.active());
         if (st.comp) viewTools.overlay(over);
         drawHandles();
+        drawRegion();
         if (o.onView) o.onView();
+    }
+    /** The render region's box on the picture: its edges and corners resize it, the mark in its middle moves it. */
+    function drawRegion() {
+        if (!st.region.on || !st.comp || st.room) return;
+        const vf = viewFmt(), W = vf.width, H = vf.height, z = st.zoom.s || 1;
+        const [x0, y0, x1, y1] = [st.region.box[0] * W, st.region.box[1] * H, st.region.box[2] * W, st.region.box[3] * H];
+        const g = svgEl(doc, "g", { class: "cp-region" });
+        g.append(svgEl(doc, "rect", { class: "cp-rg-line", x: x0, y: y0, width: x1 - x0, height: y1 - y0 }));
+        const part = (elm, name, tip) => {
+            elm.dataset.crop = name;
+            tipped(elm, tip);
+            elm.addEventListener("pointerdown", (e) => {
+                if (e.button !== 0) return;
+                e.preventDefault(); e.stopPropagation();
+                stage.setPointerCapture(e.pointerId);
+                const p0 = compXY(e), a = [x0, y0], b = [x1, y1];
+                stage.onpointermove = (ev) => {
+                    const p = compXY(ev), r = J.cropDrag(name, a, b, [p[0] - p0[0], p[1] - p0[1]]);
+                    let box = [r.topleft[0] / W, r.topleft[1] / H, r.bottomright[0] / W, r.bottomright[1] / H];
+                    if (name === "inside") {   // moved whole: kept its size, held inside the picture
+                        const bw = box[2] - box[0], bh = box[3] - box[1];
+                        const nx = Math.max(0, Math.min(1 - bw, box[0])), ny = Math.max(0, Math.min(1 - bh, box[1]));
+                        box = [nx, ny, nx + bw, ny + bh];
+                    }
+                    st.region.box = cleanRegion(box);
+                    renderOverlay(); queueRender();
+                };
+                stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; keepRegion(); };
+            });
+            g.append(elm);
+        };
+        const w = 9;
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x1, y2: y0, "stroke-width": w }), "t", "Drag: the region's top edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y1, x2: x1, y2: y1, "stroke-width": w }), "b", "Drag: the region's bottom edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x0, y1: y0, x2: x0, y2: y1, "stroke-width": w }), "l", "Drag: the region's left edge");
+        part(svgEl(doc, "line", { class: "cp-cedge", x1: x1, y1: y0, x2: x1, y2: y1, "stroke-width": w }), "r", "Drag: the region's right edge");
+        const h = 4 / z;
+        for (const [name, x, y] of [["tl", x0, y0], ["tr", x1, y0], ["bl", x0, y1], ["br", x1, y1]])
+            part(svgEl(doc, "rect", { class: "cp-rg-sq", x: x - h, y: y - h, width: 2 * h, height: 2 * h }), name, "Drag: this corner of the region");
+        const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, k = 7 / z;
+        g.append(svgEl(doc, "path", { class: "cp-rg-line solid", d: `M${cx - k} ${cy}H${cx + k}M${cx} ${cy - k}V${cy + k}` }));
+        part(svgEl(doc, "circle", { class: "cp-rg-move", cx, cy, r: 9 / z }), "inside", "Drag: move the region");
+        over.append(g);
     }
     /** The points of the selected node that are dragged on the picture: [{param, at: [x, y], set(xy) -> value, small?}]. */
     function handlesOf(n) {
@@ -2267,6 +2375,7 @@ export function createCompEditor(host, opts = {}) {
         else if (k === "Escape" && WUI.escape(wctx())) { /* stopped placing a point / drawing lines */ }
         else if (!ctrl && (part === root || part === props) && paintTool.key(e)) { /* the Paint tool's */ }
         else if (part === root && viewTools.key(e)) { /* the viewer tools' */ }
+        else if (part === root && e.altKey && !ctrl && e.code === "KeyW") setRegion(!st.region.on);
         else if (k === "2" && primary()) viewTools.setB(fid(primary().id));
         else if (ctrl && k.toLowerCase() === "z") { if (e.shiftKey) redo(); else undo(); }
         else if (ctrl && k.toLowerCase() === "y") redo();
@@ -4020,7 +4129,8 @@ export function createCompEditor(host, opts = {}) {
         /** The frames of the picture on screen kept in the cache (the timeline's marks). */
         cachedFrames,
         /** How the last picture was made: "cpu", "gpu", "gpu, region" or "kept"; and why the GPU is off, if it is. */
-        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi }),
+        renderInfo: () => ({ how: lastHow, gpuOff: gpuWhy, region: lastRoi, renderRegion: st.region.on ? st.region.box.slice() : null }),
+        setRenderRegion: (on, box) => setRegion(on, box),
         /** Switch the GPU preview on / off (kept in localStorage). */
         setGpu: (on) => { try { localStorage.setItem("imageviewer.comp.gpu", on ? "on" : "off"); } catch (_) { /* not kept */ } gpuWhy = ""; gpuTried = false; queueRender(); },
         /** The 3D renderer up (true) or not to be had (false). */
