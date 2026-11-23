@@ -180,22 +180,26 @@ const CSS = `
 .cp-panehead button{padding:0 6px;min-width:0}
 .cp-pane > .mg-prop,.cp-pane > .mg-empty,.cp-pane > div{margin-left:4px;margin-right:4px}
 input.cp-newch{flex:1;min-width:0}
-.cp-shuf{padding:4px 6px 2px}.cp-shuf-layers{display:grid;grid-template-columns:1fr 1fr;gap:4px 8px;margin-bottom:6px}
-.cp-shuf-lay{display:flex;align-items:center;gap:5px;min-width:0}.cp-shuf-lay.off .cp-shuf-port{opacity:.35}
-.cp-shuf-port{flex:0 0 auto;min-width:34px;font-size:11px;opacity:.8}select.cp-shuf-layer,input.cp-shuf-new{flex:1;min-width:0;width:0;font-size:11px}
-.cp-shuf-grid{border-collapse:collapse;font-size:11px;margin:0 auto}
-.cp-shuf-grid td,.cp-shuf-grid th{padding:1px 0;text-align:center;font-weight:normal}
-.cp-shuf-gh{font-size:10px;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;padding:0 3px!important}
-.cp-shuf-oh{text-align:left!important;font-size:10px;opacity:.6;padding:5px 0 1px!important;border-top:1px solid #3a3a3a}
-.cp-shuf-ch{width:20px;min-width:20px}.cp-shuf-ch.row{width:auto;text-align:right!important;padding-right:6px!important;max-width:60px;overflow:hidden;text-overflow:ellipsis}
-.cp-shuf-ch.unwired{opacity:.4}.cp-shuf-grid .gs{padding-left:7px!important}
-.cp-shuf-ch.t-r{color:#ff6b6b}.cp-shuf-ch.t-g{color:#5fd17a}.cp-shuf-ch.t-b{color:#6aa8ff}.cp-shuf-ch.t-a{color:#d8d8d8}.cp-shuf-ch.t-x{color:#c9a3ff}.cp-shuf-ch.t-k{color:#9a9a9a}
-.cp-shuf-cell{width:20px;height:18px}
-span.cp-shuf-dot{box-sizing:border-box;display:inline-block;width:12px;height:12px;border-radius:50%;border:1px solid #5a5a5a;background:#1b1b1b;cursor:pointer;vertical-align:middle}
-span.cp-shuf-dot:hover{border-color:#bbb}span.cp-shuf-dot.on{border-color:transparent}
-span.cp-shuf-dot.on.t-r{background:#e05252}span.cp-shuf-dot.on.t-g{background:#46b864}span.cp-shuf-dot.on.t-b{background:#4a8ef0}
-span.cp-shuf-dot.on.t-a{background:#e6e6e6}span.cp-shuf-dot.on.t-x{background:#a47be6}span.cp-shuf-dot.on.t-k{background:#8a8a8a}
-.cp-shuf-extra{padding:4px 0!important}.cp-shuf-btns{display:flex;gap:4px;justify-content:flex-end;margin-top:6px}
+.cp-shuf2{display:grid;grid-template-columns:minmax(0,1fr) minmax(36px,.7fr) minmax(0,1fr);padding:6px 6px 2px;font-size:11px;user-select:none}
+.cp-shuf2-col{display:flex;flex-direction:column;min-width:0}
+.cp-shuf2-head{height:28px;display:flex;align-items:center;gap:5px;min-width:0}.cp-shuf2-col.out .cp-shuf2-head{justify-content:flex-start}
+.cp-shuf2-head select.cp-shuf-layer{flex:1;min-width:0;width:0;font-size:11px;height:22px;padding:0 2px}.cp-shuf2-head.off .cp-shuf-layer{opacity:.55}
+.cp-shuf2-tag{flex:0 0 auto;font-size:10px;font-weight:600;padding:1px 5px;border-radius:3px;background:#34343c;color:#c8c8d0}
+.cp-shuf2-tag.t-B{background:#3d3524;color:#f0c674}.cp-shuf2-tag.t-A{background:#24353d;color:#7cc7e8}.cp-shuf2-tag.t-k,.cp-shuf2-tag.t-out{background:none;color:#8a8a92;font-weight:normal;padding:1px 2px}
+.cp-shuf2-row{height:19px;display:flex;align-items:center;gap:6px}.cp-shuf2-col.in .cp-shuf2-row{justify-content:flex-end}
+.cp-shuf2-row.off{opacity:.45}.cp-shuf2-row.unwired .cp-shuf2-lab{opacity:.45}
+.cp-shuf2-lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.cp-shuf2-row.t-r .cp-shuf2-lab{color:#ff7070}.cp-shuf2-row.t-g .cp-shuf2-lab{color:#62d47e}.cp-shuf2-row.t-b .cp-shuf2-lab{color:#6eaaff}.cp-shuf2-row.t-a .cp-shuf2-lab{color:#e0e0e0}.cp-shuf2-row.t-x .cp-shuf2-lab{color:#c9a3ff}.cp-shuf2-row.t-k0 .cp-shuf2-lab,.cp-shuf2-row.t-k1 .cp-shuf2-lab{color:#9a9aa2}
+span.cp-shuf-pin{box-sizing:border-box;flex:0 0 auto;width:11px;height:11px;border-radius:50%;border:2px solid #6a6a72;background:#18181c;cursor:crosshair}
+span.cp-shuf-pin:hover{border-color:#fff}span.cp-shuf-pin.picked{box-shadow:0 0 0 2px #fff8}
+span.cp-shuf-pin.t-r{border-color:#e05252}span.cp-shuf-pin.t-g{border-color:#46b864}span.cp-shuf-pin.t-b{border-color:#4a8ef0}span.cp-shuf-pin.t-a{border-color:#d0d0d0}span.cp-shuf-pin.t-x{border-color:#a47be6}span.cp-shuf-pin.t-k0{border-color:#555;background:#000}span.cp-shuf-pin.t-k1{border-color:#999;background:#fff}
+.cp-shuf2-col.in span.cp-shuf-pin:not(.t-k0):not(.t-k1){background:currentColor}.cp-shuf2-col.in .t-r span.cp-shuf-pin{color:#e05252}.cp-shuf2-col.in .t-g span.cp-shuf-pin{color:#46b864}.cp-shuf2-col.in .t-b span.cp-shuf-pin{color:#4a8ef0}.cp-shuf2-col.in .t-a span.cp-shuf-pin{color:#d0d0d0}.cp-shuf2-col.in .t-x span.cp-shuf-pin{color:#a47be6}
+.cp-shuf2-col.out span.cp-shuf-pin.on.t-r{background:#e05252}.cp-shuf2-col.out span.cp-shuf-pin.on.t-g{background:#46b864}.cp-shuf2-col.out span.cp-shuf-pin.on.t-b{background:#4a8ef0}.cp-shuf2-col.out span.cp-shuf-pin.on.t-a{background:#d0d0d0}.cp-shuf2-col.out span.cp-shuf-pin.on.t-x{background:#a47be6}
+.cp-shuf2-mid{position:relative;min-width:0}.cp-shuf2-wires{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+line.cp-shuf2-wire{stroke-width:2;stroke:#9a9aa2;stroke-linecap:round}line.cp-shuf2-wire.t-r{stroke:#e05252}line.cp-shuf2-wire.t-g{stroke:#46b864}line.cp-shuf2-wire.t-b{stroke:#4a8ef0}line.cp-shuf2-wire.t-a{stroke:#d0d0d0}line.cp-shuf2-wire.t-x{stroke:#a47be6}line.cp-shuf2-wire.t-k0{stroke:#5a5a5a}line.cp-shuf2-wire.t-k1{stroke:#f4f4f4}
+line.cp-shuf2-wire.temp{stroke-dasharray:4 3}
+.cp-shuf-extra{padding:4px 6px!important}.cp-shuf-btns{display:flex;gap:4px;align-items:center;justify-content:flex-end;margin:6px 6px 2px}.cp-shuf-hint{flex:1;font-size:10px;color:#8a8a92;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cp-layerdlg .cp-field label{width:64px}.cp-layerdlg input.cp-layer-ch{flex:0 0 auto;width:48px}.cp-layerdlg .cp-layer-presets{flex-wrap:wrap;gap:4px}.cp-layerdlg .cp-layer-preset{padding:1px 7px}
 .mg-prop textarea.cp-text{flex:1;min-width:0;resize:vertical;font:inherit;background:#1b1b1b;color:inherit;border:1px solid #3a3a3a;border-radius:3px;padding:3px 5px}.mg-empty.cp-warn{color:#e0a64a;opacity:.9}.cp-pane > .mg-empty.cp-ai{padding:6px 4px}.mg-prop.cp-btnrow{flex-wrap:wrap;gap:4px}
 .mg-prop input.cp-mixed::placeholder{color:#c9a24a;opacity:1}.mg-prop.cp-mixedrow label{color:#c9a24a}.cp-multi{color:#9aa}
 .cp-stage.drawing,.cp-stage.picking{cursor:crosshair}
@@ -2499,62 +2503,156 @@ export function createCompEditor(host, opts = {}) {
         } else {
             if (d.none) add(C.CH.SHUFFLE_NONE, "none");
             add("rgba", "rgba (the whole picture)");
-            const layers = C.CH.layersOf(have);
-            if (d.kind === "target") { const g = group("one channel"); for (const c of C.CH.RGBA) add(c, c, g); for (const c of have) add(c, c, g); }
-            if (layers.length) { const g = group("layer"); for (const l of layers) add(l, l, g); }
-            add("\u0001", d.kind === "layer" ? "New layer…" : "New channel or layer…");
+            // The layers coming in, then the ones the comp knows (its own and depth / motion ...), each once.
+            const defs = C.CH.layerDefs(st.comp), layers = C.CH.layersOf(have);
+            for (const l of Object.keys(defs)) if (!layers.includes(l)) layers.push(l);
+            if (layers.length) {
+                const g = group("layer");
+                for (const l of layers) {
+                    const there = have.filter((c) => C.CH.layerOf(c) === l);
+                    const chans = (there.length ? there : C.CH.layerChannels(l, defs)).map((c) => c.slice(l.length + 1));
+                    add(l, `${l}  (${chans.join(" ")})`, g);
+                }
+            }
+            if (d.kind === "target") {
+                const g = group("one channel");
+                for (const c of C.CH.RGBA) add(c, c, g);
+                const seen = new Set();
+                for (const l of layers) {
+                    const there = have.filter((c) => C.CH.layerOf(c) === l);
+                    for (const c of there.length ? there : C.CH.layerChannels(l, defs)) if (!seen.has(c)) { seen.add(c); add(c, c, g); }
+                }
+                for (const c of have) if (!seen.has(c)) add(c, c, g);
+            }
+            add("\u0001", "New layer…");
         }
         if (![...s.options].some((x) => x.value === value)) add(value, `${value} (not there)`);
         s.value = value;
         s.onchange = () => {
             if (s.value !== "\u0001") { write(s.value); return; }
-            const i = el(doc, "input"); i.type = "text"; i.placeholder = d.kind === "layer" ? "a layer: mask" : "mask.a, or a layer: mask";
-            i.className = "cp-newch";
-            const done = (ok) => {
-                const v = i.value.trim();
-                if (ok && (d.kind === "layer" ? C.CH.isLayer(v) : C.CH.isTarget(v))) write(v);
-                else { if (ok && v) toast(`"${v}" is not a ${d.kind === "layer" ? "layer" : "channel"} name: letters, digits and _, a channel as layer.name`, "warn"); renderProps(); }
-            };
-            i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
-            i.onblur = () => done(true);
-            s.replaceWith(i);
-            i.focus();
+            s.value = value;
+            layerDialog("", (name) => write(name));
         };
         return s;
     }
     /**
-     * Shuffle's routing grid: the layers read (B's in 1 and A's in 2) across the top, a column per channel and
-     * black / white; the layers written (out 1, out 2) down the side, a row per channel. A dot is a wire: a click
-     * routes that source into that output channel, a click on the lit one takes it off (not written: B's passes).
+     * The New layer dialog: a layer's name and its channels (one to four, any names - depth with just z, motion
+     * with u and v), kept in the comp (`comp.layers`) so every channel menu offers it and a node writing into it
+     * makes those channels. A name the comp knows already opens with its channels (changing them is allowed).
+     */
+    const LAYER_PRESETS = [["rgba", ["r", "g", "b", "a"]], ["rgb", ["r", "g", "b"]], ["xyz", ["x", "y", "z"]], ["uv", ["u", "v"]], ["z", ["z"]], ["a", ["a"]]];
+    function layerDialog(name, done) {
+        const shade = el(doc, "div", "cp-dlg-shade cp-layerdlg-shade");
+        const box = el(doc, "div", "cp-dlg cp-layerdlg");
+        box.append(el(doc, "h3", "", "New layer"));
+        const nameRow = el(doc, "div", "cp-field");
+        const nameIn = el(doc, "input", "cp-layer-name"); nameIn.type = "text"; nameIn.value = name || ""; nameIn.placeholder = "depth"; nameIn.spellcheck = false;
+        nameRow.append(el(doc, "label", "", "Name"), nameIn);
+        const chRow = el(doc, "div", "cp-field cp-layer-chans");
+        chRow.append(el(doc, "label", "", "Channels"));
+        const chans = [0, 1, 2, 3].map((k) => {
+            const i = el(doc, "input", "cp-layer-ch"); i.type = "text"; i.spellcheck = false; i.dataset.k = String(k);
+            chRow.append(i); return i;
+        });
+        const presets = el(doc, "div", "cp-field cp-layer-presets");
+        presets.append(el(doc, "label", "", ""));
+        const setChans = (list) => { chans.forEach((i, k) => { i.value = list[k] || ""; }); check(); };
+        for (const [label, list] of LAYER_PRESETS) {
+            const b = el(doc, "button", "mg-btn cp-layer-preset", label); b.type = "button"; b.dataset.preset = label;
+            b.title = `Channels ${list.join(", ")}`;
+            b.onclick = () => setChans(list);
+            presets.append(b);
+        }
+        const note = el(doc, "div", "cp-note");
+        const go = el(doc, "div", "cp-go");
+        const cancel = el(doc, "button", "mg-btn", "Cancel"), ok = el(doc, "button", "mg-btn on cp-layer-ok", "Make layer");
+        go.append(cancel, ok);
+        box.append(nameRow, chRow, presets, note, go);
+        shade.append(box);
+        const read = () => ({ nm: nameIn.value.trim(), list: chans.map((i) => i.value.trim()).filter(Boolean) });
+        const known = () => C.CH.layerDefs(st.comp);
+        let lastName = null;
+        function check() {
+            const { nm, list } = read();
+            const own = C.CH.cleanLayers(st.comp.layers);
+            ok.textContent = own[nm] ? "Change layer" : "Make layer";
+            let msg = "", bad = false;
+            if (!nm) { msg = "Give the layer a name: letters, digits and _."; bad = true; }
+            else if (nm === "rgba" || nm === C.CH.SHUFFLE_NONE || !C.CH.isLayer(nm)) { msg = `"${nm}" cannot be a layer's name: letters, digits and _, not r g b a, rgb or rgba.`; bad = true; }
+            else if (!list.length) { msg = "A layer needs at least one channel."; bad = true; }
+            else if (!C.CH.cleanLayerChannels(list) || C.CH.cleanLayerChannels(list).length !== list.length) { msg = "Each channel once, letters, digits and _."; bad = true; }
+            else msg = `Its channels: ${list.map((c) => `${nm}.${c}`).join(", ")}.`;
+            note.textContent = msg; note.classList.toggle("error", bad && !!nm);
+            ok.disabled = bad;
+        }
+        const fill = () => {
+            const { nm } = read();
+            if (nm === lastName) return;
+            lastName = nm;
+            const k = known();
+            if (k[nm]) setChans(k[nm]);
+        };
+        nameIn.oninput = () => { fill(); check(); };
+        for (const i of chans) i.oninput = check;
+        const shut = () => { shade.remove(); try { root.focus(); } catch (_) { /* gone */ } };
+        const submit = () => {
+            check();
+            if (ok.disabled) return;
+            const { nm, list } = read();
+            const cur = C.CH.cleanLayers(st.comp.layers);
+            if (JSON.stringify(cur[nm]) !== JSON.stringify(list)) mutate(() => { st.comp.layers = Object.assign(cur, { [nm]: list }); });
+            shut();
+            done && done(nm, list);
+        };
+        cancel.onclick = shut;
+        ok.onclick = submit;
+        shade.onpointerdown = (e) => { if (e.target === shade) shut(); };
+        box.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") submit(); if (e.key === "Escape") shut(); };
+        box.onkeyup = (e) => e.stopPropagation();
+        setChans(known()[name] || ["r", "g", "b", "a"]);
+        lastName = name || "";
+        root.append(shade);
+        nameIn.focus(); nameIn.select();
+        return shade;
+    }
+    /**
+     * Shuffle's channel board: the layers read on the left (B's in 1, A's in 2, then black and white), the layers
+     * written on the right (out 1, out 2), a pin per channel and a wire for each output channel that takes one.
+     * Drag from a pin to a pin of the other side to wire them (or click one, then the other); drag a wire's output
+     * end off, or click an output pin with nothing picked, to take it off: that channel is not written, B's passes.
      */
     const SHUFFLE_OWN = new Set(["in1", "in2", "out1", "out2", "route"]);
+    const SHUF_HEAD = 28, SHUF_ROW = 19;
     function shuffleSection(n) {
         const P = C.NODE_TYPES.shuffle.params, CHN = C.CH;
+        const defs = CHN.layerDefs(st.comp);
         const val = (p) => (typeof n[p] === "string" ? n[p] : P[p].def);
         const haveB = C.channelsAt(st.comp, fid(n.inputs[0])), haveA = C.channelsAt(st.comp, fid(n.inputs[1]));
         const haveOf = (p) => (p === "in2" ? haveA : haveB);
         const route = CHN.shuffleRoute(n);
-        const chans = (p) => CHN.shuffleLayerChannels(val(p), haveOf(p));
+        const chans = (p) => CHN.shuffleLayerChannels(val(p), haveOf(p), defs);
         const ins = [["in1", "B"], ["in2", "A"]].map(([p, side]) => ({ p, side, ch: chans(p) }));
         const outs = ["out1", "out2"].map((p) => ({ p, ch: chans(p) }));
         const clean = () => { for (const k of ["out", "r", "g", "b", "a"]) delete n[k]; };
         const setLayer = (p, side, v) => mutate(() => {
-            const from = chans(p), to = CHN.shuffleLayerChannels(v, haveOf(p));
+            const from = chans(p), to = CHN.shuffleLayerChannels(v, haveOf(p), CHN.layerDefs(st.comp));
             n.route = CHN.shuffleRemap(CHN.shuffleRoute(n), side, from, to);
             n[p] = v; clean();
         }, { structure: false });
         const setWire = (out, src) => mutate(() => {
             const r = CHN.shuffleRoute(n);
-            if (r[out] === src) delete r[out]; else r[out] = src;
+            if (src === null) delete r[out]; else r[out] = src;
             n.route = r; clean();
         }, { structure: false });
         const short = (c) => (c.includes(".") ? c.slice(c.indexOf(".") + 1) : c);
         const tint = (c) => { const k = short(c); return k === "r" || k === "red" ? "r" : k === "g" || k === "green" ? "g" : k === "b" || k === "blue" ? "b" : k === "a" || k === "alpha" ? "a" : "x"; };
+        const tintOf = (src) => (src === "0" || src === "1" ? "k" + src : tint(src.slice(2)));
         const says = (src) => (src === "0" ? "black" : src === "1" ? "white" : `${src[0]}'s ${src.slice(2)}`);
-        /** A layer menu: none (in 2 / out 2), rgba, the layers there, a new one typed in. */
+        /** A layer menu: none (in 2 / out 2), rgba, the layers there and the ones the comp knows, New layer…. */
         const layerSel = (p, side) => {
             const s = el(doc, "select", "cp-shuf-layer");
             const v = val(p), layers = CHN.layersOf(haveOf(p));
+            if (p.startsWith("out")) for (const l of Object.keys(defs)) if (!layers.includes(l)) layers.push(l);
             if (P[p].none) s.append(new Option("none", CHN.SHUFFLE_NONE));
             s.append(new Option("rgba", "rgba"));
             for (const l of layers) s.append(new Option(l, l));
@@ -2563,88 +2661,154 @@ export function createCompEditor(host, opts = {}) {
             s.value = v; s.title = P[p].help; s.dataset.param = p;
             s.onchange = () => {
                 if (s.value !== "\u0001") { setLayer(p, side, s.value); return; }
-                const i = el(doc, "input", "cp-newch cp-shuf-new"); i.type = "text"; i.placeholder = "a layer: mask";
-                const done = (ok) => {
-                    const t = i.value.trim();
-                    if (ok && CHN.isLayer(t) && t !== CHN.SHUFFLE_NONE) setLayer(p, side, t);
-                    else { if (ok && t) toast(`"${t}" is not a layer name: letters, digits and _`, "warn"); renderProps(); }
-                };
-                i.onkeydown = (e) => { e.stopPropagation(); if (e.key === "Enter") done(true); if (e.key === "Escape") done(false); };
-                i.onblur = () => done(true);
-                s.replaceWith(i); i.focus();
+                s.value = v;
+                layerDialog("", (name) => setLayer(p, side, name));
             };
             return s;
         };
-        const box = el(doc, "div", "cp-shuf");
-        // The four layers, as the grid lays them out: what is read across the top, what is written down the side.
-        const layers = el(doc, "div", "cp-shuf-layers");
-        for (const [p, side, label] of [["in1", "B", "B"], ["in2", "A", "A"], ["out1", "out", "out 1"], ["out2", "out", "out 2"]]) {
-            const cell = el(doc, "label", "cp-shuf-lay" + (p === "in2" && !n.inputs[1] ? " off" : ""));
-            cell.append(el(doc, "span", "cp-shuf-port", label), layerSel(p, side));
-            if (p === "in2" && !n.inputs[1]) cell.title = "Nothing is plugged into input A: its channels read black";
-            layers.append(cell);
-        }
-        box.append(layers);
-        const tab = el(doc, "table", "cp-shuf-grid");
-        const cols = [...ins.flatMap((g) => g.ch.map((c) => ({ src: `${g.side}:${c}`, c, side: g.side }))), { src: "0", c: "0" }, { src: "1", c: "1" }];
-        const groupOf = (col) => col.side || "k";
-        // Row 1: whose columns; row 2: a channel per column.
-        const r1 = el(doc, "tr"), r2 = el(doc, "tr");
-        r1.append(el(doc, "td")); r2.append(el(doc, "td"));
-        for (const g of [...ins.map((x) => ({ key: x.side, ch: x.ch, label: x.side })), { key: "k", ch: ["0", "1"], label: "" }]) {
-            if (!g.ch.length) continue;
-            const td = el(doc, "td", `cp-shuf-gh g-${g.key}`, g.key === "k" ? "" : `${g.label} · ${val(g.key === "B" ? "in1" : "in2")}`);
-            td.colSpan = g.ch.length; r1.append(td);
-            g.ch.forEach((c, i) => {
-                const th = el(doc, "th", `cp-shuf-ch t-${g.key === "k" ? "k" : tint(c)} g-${g.key}` + (i === 0 ? " gs" : ""), short(c));
-                th.title = g.key === "k" ? (c === "0" ? "black" : "white") : `${g.key}'s ${c}`;
-                r2.append(th);
-            });
-        }
-        tab.append(r1, r2);
-        for (const o of outs) {
-            if (!o.ch.length) continue;
-            const hd = el(doc, "tr", "cp-shuf-outhead");
-            const td = el(doc, "td", "cp-shuf-oh", `${o.p === "out1" ? "out 1" : "out 2"} · ${val(o.p)}`); td.colSpan = cols.length + 1;
-            hd.append(td); tab.append(hd);
-            for (const oc of o.ch) {
-                const tr = el(doc, "tr", "cp-shuf-outrow");
-                const lab = el(doc, "th", `cp-shuf-ch row t-${tint(oc)}` + (route[oc] ? "" : " unwired"), short(oc));
-                lab.title = route[oc] ? `${oc} takes ${says(route[oc])}` : `${oc} is not written: B's passes`;
-                tr.append(lab);
-                cols.forEach((col, k) => {
-                    const cell = el(doc, "td", "cp-shuf-cell" + (k === 0 || groupOf(cols[k - 1]) !== groupOf(col) ? " gs" : ""));
-                    const on = route[oc] === col.src;
-                    const d = el(doc, "span", `cp-shuf-dot t-${col.side ? tint(col.c) : "k"}` + (on ? " on" : ""));
-                    d.setAttribute("role", "button");
-                    d.dataset.out = oc; d.dataset.src = col.src;
-                    d.title = on ? `${oc} takes ${says(col.src)}: click to take the wire off (not written)` : `${says(col.src)} into ${oc}`;
-                    d.onclick = () => setWire(oc, col.src);
-                    cell.append(d); tr.append(cell);
-                });
-                tab.append(tr);
+        const box = el(doc, "div", "cp-shuf2");
+        const left = el(doc, "div", "cp-shuf2-col in"), mid = el(doc, "div", "cp-shuf2-mid"), right = el(doc, "div", "cp-shuf2-col out");
+        const ys = { src: new Map(), out: new Map() };
+        let yl = 0, yr = 0;
+        const pick = st.shufPick && st.shufPick.id === n.id ? st.shufPick.src : null;
+        const pin = (kind, key, c, tcls) => {
+            const d = el(doc, "span", `cp-shuf-pin t-${tcls}`);
+            d.setAttribute("role", "button");
+            if (kind === "src") d.dataset.src = key; else d.dataset.out = key;
+            if (kind === "src" && pick === key) d.classList.add("picked");
+            if (kind === "out" && route[key]) d.classList.add("on");
+            return d;
+        };
+        // The left: a block per input layer, then the constants.
+        for (const g of ins) {
+            const off = g.p === "in2" && !n.inputs[1];
+            const head = el(doc, "div", "cp-shuf2-head" + (off ? " off" : ""));
+            const tag = el(doc, "span", `cp-shuf2-tag t-${g.side}`, g.side);
+            tag.title = g.side === "B" ? "Input B (the picture that passes where nothing is wired)" : off ? "Nothing is plugged into input A: its channels read black" : "Input A";
+            head.append(tag, layerSel(g.p, g.side));
+            left.append(head); yl += SHUF_HEAD;
+            for (const c of g.ch) {
+                const key = `${g.side}:${c}`;
+                const row = el(doc, "div", `cp-shuf2-row t-${tint(c)}` + (off ? " off" : ""));
+                const lab = el(doc, "span", "cp-shuf2-lab", short(c)); lab.title = `${g.side}'s ${c}`;
+                row.append(lab, pin("src", key, c, tint(c)));
+                left.append(row);
+                ys.src.set(key, yl + SHUF_ROW / 2); yl += SHUF_ROW;
             }
         }
-        box.append(tab);
-        // Wires the grid does not show (set by hand or by the agent, or left by a layer changed elsewhere) still work: listed.
-        const shownOut = new Set(outs.flatMap((o) => o.ch)), shownSrc = new Set(cols.map((c) => c.src));
-        const extra = Object.entries(route).filter(([k, v]) => !shownOut.has(k) || !shownSrc.has(v));
+        const kh = el(doc, "div", "cp-shuf2-head k"); kh.append(el(doc, "span", "cp-shuf2-tag t-k", "constants"));
+        left.append(kh); yl += SHUF_HEAD;
+        for (const k of ["0", "1"]) {
+            const row = el(doc, "div", "cp-shuf2-row t-k" + k);
+            const lab = el(doc, "span", "cp-shuf2-lab", k === "0" ? "black" : "white");
+            row.append(lab, pin("src", k, k, "k" + k));
+            left.append(row);
+            ys.src.set(k, yl + SHUF_ROW / 2); yl += SHUF_ROW;
+        }
+        // The right: a block per output layer.
+        for (const o of outs) {
+            const head = el(doc, "div", "cp-shuf2-head");
+            head.append(layerSel(o.p, "out"), el(doc, "span", "cp-shuf2-tag t-out", o.p === "out1" ? "out 1" : "out 2"));
+            right.append(head); yr += SHUF_HEAD;
+            for (const oc of o.ch) {
+                const row = el(doc, "div", `cp-shuf2-row t-${tint(oc)}` + (route[oc] ? "" : " unwired"));
+                const lab = el(doc, "span", "cp-shuf2-lab", short(oc));
+                lab.title = route[oc] ? `${oc} takes ${says(route[oc])}` : `${oc} has no wire: not written (B's passes)`;
+                row.append(pin("out", oc, oc, tint(oc)), lab);
+                right.append(row);
+                ys.out.set(oc, yr + SHUF_ROW / 2); yr += SHUF_ROW;
+            }
+        }
+        const H = Math.max(yl, yr);
+        const svg = svgEl(doc, "svg", { class: "cp-shuf2-wires", width: "100%", height: String(H) });
+        for (const [oc, src] of Object.entries(route)) {
+            if (!ys.out.has(oc) || !ys.src.has(src)) continue;
+            const y1 = ys.src.get(src), y2 = ys.out.get(oc);
+            const ln = svgEl(doc, "line", { x1: "0", y1: String(y1), x2: "100%", y2: String(y2), class: `cp-shuf2-wire t-${tintOf(src)}` });
+            ln.dataset.out = oc; ln.dataset.src = src;
+            const t = svgEl(doc, "title"); t.textContent = `${says(src)} into ${oc}`; ln.append(t);
+            svg.append(ln);
+        }
+        const temp = svgEl(doc, "line", { class: "cp-shuf2-wire temp", x1: "0", y1: "0", x2: "0", y2: "0" });
+        temp.style.display = "none";
+        svg.append(temp);
+        mid.style.height = H + "px";
+        mid.append(svg);
+        box.append(left, mid, right);
+        // Wiring: drag from a pin to the other side, or click one then the other.
+        const pinOf = (e) => (e.composedPath ? e.composedPath() : [e.target]).find((x) => x && x.classList && x.classList.contains("cp-shuf-pin"));
+        const connect = (a, b) => {
+            const src = a.dataset.src ?? b.dataset.src, out = a.dataset.out ?? b.dataset.out;
+            if (src !== undefined && out !== undefined) { st.shufPick = null; setWire(out, src); return true; }
+            return false;
+        };
+        box.addEventListener("pointerdown", (e) => {
+            const p0 = pinOf(e);
+            if (!p0 || e.button !== 0) return;
+            e.preventDefault(); e.stopPropagation();
+            const w = win(), r0 = mid.getBoundingClientRect(), pr = p0.getBoundingClientRect();
+            const fromLeft = p0.dataset.src !== undefined;
+            const sx = fromLeft ? 0 : r0.width, sy = pr.top + pr.height / 2 - r0.top;
+            // Dragging an output's wired end picks up its source: let go elsewhere and the wire is off.
+            const carried = !fromLeft && route[p0.dataset.out] ? route[p0.dataset.out] : null;
+            let moved = false;
+            const move = (ev) => {
+                if (!moved && Math.hypot(ev.clientX - e.clientX, ev.clientY - e.clientY) < 4) return;
+                moved = true;
+                temp.style.display = "";
+                if (carried) {
+                    temp.setAttribute("x1", "0"); temp.setAttribute("y1", String(ys.src.get(carried) ?? sy));
+                    for (const ln of svg.querySelectorAll("line.cp-shuf2-wire")) if (ln.dataset.out === p0.dataset.out) ln.style.opacity = "0.15";
+                } else { temp.setAttribute("x1", String(sx)); temp.setAttribute("y1", String(sy)); }
+                temp.setAttribute("x2", String(ev.clientX - r0.left)); temp.setAttribute("y2", String(ev.clientY - r0.top));
+                temp.setAttribute("class", "cp-shuf2-wire temp t-" + (carried ? tintOf(carried) : fromLeft ? tintOf(p0.dataset.src) : "x"));
+            };
+            const up = (ev) => {
+                w.removeEventListener("pointermove", move, true); w.removeEventListener("pointerup", up, true);
+                temp.style.display = "none";
+                const p1 = pinOf(ev);
+                if (!moved) {
+                    // A click: pick a source, or wire the picked one into an output, or take an output's wire off.
+                    if (fromLeft) { st.shufPick = pick === p0.dataset.src ? null : { id: n.id, src: p0.dataset.src }; renderProps(); }
+                    else if (pick !== null) { st.shufPick = null; setWire(p0.dataset.out, pick); }
+                    else if (route[p0.dataset.out]) setWire(p0.dataset.out, null);
+                    return;
+                }
+                if (carried) {
+                    if (p1 && p1.dataset.out !== undefined) {
+                        if (p1.dataset.out === p0.dataset.out) { renderProps(); return; }
+                        mutate(() => { const r = CHN.shuffleRoute(n); delete r[p0.dataset.out]; r[p1.dataset.out] = carried; n.route = r; clean(); }, { structure: false });
+                    } else if (p1 && p1.dataset.src !== undefined) setWire(p0.dataset.out, p1.dataset.src);
+                    else setWire(p0.dataset.out, null);
+                    return;
+                }
+                if (p1 && p1 !== p0 && connect(p0, p1)) return;
+            };
+            w.addEventListener("pointermove", move, true); w.addEventListener("pointerup", up, true);
+        });
+        box.addEventListener("contextmenu", (e) => {
+            const p0 = pinOf(e);
+            if (p0 && p0.dataset.out !== undefined && route[p0.dataset.out]) { e.preventDefault(); setWire(p0.dataset.out, null); }
+        });
+        pane.append(box);
+        // Wires the board does not show (set by hand or by the agent, or left by a layer changed elsewhere) still work: listed.
+        const extra = Object.entries(route).filter(([k, v]) => !ys.out.has(k) || !ys.src.has(v));
         if (extra.length) {
             const note = el(doc, "div", "mg-empty cp-shuf-extra");
             note.append(`Also routed: ${extra.map(([k, v]) => `${k} ← ${v}`).join(", ")} `);
             note.append(btn("Clear these", "Take these wires off", () => mutate(() => {
                 const r = CHN.shuffleRoute(n); for (const [k] of extra) delete r[k]; n.route = r; clean();
             }, { structure: false })));
-            box.append(note);
+            pane.append(note);
         }
         const row = el(doc, "div", "cp-shuf-btns");
+        row.append(el(doc, "span", "cp-shuf-hint", pick !== null ? `${says(pick)} picked: click an output channel` : "Drag a channel onto an output channel"));
         row.append(btn("Straight", "Each output channel from the input channel in the same place (in 1 into out 1, in 2 into out 2)", () => mutate(() => {
             const r = {};
             [[outs[0].ch, ins[0]], [outs[1].ch, ins[1]]].forEach(([och, g]) => och.forEach((c, i) => { if (i < g.ch.length) r[c] = `${g.side}:${g.ch[i]}`; }));
             n.route = r; clean();
         }, { structure: false })), btn("Clear", "Take every wire off (nothing written: B passes as it is)", () => mutate(() => { n.route = {}; clean(); }, { structure: false })));
-        box.append(row);
-        pane.append(box);
+        pane.append(row);
     }
     /** The Roto node's shapes are the viewer's Roto tool's: its options go into this slot, its outlines over the picture. */
     function rotoSection(n) {

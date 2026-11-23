@@ -549,6 +549,8 @@ export function normalizeComp(raw) {
     }
     const views = cleanViews(f.views);
     if (views.length) comp.format.views = views;
+    const layers = CH.cleanLayers(raw.layers);
+    if (Object.keys(layers).length) comp.layers = layers;
     return { comp, errors };
 }
 
@@ -1725,6 +1727,22 @@ export function vfxKey(comp, n) {
 
 export { OC, CH, PT, O, EX };
 
+/**
+ * Every node that makes a picture from what comes in has a "write into" (`write`): rgba (default, the node's
+ * whole picture as it always was), one channel, or a layer - the node's result goes there and everything else of
+ * what comes in passes. Left out: the channel nodes (they say channel by channel what goes where), nodes that
+ * pass pixels on unchanged or only route them, 3D, deep, views and trackers.
+ */
+export const NO_WRITE = new Set(["shuffle", "addchannels", "removechannels", "copy", "channelmerge", "output", "write", "metadata",
+    "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph", "sidebyside",
+    "tracker", "planartracker", ...GEO3D, ...DEEP]);
+export const WRITE_PARAM = { kind: "target", def: "rgba", label: "write into", help: "Where the result goes: rgba (the whole picture), one channel, or a layer; the rest of what comes in passes" };
+for (const [t, d] of Object.entries(NODE_TYPES)) {
+    if (NO_WRITE.has(t)) continue;
+    if (d.params.write) { d.params.write = Object.assign({}, WRITE_PARAM); continue; }
+    if (!d.inputs.length) continue;
+    d.params = Object.assign({ write: Object.assign({}, WRITE_PARAM) }, d.params);
+}
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
 /** Nodes that move pixels: the extra channels are moved with the picture. */
@@ -1748,7 +1766,7 @@ export function channelsAt(comp, id, depth = 0) {
     let have = t.inputs.length ? ins(0) : [];
     if (TWO_IN.has(n.type)) for (const c of ins(1)) if (!have.includes(c)) have = [...have, c];
     if (n.type === "addchannels") {
-        for (const c of CH.expandChannels(CH.parseChannels(n.channels ?? t.params.channels.def), have, true)) if (!CH.RGBA.includes(c) && !have.includes(c)) have = [...have, c];
+        for (const c of CH.expandChannels(CH.parseChannels(n.channels ?? t.params.channels.def), have, true, CH.layerDefs(comp))) if (!CH.RGBA.includes(c) && !have.includes(c)) have = [...have, c];
     } else if (n.type === "removechannels") {
         const named = CH.expandChannels(CH.parseChannels(n.channels), have, false);
         have = have.filter((c) => (n.operation === "keep" ? named.includes(c) : !named.includes(c)));
@@ -1757,7 +1775,7 @@ export function channelsAt(comp, id, depth = 0) {
     }
     if (WRITES.has(n.type)) {
         const w = n.write || "rgba";
-        const add = w === "rgba" || !CH.isTarget(w) ? [] : CH.isLayer(w) ? CH.layerChannels(w) : CH.RGBA.includes(w) ? [] : [w];
+        const add = w === "rgba" || !CH.isTarget(w) ? [] : CH.isLayer(w) ? (have.some((c) => CH.layerOf(c) === w) ? [] : CH.layerChannels(w, CH.layerDefs(comp))) : CH.RGBA.includes(w) ? [] : [w];
         for (const c of add) if (!have.includes(c)) have = [...have, c];
     }
     return have;
@@ -1861,8 +1879,10 @@ const lutSigOf = (comp, frame, ctx) => ocioNeeds(comp, frame).map((x) => x.key +
  *  its pictures under the same key, so the two share one cache). */
 export function resultKey(comp, id, frame, ctx) {
     const view = ctx.view || firstView(comp);
-    return `${frame}@${ctx.scale || 1}@${view || ""}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx, view)}@${lutSigOf(comp, frame, ctx)}`;
+    return `${frame}@${ctx.scale || 1}@${view || ""}@${upstreamHash(comp, id)}@${sourceSigOf(comp, id, frame, ctx, view)}@${lutSigOf(comp, frame, ctx)}${layersSig(comp)}`;
 }
+/** The comp's own layers in a cache key (a node writing into a new layer makes what they say): "" for none. */
+export function layersSig(comp) { return comp && comp.layers && Object.keys(comp.layers).length ? "@L" + hashString(JSON.stringify(comp.layers)) : ""; }
 
 export function renderNode(comp, id, frame, ctx) {
     // Groups, Dots, backdrops and notes: the flat comp (imageViewer_compGraph.js); a group or a Dot shows what it passes on.
@@ -1872,6 +1892,7 @@ export function renderNode(comp, id, frame, ctx) {
     const dmemo = ctx.dmemo || (ctx.dmemo = new Map());   // the deep pictures beside the deep nodes' flattened ones
     const W = Math.max(1, Math.round(comp.format.width * scale)), H = Math.max(1, Math.round(comp.format.height * scale));
     const memo = ctx.memo || (ctx.memo = new Map());
+    const defs = CH.layerDefs(comp);   // the layers the comp knows (what a new one is made of)
     const xmemo = ctx.xmemo || (ctx.xmemo = new Map());   // the extra channels beside each picture
     const keys = new Map(), hashes = new Map();
     // What a cached result also depends on beside the settings: which pixels its Reads were handed (none yet,
@@ -1890,7 +1911,7 @@ export function renderNode(comp, id, frame, ctx) {
         let ck = null;
         if (n && !n.disable && ctx.cache && (ctx.cacheIds ? ctx.cacheIds.has(nid) : ctx.cacheAll ? true : HEAVY.has(n.type))) {
             if (!keys.has(nid)) keys.set(nid, upstreamHash(comp, nid, hashes));
-            ck = `${f}@${scale}@${view || ""}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}`;
+            ck = `${f}@${scale}@${view || ""}@${keys.get(nid)}@${sourceSig(nid, f)}@${lutSig()}${layersSig(comp)}`;
             if (ctx.keysUsed) ctx.keysUsed.set(mk, ck);
             if (ctx.cache.has(ck)) {
                 const kept = ctx.cache.get(ck);
@@ -1914,7 +1935,7 @@ export function renderNode(comp, id, frame, ctx) {
             const w = n.write || "rgba";
             if (w !== "rgba") {
                 const base = n.inputs[0] ? run(n.inputs[0], f, depth + 1) : blank(W, H);
-                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w);
+                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w, defs);
             }
         }
         if (n && !n.disable && MASKABLE.has(n.type)) [img, ex] = maskStage(n, f, depth, img, ex);
@@ -2128,7 +2149,7 @@ export function renderNode(comp, id, frame, ctx) {
         }
         case "addchannels": {
             const src = run(n.inputs[0], f, d1);
-            const [img, ex] = CH.addChannels(src, exOf(n.inputs[0], f), CH.parseChannels(n.channels ?? NODE_TYPES.addchannels.params.channels.def), paramAt(n, "value", f) || 0);
+            const [img, ex] = CH.addChannels(src, exOf(n.inputs[0], f), CH.parseChannels(n.channels ?? NODE_TYPES.addchannels.params.channels.def), paramAt(n, "value", f) || 0, defs);
             return X(img, ex);
         }
         case "removechannels": {
@@ -2164,7 +2185,7 @@ export function renderNode(comp, id, frame, ctx) {
             let matte = (ctx.matte && ctx.matte(n, f, W, H)) || new Float64Array(W * H);
             const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
             if (w !== W || h !== H) matte = conformPlane(matte, W, H, w, h);
-            const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off");
+            const [img, ex] = CH.rotoWrite(matte, w, h, src, exOf(n.inputs[0], f), n.write || "rgba", n.premult !== "off", defs);
             return X(O.withBox(img, O.scanBox(img)), ex);
         }
         case "paint": {

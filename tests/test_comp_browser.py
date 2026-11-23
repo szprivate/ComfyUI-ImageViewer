@@ -836,7 +836,7 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-panels-per-node.png"))
         self.assertEqual(self.errors, [])
 
-    def test_the_shuffle_grid_routes_two_inputs_in_the_parameters_panel(self):
+    def test_the_shuffle_board_routes_two_inputs_in_the_parameters_panel(self):
         pg = self.page()
         self.new_comp(pg)
         ED = self.ED
@@ -846,42 +846,105 @@ class CompBrowserTests(unittest.TestCase):
             e.refresh(); e.select(['Constant1']);
             const s = e.addNode('shuffle'); s.inputs[1] = 'Constant2'; e.view(s.id); e.select([s.id]); e.refresh(); return s.id; }}""")
         pg.wait_for_timeout(400)
-        grid = pg.locator(".cp-pane.first .cp-shuf-grid")
-        self.assertEqual(grid.count(), 1)
+        P = ".cp-pane.first"
+        board = pg.locator(f"{P} .cp-shuf2")
+        self.assertEqual(board.count(), 1)
         # Four wires straight through at first, A not used: red as before.
-        self.assertEqual(grid.locator(".cp-shuf-dot.on").count(), 4)
+        self.assertEqual(board.locator("line.cp-shuf2-wire:not(.temp)").count(), 4)
         px = self.pixel(pg, 0.5, 0.5)
         self.assertGreater(px[0], 200); self.assertLess(px[2], 30)
-        # in 2 reads A's rgba; A's blue routed into blue, black into red: the picture turns blue.
-        pg.locator(".cp-pane.first select.cp-shuf-layer").nth(1).select_option("rgba")
+        # in 2 reads A's rgba; A's blue dragged onto blue, black clicked then red: the picture turns blue.
+        pg.locator(f"{P} select.cp-shuf-layer").nth(1).select_option("rgba")
         pg.wait_for_timeout(300)
-        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="b"][data-src="A:b"]').click()
+
+        def drag(a, b):
+            s, t = pg.locator(a).bounding_box(), pg.locator(b).bounding_box()
+            pg.mouse.move(s["x"] + s["width"] / 2, s["y"] + s["height"] / 2); pg.mouse.down()
+            pg.mouse.move(t["x"] + t["width"] / 2, t["y"] + t["height"] / 2, steps=8); pg.mouse.up()
+            pg.wait_for_timeout(300)
+        drag(f'{P} .cp-shuf-pin[data-src="A:b"]', f'{P} .cp-shuf-pin[data-out="b"]')
+        pg.locator(f'{P} .cp-shuf-pin[data-src="0"]').click()
         pg.wait_for_timeout(200)
-        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="r"][data-src="0"]').click()
+        self.assertEqual(pg.locator(f'{P} .cp-shuf-pin.picked').count(), 1)
+        pg.locator(f'{P} .cp-shuf-pin[data-out="r"]').click()
         pg.wait_for_timeout(400)
         route = pg.evaluate(f"() => {ED}.node('{sh}').route")
         self.assertEqual(route, {"r": "0", "g": "B:g", "b": "A:b", "a": "B:a"})
         px = self.pixel(pg, 0.5, 0.5)
         self.assertLess(px[0], 30); self.assertGreater(px[2], 200)
-        # A click on a lit dot takes the wire off: not written, B's own passes.
-        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="r"][data-src="0"]').click()
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.locator(P).screenshot(path=os.path.join(SHOTS, "comp-shuffle-board.png"))
+        # A click on a wired output pin takes the wire off: not written, B's own passes.
+        pg.locator(f'{P} .cp-shuf-pin[data-out="r"]').click()
         pg.wait_for_timeout(400)
         self.assertNotIn("r", pg.evaluate(f"() => {ED}.node('{sh}').route"))
         self.assertGreater(self.pixel(pg, 0.5, 0.5)[0], 200)
-        # A second output layer adds rows.
-        pg.locator(".cp-pane.first select.cp-shuf-layer").nth(3).select_option("\u0001")
-        field = pg.locator(".cp-pane.first input.cp-newch")
-        field.fill("extra")
-        field.press("Enter")
+        # Dragging a wire's output end onto another output moves it; off into nothing takes it off.
+        drag(f'{P} .cp-shuf-pin[data-out="b"]', f'{P} .cp-shuf-pin[data-out="g"]')
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{sh}').route"), {"g": "A:b", "a": "B:a"})
+        box = pg.locator(f"{P} .cp-shuf2").bounding_box()
+        s = pg.locator(f'{P} .cp-shuf-pin[data-out="g"]').bounding_box()
+        pg.mouse.move(s["x"] + 5, s["y"] + 5); pg.mouse.down()
+        pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] + 40, steps=8); pg.mouse.up()
         pg.wait_for_timeout(300)
-        self.assertEqual(pg.locator(".cp-pane.first .cp-shuf-outrow").count(), 8)
-        pg.locator('.cp-pane.first .cp-shuf-dot[data-out="extra.a"][data-src="A:a"]').click()
-        pg.wait_for_timeout(300)
-        self.assertIn("extra.a", pg.evaluate(f"() => {ED}.channelsAt ? {ED}.channelsAt('{sh}') : Object.keys({ED}.node('{sh}').route)"))
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{sh}').route"), {"a": "B:a"})
+        # A second output layer made in the New layer dialog with only the channels asked for.
+        pg.locator(f"{P} select.cp-shuf-layer").nth(3).select_option("\u0001")
+        dlg = pg.locator(".cp-layerdlg")
+        self.assertEqual(dlg.count(), 1)
+        dlg.locator("input.cp-layer-name").fill("depth2")
+        dlg.locator('.cp-layer-preset[data-preset="z"]').click()
+        self.assertIn("depth2.z", dlg.locator(".cp-note").inner_text())
+        dlg.locator(".cp-layer-ok").click()
+        pg.wait_for_timeout(400)
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().layers"), {"depth2": ["z"]})
+        self.assertEqual(pg.locator(f'{P} .cp-shuf-pin[data-out^="depth2."]').count(), 1)
+        drag(f'{P} .cp-shuf-pin[data-src="A:b"]', f'{P} .cp-shuf-pin[data-out="depth2.z"]')
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{sh}').route")["depth2.z"], "A:b")
+        if SHOTS:
+            pg.locator(P).screenshot(path=os.path.join(SHOTS, "comp-shuffle-board-two-outputs.png"))
+        self.assertEqual(self.errors, [])
+
+    def test_every_node_writes_into_the_channel_picked_and_layers_have_their_own_channels(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        gid = pg.evaluate(f"""() => {{ const e = {ED};
+            e.comp().nodes.find((n) => n.id === 'Constant1').color = [0.5, 0.25, 0.125, 1];
+            e.refresh(); e.select(['Constant1']);
+            const g = e.addNode('grade'); e.view(g.id); e.select([g.id]); e.refresh(); return g.id; }}""")
+        pg.wait_for_timeout(400)
+        P = ".cp-pane.first"
+        labels = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('{P} .mg-prop label')].map((l) => l.textContent)")
+        self.assertIn("write into", labels)
+        sel = pg.locator(f'{P} .mg-prop').filter(has_text="write into").locator("select")
+        self.assertEqual(sel.input_value(), "rgba")
+        opts = sel.evaluate("(s) => [...s.options].map((o) => o.value)")
+        self.assertIn("depth", opts); self.assertIn("depth.z", opts); self.assertIn("motion", opts)
+        # The New layer dialog: a name, the channels it has (here two), kept in the comp.
+        sel.select_option("\u0001")
+        dlg = pg.locator(".cp-layerdlg")
+        dlg.locator("input.cp-layer-name").fill("vel")
+        dlg.locator('.cp-layer-preset[data-preset="uv"]').click()
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
-            pg.locator(".cp-pane.first").screenshot(path=os.path.join(SHOTS, "comp-shuffle-grid.png"))
-            pg.screenshot(path=os.path.join(SHOTS, "comp-shuffle-grid-full.png"))
+            pg.screenshot(path=os.path.join(SHOTS, "comp-new-layer-dialog.png"))
+        dlg.locator(".cp-layer-ok").click()
+        pg.wait_for_timeout(500)
+        self.assertEqual(pg.evaluate(f"() => {ED}.comp().layers"), {"vel": ["u", "v"]})
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{gid}').write"), "vel")
+        self.assertEqual(pg.evaluate(f"async () => (await import('/extensions/viewer/imageViewer_compModel.js')).channelsAt({ED}.comp(), '{gid}')"), ["vel.u", "vel.v"])
+        # The grade went into vel only: the rgba passes as it came in.
+        px = self.pixel(pg, 0.5, 0.5)
+        self.assertGreater(px[0], 150); self.assertLess(px[2], 120)
+        # An ordinary channel: the grade (gain 4) into green only.
+        pg.evaluate(f"() => {{ const e = {ED}; const n = e.node('{gid}'); n.write = 'g'; n.gain = 4; e.refresh(); }}")
+        pg.wait_for_timeout(500)
+        px2 = self.pixel(pg, 0.5, 0.5)
+        self.assertGreater(px2[1], px[1] + 40); self.assertLess(abs(px2[2] - px[2]), 4)
+        if SHOTS:
+            pg.locator(P).screenshot(path=os.path.join(SHOTS, "comp-write-into.png"))
         self.assertEqual(self.errors, [])
 
     def test_extra_channels_shuffle_roto_write_and_the_layer_shown(self):
@@ -920,7 +983,7 @@ class CompBrowserTests(unittest.TestCase):
         # Roto has the channel menu and the premult switch.
         rid = pg.evaluate(f"() => {{ const e = {ED}; const r = e.addNode('roto'); e.select([r.id]); return r.id; }}")
         fks = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first .mg-prop label')].map((l) => l.textContent)")
-        self.assertIn("channel", fks); self.assertIn("premult", fks)
+        self.assertIn("write into", fks); self.assertIn("premult", fks)
         if SHOTS:
             pg.screenshot(path=os.path.join(SHOTS, "comp-roto-channel-premult.png"))
         self.assertEqual(pg.evaluate(f"() => {ED}.node('{rid}').write || 'rgba'"), "rgba")

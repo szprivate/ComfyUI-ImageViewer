@@ -77,6 +77,16 @@ def channel_cases(sources):
                              N("shuffle", 1, ["Read1", "reformat1", "Read2"], in2="dz", out2="o",
                                route={"r": "A:g", "g": "B:b", "a": "1", "o.r": "A:dz.z", "o.g": "0", "o.b": "B:a"},
                                mask_channel="r", mix=0.7), out("shuffle1")])}, sources))
+    # Every node writes into a channel or layer: a grade into depth (known as depth.z), a blur into r, a
+    # transform into a layer of the comp's own (pos.x / .y / .z), a merge into an alpha-only layer.
+    own = comp([read(1), read(2), N("grade", 1, ["Read1", None], gain=2, write="depth"),
+                N("blur", 1, ["grade1", None], size=2, write="r"),
+                N("transform", 1, ["blur1"], translate=[1.5, -2], write="pos"),
+                merge(1, "transform1", "Read2", write="hold"),
+                N("addchannels", 1, ["Merge1"], channels="motion", value=0.5),
+                N("grade", 2, ["addchannels1", None], gain=0.5, write="motion.v"), out("grade2")])
+    own["layers"] = {"pos": ["x", "y", "z"], "hold": ["a"]}
+    c.append(({"comp": own}, sources))
     return c
 
 

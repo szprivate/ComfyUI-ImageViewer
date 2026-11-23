@@ -225,7 +225,8 @@ export function createCompGpu(doc = document) {
             seen.add(nid);
             const n = C.nodeById(comp, nid);
             if (!n) return;
-            if (C.channelsAt(comp, nid).length) { ok = false; return; }
+            // Extra channels, or a node writing into one channel or a layer: the CPU's.
+            if (C.channelsAt(comp, nid).length || (!n.disable && n.write && n.write !== "rgba")) { ok = false; return; }
             if (!n.disable && GPU_TYPES.has(n.type) && n.type !== "output") shaders++;
             for (const s of n.inputs) walk(s);
         };

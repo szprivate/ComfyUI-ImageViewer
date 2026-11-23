@@ -613,6 +613,9 @@ def normalize(raw):
     views = clean_views(f.get("views"))
     if views:
         comp["format"]["views"] = views
+    layers = clean_layers(raw.get("layers"))
+    if layers:
+        comp["layers"] = layers
     return comp, errors
 
 
@@ -2234,8 +2237,55 @@ def layer_of(name):
     return "rgba" if name in _CH else name[:name.index(".")]
 
 
-def layer_channels(layer):
-    return list(RGBA) if layer == "rgba" else [f"{layer}.{c}" for c in RGBA]
+# Layers known before anything is written into them (the page's LAYER_DEFAULTS); a comp's own ``layers`` first.
+LAYER_DEFAULTS = {"depth": ["z"], "motion": ["u", "v"], "forward": ["u", "v"], "backward": ["u", "v"]}
+MAX_LAYER_CHANNELS = 4
+
+
+def clean_layer_channels(lst):
+    if not isinstance(lst, list):
+        return None
+    out = []
+    for c in lst:
+        if isinstance(c, str) and _NAME.match(c) and c not in out:
+            out.append(c)
+    return out if 0 < len(out) <= MAX_LAYER_CHANNELS else None
+
+
+def clean_layers(raw):
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for k, v in raw.items():
+        ch = clean_layer_channels(v)
+        if k not in ("rgba", "none") and is_layer(k) and ch:
+            out[k] = ch
+    return out
+
+
+def layer_defs(comp):
+    d = dict(LAYER_DEFAULTS)
+    d.update(clean_layers((comp or {}).get("layers")))
+    return d
+
+
+def layer_channels(layer, defs=None):
+    if layer == "rgba":
+        return list(RGBA)
+    own = (defs or {}).get(layer)
+    return [f"{layer}.{c}" for c in (own if isinstance(own, list) and own else RGBA)]
+
+
+_LETTER = {"red": 0, "green": 1, "blue": 2, "alpha": 3}
+
+
+def source_slot(channel, k):
+    s = channel[channel.index(".") + 1:] if "." in channel else channel
+    if s in _CH:
+        return _CH[s]
+    if s in _LETTER:
+        return _LETTER[s]
+    return min(k, 3)
 
 
 def is_target(t):
@@ -2250,7 +2300,7 @@ def parse_channels(text):
     return out
 
 
-def expand_channels(tokens, have, create=False):
+def expand_channels(tokens, have, create=False, defs=None):
     out = []
 
     def put(c):
@@ -2267,7 +2317,7 @@ def expand_channels(tokens, have, create=False):
             put(t)
         elif is_layer(t):
             mine = [n for n in have if layer_of(n) == t]
-            for c in (mine if mine or not create else layer_channels(t)):
+            for c in (mine if mine or not create else layer_channels(t, defs)):
                 put(c)
     return out
 
@@ -2295,9 +2345,9 @@ class _State:
             self.ex[name] = a
 
 
-def add_channels(img, ex, tokens, value):
+def add_channels(img, ex, tokens, value, defs=None):
     s = _State(img, ex)
-    for c in expand_channels(tokens, list(s.ex), True):
+    for c in expand_channels(tokens, list(s.ex), True, defs):
         if c not in _CH and c not in s.ex:
             s.put(c, value)
     return s.img, s.ex
@@ -2379,16 +2429,21 @@ def shuffle_channels(img, ex, out, picks):
     return s.img, s.ex
 
 
-def write_target(base, bex, P, target):
+def write_target(base, bex, P, target, defs=None):
     if not is_target(target) or target == "rgba":
         return P, dict(bex or {})
     s = _State(base, bex)
     if is_layer(target):
-        for k, c in enumerate(layer_channels(target)):
-            s.put(c, P[..., k])
+        mine = [c for c in (bex or {}) if layer_of(c) == target]
+        for k, c in enumerate(mine or layer_channels(target, defs)):
+            s.put(c, P[..., source_slot(c, k)])
     else:
         letter = target if target in _CH else target[target.index(".") + 1:]
-        s.put(target, P[..., _CH[letter] if letter in _CH else 3])
+        known = -1
+        if letter not in _CH and defs:
+            lc = layer_channels(layer_of(target), defs)
+            known = lc.index(target) if target in lc else -1
+        s.put(target, P[..., _CH[letter] if letter in _CH else source_slot(target, known) if known >= 0 else 3])
     return s.img, s.ex
 
 
@@ -2426,7 +2481,7 @@ def mix_extras(ax, bx, t, shape):
     return out
 
 
-def roto_write(m, src, sex, target, premult):
+def roto_write(m, src, sex, target, premult, defs=None):
     h, w = m.shape
     P = np.repeat(m[..., None], 4, axis=2).astype(np.float32)
     ex = dict(sex or {})
@@ -2442,9 +2497,18 @@ def roto_write(m, src, sex, target, premult):
     if src is not None and premult:
         base = src.copy()
         base[..., :3] = (src[..., :3].astype(np.float64) * m[..., None]).astype(np.float32)
-    return write_target(base, ex, P, target)
+    return write_target(base, ex, P, target, defs)
 
 
+# Every node that makes a picture from what comes in has a "write into" (the page's NO_WRITE / WRITE_PARAM).
+NO_WRITE = {"shuffle", "addchannels", "removechannels", "copy", "channelmerge", "output", "write", "metadata",
+            "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph",
+            "sidebyside", "tracker", "planartracker"} | GEO3D | DEEP
+WRITE_PARAM = {"kind": "target", "def": "rgba"}
+for _wt, _wd in NODE_TYPES.items():
+    if _wt in NO_WRITE or ("write" not in _wd["params"] and not _wd["inputs"]):
+        continue
+    _wd["params"] = {"write": dict(WRITE_PARAM), **{k: v for k, v in _wd["params"].items() if k != "write"}}
 WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
 # Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata).
 PASS_THROUGH = {"output", "write", "metadata"}
@@ -2503,6 +2567,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
     H = max(1, int(math.floor(fmt["height"] * scale + 0.5)))
     memo = {} if memo is None else memo
     view = view or first_view(comp)
+    defs = layer_defs(comp)  # the layers the comp knows (what a new one is made of)
 
     def ex_of(i, f):
         return memo.get(("x", i, f)) or {} if i else {}
@@ -2527,7 +2592,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if w != "rgba":
                 i0 = (n.get("inputs") or [None])[0]
                 base = run(i0, f, depth + 1) if i0 else blank(W, H)
-                img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w)
+                img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w, defs)
         if n and not n.get("disable") and n.get("type") in MASKABLE:
             img, ex = mask_stage(n, f, depth, img, ex)
         memo[(i, f)] = img
@@ -2754,7 +2819,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
         if t == "addchannels":
             src = run(ins[0], f, d1)
             text = n.get("channels") if n.get("channels") is not None else NODE_TYPES["addchannels"]["params"]["channels"]["def"]
-            return add_channels(src, ex_of(ins[0], f), parse_channels(text), param_at(n, "value", f) or 0)
+            return add_channels(src, ex_of(ins[0], f), parse_channels(text), param_at(n, "value", f) or 0, defs)
         if t == "removechannels":
             src = run(ins[0], f, d1)
             return remove_channels(src, ex_of(ins[0], f), parse_channels(n.get("channels")), n.get("operation") == "keep")
@@ -2788,7 +2853,7 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             m = roto_matte(n.get("roto"), f, W, H)
             if src is not None:
                 m = conform(m, src.shape[1], src.shape[0])
-            return roto_write(m, src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off")
+            return roto_write(m, src, ex_of(ins[0], f), n.get("write") or "rgba", n.get("premult") != "off", defs)
         if t == "paint":
             src = run(ins[0], f, d1) if ins[0] else blank(W, H)
             strokes = PT.live_strokes(n.get("strokes"), f)

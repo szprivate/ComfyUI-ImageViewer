@@ -22,8 +22,44 @@ export function isChannel(s) {
 /** A layer's name is valid: "rgba", or letters, digits and _ (not r g b a, which are channels). */
 export function isLayer(s) { return s === "rgba" || (typeof s === "string" && NAME.test(s) && IDX[s] === undefined && s !== "rgb"); }
 export const layerOf = (name) => (IDX[name] !== undefined ? "rgba" : name.slice(0, name.indexOf(".")));
-/** The channels a layer is written as: rgba's own, else "<layer>.r" ... "<layer>.a". */
-export const layerChannels = (layer) => (layer === "rgba" ? RGBA.slice() : RGBA.map((c) => `${layer}.${c}`));
+
+/**
+ * Layers known before anything is written into them, with the channels each has (a layer of the comp's own,
+ * `comp.layers` = {name: [channel, ...]}, made in the New layer dialog, comes first). A layer known to neither
+ * is r g b a. A layer's channels are 1 to 4 names of letters, digits and _ ("z", or "u", "v").
+ */
+export const LAYER_DEFAULTS = { depth: ["z"], motion: ["u", "v"], forward: ["u", "v"], backward: ["u", "v"] };
+export const MAX_LAYER_CHANNELS = 4;
+/** One layer's channels as they may be kept: names, each once, at most four (null: not a layer's channels). */
+export function cleanLayerChannels(list) {
+    if (!Array.isArray(list)) return null;
+    const out = [];
+    for (const c of list) if (typeof c === "string" && NAME.test(c) && !out.includes(c)) out.push(c);
+    return out.length && out.length <= MAX_LAYER_CHANNELS ? out : null;
+}
+/** A comp's own layers as they may be kept ({} for none): valid layer names (not rgba) with valid channels. */
+export function cleanLayers(raw) {
+    const out = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+    for (const [k, v] of Object.entries(raw)) {
+        const ch = cleanLayerChannels(v);
+        if (k !== "rgba" && k !== "none" && isLayer(k) && ch) out[k] = ch;
+    }
+    return out;
+}
+/** Every layer known to a comp: the defaults with its own laid over them. */
+export function layerDefs(comp) { return Object.assign({}, LAYER_DEFAULTS, cleanLayers(comp && comp.layers)); }
+/** The channels a layer is written as: rgba's own, else its known channels ("depth.z"), else "<layer>.r" ... "<layer>.a". */
+export const layerChannels = (layer, defs) => (layer === "rgba" ? RGBA.slice()
+    : ((defs && Array.isArray(defs[layer]) && defs[layer].length ? defs[layer] : null) || RGBA).map((c) => `${layer}.${c}`));
+/** Which of a picture's r g b a fills the k-th channel of a layer: the one of the same name, else by place. */
+const LETTER = { red: 0, green: 1, blue: 2, alpha: 3 };
+export function sourceSlot(channel, k) {
+    const s = channel.slice(channel.indexOf(".") + 1);
+    if (IDX[s] !== undefined) return IDX[s];
+    if (LETTER[s] !== undefined) return LETTER[s];
+    return Math.min(k, 3);
+}
 
 /** The names a text lists (commas or spaces between): each a channel, a layer, "rgb" or "rgba"; the rest left out. */
 export function parseChannels(text) {
@@ -36,7 +72,7 @@ export function parseChannels(text) {
  * The channels a list names: a channel itself; "rgba" / "rgb" theirs; a layer the channels of it that are
  * there (``have``: the extra channels' names) or, when ``create``, its r g b a where none of it is there yet.
  */
-export function expandChannels(tokens, have, create = false) {
+export function expandChannels(tokens, have, create = false, defs = null) {
     const out = [];
     const put = (c) => { if (!out.includes(c)) out.push(c); };
     for (const t of tokens) {
@@ -45,7 +81,7 @@ export function expandChannels(tokens, have, create = false) {
         else if (isChannel(t)) put(t);
         else if (isLayer(t)) {
             const mine = have.filter((n) => layerOf(n) === t);
-            (mine.length || !create ? mine : layerChannels(t)).forEach(put);
+            (mine.length || !create ? mine : layerChannels(t, defs)).forEach(put);
         }
     }
     return out;
@@ -80,9 +116,9 @@ function put(state, name, v) {
 const start = (img, ex) => ({ img, own: false, ex: Object.assign({}, ex || {}) });
 
 /** Add Channels: each channel the list names that is not there yet, filled with ``value`` (r g b a are always there). */
-export function addChannels(img, ex, tokens, value) {
+export function addChannels(img, ex, tokens, value, defs = null) {
     const s = start(img, ex);
-    for (const c of expandChannels(tokens, Object.keys(s.ex), true)) if (IDX[c] === undefined && !s.ex[c]) put(s, c, value);
+    for (const c of expandChannels(tokens, Object.keys(s.ex), true, defs)) if (IDX[c] === undefined && !s.ex[c]) put(s, c, value);
     return [s.img, s.ex];
 }
 
@@ -144,11 +180,11 @@ export function shuffleUpgrade(n) {
  * The channels a layer shows in Shuffle's grid: rgba's own, else the channels of it that are there
  * (``have``: extra channels' names), else (a new layer) its r g b a. "none": none.
  */
-export function shuffleLayerChannels(layer, have) {
+export function shuffleLayerChannels(layer, have, defs = null) {
     if (!layer || layer === SHUFFLE_NONE || !isLayer(layer)) return [];
     if (layer === "rgba") return RGBA.slice();
     const mine = (have || []).filter((c) => layerOf(c) === layer);
-    return mine.length ? mine : layerChannels(layer);
+    return mine.length ? mine : layerChannels(layer, defs);
 }
 /**
  * The routing when one of the four layers changes from channels ``from`` to ``to`` (both lists, in order):
@@ -189,16 +225,25 @@ export function shuffleRouted(img, ex, A, aex, route) {
 export function isTarget(t) { return isChannel(t) || isLayer(t); }
 /**
  * A node that makes something writes it into ``target`` of what comes in (``base``, ``bex``): "rgba" is the
- * node's own picture ``P`` and the input's extras; a layer gets P's r g b a; one channel gets P's channel of
- * the same letter (".a" of a layer, r g b a), any other name P's alpha.
+ * node's own picture ``P`` and the input's extras; a layer gets P's r g b a into its channels (those it has, else
+ * those ``defs`` know it by: a channel named r g b a / red ... takes that one, any other P's channel in its place -
+ * depth.z the red, motion.u / .v red and green); one channel gets P's channel of the same letter (".a" of a
+ * layer, r g b a), a channel of a layer ``defs`` know P's channel in its place there (depth.z: red), any other
+ * name P's alpha.
  */
-export function writeTarget(base, bex, P, target) {
+export function writeTarget(base, bex, P, target, defs = null) {
     if (!isTarget(target) || target === "rgba") return [P, Object.assign({}, bex || {})];
     const s = start(base, bex);
-    if (isLayer(target)) layerChannels(target).forEach((c, k) => put(s, c, channelOf(P, null, RGBA[k])));
+    if (isLayer(target)) {
+        // The layer's channels that are there already, else the ones it is known by (a new layer: r g b a).
+        const mine = Object.keys(bex || {}).filter((c) => layerOf(c) === target);
+        (mine.length ? mine : layerChannels(target, defs)).forEach((c, k) => put(s, c, channelOf(P, null, RGBA[sourceSlot(c, k)])));
+    }
     else {
         const letter = IDX[target] !== undefined ? target : target.slice(target.indexOf(".") + 1);
-        put(s, target, channelOf(P, null, IDX[letter] !== undefined ? letter : "a"));
+        // A channel of a known layer (depth.z) takes P's channel in its place there; another name P's alpha.
+        const known = IDX[letter] === undefined && defs ? layerChannels(layerOf(target), defs).indexOf(target) : -1;
+        put(s, target, channelOf(P, null, IDX[letter] !== undefined ? letter : known >= 0 ? RGBA[sourceSlot(target, known)] : "a"));
     }
     return [s.img, s.ex];
 }
@@ -282,7 +327,7 @@ export function layersOf(names) {
  * white shapes. Any other target: the matte goes into it (writeTarget), and premult on multiplies what comes
  * in's rgb by the matte first.
  */
-export function rotoWrite(m, w, h, src, sex, target, premult) {
+export function rotoWrite(m, w, h, src, sex, target, premult, defs = null) {
     const n = w * h;
     const P = { w, h, data: new Float32Array(n * 4) };
     for (let i = 0; i < n; i++) { const v = m[i]; P.data[i * 4] = v; P.data[i * 4 + 1] = v; P.data[i * 4 + 2] = v; P.data[i * 4 + 3] = v; }
@@ -303,5 +348,5 @@ export function rotoWrite(m, w, h, src, sex, target, premult) {
         for (let i = 0; i < n; i++) { const v = m[i], j = i * 4; o[j] = o[j] * v; o[j + 1] = o[j + 1] * v; o[j + 2] = o[j + 2] * v; }
         base = out;
     }
-    return writeTarget(base, ex, P, target);
+    return writeTarget(base, ex, P, target, defs);
 }
