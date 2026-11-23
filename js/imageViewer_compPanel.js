@@ -595,6 +595,7 @@ export const CompPanelMixin = {
             // The 3D nodes drawn by the 3D space's renderer (imageViewer_comp3dEngine.js), one per comp tab.
             engine3d: () => rec.engine || null,
             engine3dReady: () => this._cpEngine(rec).ensure(),
+            engine3dWhy: () => (rec.engine ? rec.engine.why : ""),
             loadScene: (node) => this._cpLoadScene(rec, node),
             sceneTabs: () => this._cpSceneTabs(),
             // The 3D room in the picture's place (imageViewer_comp3dRoom.js): the same view, on screen.

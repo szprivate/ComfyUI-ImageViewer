@@ -864,8 +864,14 @@ export function createCompEditor(host, opts = {}) {
     async function setRoom(on) {
         if (on && !st.room) {
             st.room = true; renderBar();
-            const ok = await o.room3d(stage, roomApi).catch(() => false);
-            if (!ok) { st.room = false; renderBar(); toast("The 3D room needs WebGL 2 with float pictures, which this browser cannot do.", "warn"); return; }
+            const ok = await o.room3d(stage, roomApi).catch((e) => { console.warn("[ImageViewer] the 3D room could not open", e); return false; });
+            if (!ok) {
+                st.room = false; renderBar();
+                const why = (o.engine3dWhy && o.engine3dWhy()) || "WebGL 2 with float pictures is needed";
+                console.warn("[ImageViewer] the 3D room could not open:", why);
+                toast(`The 3D room could not open: ${why}.`, "warn");
+                return;
+            }
             roomLastKey = "";
             queueRender();
         } else if (!on && st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); renderBar(); queueRender(); }
