@@ -52,7 +52,8 @@ and a render of its Output by the export rule.
                                                           -> {job}: a .nk by the export rule (kind "comp"), the nodes
                                                           Nuke has none for baked to EXR beside it (comp_nuke);
                                                           GET ?job= -> its state; POST {job, cancel}
-    POST /imageviewer/comp_write_3d {job, key, w, h, data, depth?}  a Render3D frame the page drew for a Write job
+    POST /imageviewer/comp_write_3d {job, key, w, h, data, depth?, page?}  a Render3D frame the page drew for a job
+    GET  /imageviewer/comp_3d_pending                 the 3D frames jobs no page started are waiting for
     POST /imageviewer/comp_write_plan {path, comp?, writes?, first?, last?, handles?}
                                                           the Write nodes' files, written nothing (comp_write.plan)
     POST /imageviewer/comp_write {path, writes?, first?, last?, handles?}
@@ -100,6 +101,8 @@ from . import comp_model as M
 
 MAX_JOBS = 8
 WAIT_3D = 60          # seconds a Write job waits for the page to hand over a Render3D frame
+WAIT_3D_ANY = 15      # seconds a job no page started waits for ANY viewer page to take its first 3D frame
+WAIT_3D_MAX = 300     # the most a caller may ask for (``wait3d``: a headless page takes a while to come up)
 PIXEL_MAX = 4096
 DEEP_MAX = 24_000_000   # samples the preview takes from one deep frame (about 576 MB as floats)
 
@@ -382,7 +385,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             job = jobs.get(request.query.get("job") or "")
             if not job:
                 return err("no such render", 404)
-            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error", "need3d")})
+            return web.json_response(job_view(job))
         body = await body_of(request)
         if body.get("job"):
             job = jobs.get(str(body["job"]))
@@ -436,7 +439,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
         job = jobs[jid] = {"state": "running", "done": 0, "total": (f1 - f0 + 1) * max(1, len(spec["views"])),
-                           "page3d": bool(body.get("page3d")), "need3d": [], "got3d": {}, "cond3d": threading.Condition()}
+                           **job_3d(jid, "comp_render", path, body)}
         threading.Thread(target=run_job, args=(job, comp, path, spec), daemon=True, name=f"comp-render-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"]})
 
@@ -584,34 +587,78 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             return err(e, 422)
         return web.json_response({"writes": public_plan(plans), "refused": write_refusal(plans)})
 
+    def wait3d_of(body):
+        try:
+            return max(0.0, min(float(WAIT_3D_MAX), float(body.get("wait3d", WAIT_3D_ANY))))
+        except (TypeError, ValueError):
+            return float(WAIT_3D_ANY)
+
+    def job_3d(jid, route, path, body):
+        """The fields every render job carries for its Render3D frames (see page_3d)."""
+        return {"id": jid, "route": route, "path": path, "page3d": bool(body.get("page3d")), "wait3d": wait3d_of(body),
+                "need3d": [], "need3d_since": None, "owner3d": None, "got3d": {}, "cond3d": threading.Condition()}
+
+    def job_view(job):
+        out = {k: job.get(k) for k in ("state", "done", "total", "result", "error", "need3d", "owner3d")}
+        since = job.get("need3d_since")
+        out["waiting3d"] = round(time.time() - since, 1) if since and job.get("need3d") else 0
+        return out
+
     def page_3d(job, sources):
-        """Render3D's frames from the page's 3D space while a Write job runs (no bake step, Sebastian 2026-11-23):
-        the job names the frame it needs (``need3d``, read by the page's poll of the job), the page draws it with
-        the 3D space's renderer and POSTs it to comp_write_3d; the job waits for it (``WAIT_3D`` s at most).
-        Without a page that said it serves them, or when it does not answer, Comp's own renderer draws it."""
+        """Render3D's frames from the page's 3D space while a job runs (no bake step, Sebastian 2026-11-23):
+        the job names the frame it needs (``need3d``), the page draws it with the 3D space's renderer and POSTs it
+        to comp_write_3d; the job waits for it (``WAIT_3D`` s at most).
+
+        A job the page started (``page3d``) is polled by that page. Any other job (the agent's, a script's) is
+        BROKERED: each frame it needs goes out as ``imageviewer.comp.need3d`` and is listed by comp_3d_pending,
+        the first viewer page that hands one over serves the rest (``owner3d``), and when none answers within
+        ``wait3d`` seconds Comp's own renderer draws the job's frames."""
         cond = job["cond3d"]
 
         def hook(n, f, view, w, h):
-            if not job.get("page3d"):
-                sources.note(f"{n['id']}: drawn by Comp's own renderer (cards and shapes, unlit) - the 3D space's "
-                             "renderer draws only while the comp is open in the viewer")
+            broker = not job.get("page3d")
+            if broker and (send is None or job.get("broker_off")):
+                sources.note(f"{n['id']}: drawn by Comp's own renderer (cards and shapes, unlit) - no viewer page "
+                             "answered; open ComfyUI in a browser (or let the agent start one) for the 3D space's renderer")
                 return None
             key = f"{n['id']}@{f}#{view or ''}:{w}x{h}"
             with cond:
                 if key not in job["got3d"]:
                     job["need3d"] = [{"key": key, "node": n["id"], "frame": f, "view": view, "w": w, "h": h}]
-                    end = time.time() + WAIT_3D
+                    job["need3d_since"] = time.time()
+                    wait = WAIT_3D if (not broker or job.get("owner3d")) else job.get("wait3d", WAIT_3D_ANY)
+                    if broker:
+                        try:
+                            send("imageviewer.comp.need3d", {"job": job["id"], "route": job["route"], "path": job["path"],
+                                                             "need": job["need3d"], "owner": job.get("owner3d")})
+                        except Exception:  # noqa: BLE001 - comp_3d_pending still lists it
+                            pass
+                    end = time.time() + wait
                     while key not in job["got3d"] and not job.get("cancel") and time.time() < end:
                         cond.wait(0.25)
                     job["need3d"] = []
+                    job["need3d_since"] = None
                 got = job["got3d"].pop(key, None)
             if job.get("cancel"):
                 raise InterruptedError
             if got is None:
-                job["page3d"] = False         # it stopped answering: the rest without it
-                sources.note(f"{n['id']}: the page did not hand over frame {f} in time; drawn by Comp's own renderer")
+                if broker:
+                    job["broker_off"] = True  # nobody (any more): the rest without a page
+                    sources.note(f"{n['id']}: no viewer page handed over frame {f}; drawn by Comp's own renderer")
+                else:
+                    job["page3d"] = False     # it stopped answering: the rest without it
+                    job["broker_off"] = True
+                    sources.note(f"{n['id']}: the page did not hand over frame {f} in time; drawn by Comp's own renderer")
             return got
         return hook
+
+    async def pending_3d(request):
+        """GET -> {jobs: [{job, route, path, need, owner}]}: the frames brokered jobs wait for (a viewer page that
+        came up after the event went out, or a headless one, finds its work here)."""
+        out = [{"job": j["id"], "route": j["route"], "path": j["path"], "need": j["need3d"], "owner": j.get("owner3d")}
+               for j in list(jobs.values())
+               if j.get("state") == "running" and "cond3d" in j and not j.get("page3d") and j.get("need3d")]
+        return web.json_response({"jobs": out}, headers={"Cache-Control": "no-cache"})
 
     def run_writes(job, comp, comp_path, plans):
         sources = comp_io.Sources(comp_path, allow=path_access.may_serve)
@@ -635,7 +682,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             job = jobs.get(request.query.get("job") or "")
             if not job:
                 return err("no such render", 404)
-            return web.json_response({k: job.get(k) for k in ("state", "done", "total", "result", "error", "need3d")})
+            return web.json_response(job_view(job))
         body = await body_of(request)
         if body.get("job"):
             job = jobs.get(str(body["job"]))
@@ -662,7 +709,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             jobs.pop(k, None)
         jid = secrets.token_hex(8)
         job = jobs[jid] = {"state": "running", "done": 0, "total": sum(len(p["frames"]) for p in plans),
-                           "page3d": bool(body.get("page3d")), "need3d": [], "got3d": {}, "cond3d": threading.Condition()}
+                           **job_3d(jid, "comp_write", path, body)}
         threading.Thread(target=run_writes, args=(job, comp, path, plans), daemon=True, name=f"comp-write-{jid}").start()
         return web.json_response({"job": jid, "total": job["total"], "writes": public_plan(plans)})
 
@@ -685,8 +732,16 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
             dep = dep.reshape(h, w).copy()
         except (KeyError, TypeError, ValueError) as e:
             return err(e, 422)
+        page = str(body.get("page") or "")[:64]
+        key = str(body.get("key") or "")
         with job["cond3d"]:
-            job["got3d"][str(body.get("key") or "")] = (img, dep)
+            if not job.get("page3d"):               # a brokered job: the first page to answer serves it
+                if job.get("owner3d") and page != job["owner3d"]:
+                    return web.json_response({"ok": False, "taken": True})
+                if not any(n.get("key") == key for n in job.get("need3d") or []):
+                    return web.json_response({"ok": False, "stale": True})
+                job["owner3d"] = job.get("owner3d") or page or "page"
+            job["got3d"][key] = (img, dep)
             job["cond3d"].notify_all()
         return web.json_response({"ok": True})
 
@@ -1431,6 +1486,7 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
         add("GET", f"{prefix}/comp_write", render_writes)
         add("POST", f"{prefix}/comp_write", render_writes)
         add("POST", f"{prefix}/comp_write_3d", take_3d)
+        add("GET", f"{prefix}/comp_3d_pending", pending_3d)
         add("POST", f"{prefix}/comp_metadata", get_metadata)
         add("GET", f"{prefix}/comp_autosave", autosave)
         add("POST", f"{prefix}/comp_autosave", autosave)

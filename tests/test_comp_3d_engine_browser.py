@@ -227,6 +227,51 @@ def _free_port():
         return s.getsockname()[1]
 
 
+SERVE = """async () => {
+  const P = window.__panel;
+  const { app } = await import('/scripts/app.js');
+  app.graph.nodes = app.graph.nodes || []; app.graph.links = app.graph.links || {};
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  P.setViewerToggleState(true);
+  const C = await import('/extensions/viewer/imageViewer_compModel.js');
+  const comp = C.newComp({ width: 64, height: 48 });
+  const N = (type, id, inputs, params = {}) => Object.assign(C.makeNode(comp, type, params), { id, inputs });
+  comp.nodes.push(N('constant', 'k1', [], { color: [1, 0.5, 0.25, 1] }), N('card3d', 'card1', ['k1']),
+      N('camera3d', 'cam1', [], { translate: [0, 0, 2] }), N('render3d', 'r1', ['card1', 'cam1', null], { samples: 1 }));
+  C.nodeById(comp, comp.output).inputs[0] = 'r1';
+  const path = '/tmp/serve.comp.json';
+  const posts = [], opened = [];
+  let pending = [];
+  const old = window.__fetchApi;
+  const json = (o, status = 200) => ({ ok: status < 400, status, json: async () => o });
+  window.__fetchApi = async (p, opts = {}) => {
+    if (p.startsWith('/imageviewer/comp?path=')) { opened.push(decodeURIComponent(p.split('=')[1])); return json({ path, comp: JSON.parse(JSON.stringify(comp)) }); }
+    if (p === '/imageviewer/comp_write_3d') { const b = JSON.parse(opts.body); posts.push({ job: b.job, key: b.key, page: b.page, w: b.w, h: b.h, n: atob(b.data).length });
+      return json(b.job === 'taken' ? { ok: false, taken: true } : { ok: true }); }
+    if (p === '/imageviewer/comp_3d_pending') { const j = pending; pending = []; return json({ jobs: j }); }
+    return old ? old(p, opts) : json({}, 404);
+  };
+  const need = (key, frame = 0) => [{ key, node: 'r1', frame, view: null, w: 64, h: 48 }];
+  // Not open yet: the page opens the comp, draws the frame and hands it over.
+  const first = await P.compServeNeed3d({ job: 'j1', route: 'comp_write', path, need: need('a') });
+  if (!posts.length) return { first, opened, ready: false };
+  const page = posts[0].page;
+  // Another page serves this job: left alone.
+  const other = await P.compServeNeed3d({ job: 'j2', path, need: need('b'), owner: 'someone-else' });
+  // This page's own job, through the poll (a headless page asks rather than waiting for the event).
+  pending = [{ job: 'j1', route: 'comp_write', path, need: need('c', 1), owner: page }];
+  P.compServe3dPoll(true);
+  for (let i = 0; i < 60 && posts.length < 2; i++) await sleep(100);
+  P.compServe3dPoll(false);
+  // A comp open with changes not saved is not drawn (the job renders the file).
+  const rec = Object.values(P._cpState().tabs).find(r => r.path === path);
+  rec.editor.addNode('constant', {});
+  const dirty = await P.compServeNeed3d({ job: 'j3', path, need: need('d') });
+  window.__fetchApi = old;
+  return { first, other, dirty, opened, page, posts };
+}"""
+
+
 @unittest.skipIf(sync_playwright is None or shutil.which("node") is None, "needs playwright and node")
 class Comp3DEngineTests(unittest.TestCase):
     @classmethod
@@ -403,6 +448,32 @@ class Comp3DEngineTests(unittest.TestCase):
         if not st["base"]:
             self.skipTest("no float render targets")
         self.assertTrue(st["ok"], st["why"])
+
+
+    def test_a_render_job_no_page_started_is_drawn_by_a_viewer_page(self):
+        """The agent's render of a comp with a Render3D: the page opens the comp, draws each frame it is asked for
+        (the event, or the poll of a headless page) and hands it over as this page; a job another page serves and a
+        comp open with changes not saved are left alone."""
+        pg = self.browser.new_page(viewport={"width": 1200, "height": 800})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(SERVE)
+        finally:
+            pg.close()
+        self.assertEqual(st["opened"][:1], ["/tmp/serve.comp.json"], "the comp is opened from its file")
+        if st.get("ready") is False:
+            self.skipTest("no float render targets")
+        self.assertTrue(st["first"])
+        self.assertFalse(st["other"])
+        self.assertFalse(st["dirty"])
+        posts = st["posts"]
+        self.assertEqual([(p["job"], p["key"]) for p in posts], [("j1", "a"), ("j1", "c")])
+        self.assertTrue(all(p["page"] == st["page"] and p["page"] for p in posts))
+        self.assertTrue(all((p["w"], p["h"], p["n"]) == (64, 48, 64 * 48 * 16) for p in posts))
+        self.assertEqual(errors, [])
 
 
 if __name__ == "__main__":

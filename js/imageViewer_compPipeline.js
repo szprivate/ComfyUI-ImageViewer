@@ -10,6 +10,9 @@ import { notice, openFilePicker } from "./imageViewer_exportUI.js";
 import { readNodes, usesEngine3d, writeNodes } from "./imageViewer_compModel.js";
 
 const AUTOSAVE_MS = 30 * 1000;
+// This page, as a brokered render job knows it (comp_routes' page_3d: the first page to hand a frame over serves it).
+const PAGE_ID = Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+const SERVE3D_POLL_MS = 1000;
 const baseOf = (p) => String(p || "").split(/[\\/]/).pop();
 
 async function post(route, body) {
@@ -156,6 +159,78 @@ export const CompPipelineMixin = {
             if (!got) continue;
             await post("/imageviewer/comp_write_3d", { job: jid, key: n.key, w: got.w, h: got.h, data: b64(got.data), depth: got.depth ? b64(got.depth) : null });
         }
+    },
+
+    /**
+     * A render job no page started (the agent's, a script's) asks for a Render3D frame: comp_routes sends
+     * imageviewer.comp.need3d and lists it at comp_3d_pending. This page opens the comp (its tab, if it is not open),
+     * draws the frame with the 3D space's renderer and hands it over; the first page that does serves the job, and
+     * a job another page serves is left alone. A comp open with changes not saved is not served (the job renders
+     * the file): the job then falls back to Comp's own renderer.
+     */
+    async compServeNeed3d(d) {
+        if (!d || !d.job || !d.path || !Array.isArray(d.need) || !d.need.length) return false;
+        if (d.owner && d.owner !== PAGE_ID) return false;
+        const st = this._cpState();
+        const busy = st.serving3d || (st.serving3d = new Set());
+        const tag = d.job + " " + d.need.map((n) => n.key).join("|");
+        if (busy.has(tag) || (st.refused3d && st.refused3d.has(d.job))) return false;
+        busy.add(tag);
+        try {
+            const rec = await this._cpRecForPath(d.path);
+            const ed = rec && rec.editor;
+            if (!ed || !ed.render3dFrame || !(await ed.engineReady().catch(() => false))) return false;
+            if (ed.isDirty && ed.isDirty()) {
+                (st.refused3d || (st.refused3d = new Set())).add(d.job);
+                notice("warn", "A render of this comp is waiting", "The comp is open with changes not saved, so this page does not draw its 3D frames: save it, or the render uses Comp's own renderer.");
+                return false;
+            }
+            const b64 = (arr) => { const u = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength); let s = "";
+                for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+            for (const n of d.need) {
+                const got = await ed.render3dFrame(n.node, n.frame, n.view, n.w, n.h);
+                if (!got) continue;
+                const r = await post("/imageviewer/comp_write_3d", { job: d.job, key: n.key, w: got.w, h: got.h, page: PAGE_ID,
+                    data: b64(got.data), depth: got.depth ? b64(got.depth) : null }).catch(() => null);
+                if (!r || r.taken) return false;
+            }
+            return true;
+        } finally { busy.delete(tag); }
+    },
+
+    /** The comp tab of a file, opened if it is not and waited for until its editor is there (null if not). */
+    async _cpRecForPath(path) {
+        const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+        const PREFIX = "comp:";
+        const find = () => Object.values(this._cpState().tabs).find((r) => norm(r.path) === norm(path));
+        let rec = find();
+        if (!rec || !this.allTabs[PREFIX + rec.path]) {
+            if (!(await this.compOpenFile(path))) return null;
+            rec = find();
+        } else if (!rec.editor) this.switchTab(PREFIX + rec.path);
+        const win = this._viewerWindow ? this._viewerWindow() : window;
+        for (let t = 0; rec && !rec.editor && t < 200; t++) await new Promise((r) => win.setTimeout(r, 100));
+        return rec && rec.editor ? rec : null;
+    },
+
+    /**
+     * Serve brokered 3D frames by asking for them (comp_3d_pending) rather than waiting for the event: a page loaded
+     * with ?imageviewer_serve3d=1 (the one agentY starts in a headless browser when no viewer page is open) does.
+     */
+    compServe3dPoll(on = true) {
+        const st = this._cpState();
+        if (st.poll3d) { clearInterval(st.poll3d); st.poll3d = null; }
+        if (!on) return;
+        let running = false;
+        st.poll3d = setInterval(async () => {
+            if (running) return;
+            running = true;
+            try {
+                const res = await api.fetchApi("/imageviewer/comp_3d_pending");
+                const data = res.ok ? await res.json().catch(() => ({})) : {};
+                for (const j of data.jobs || []) await this.compServeNeed3d(j).catch(() => false);
+            } catch (_) { /* the server is restarting */ } finally { running = false; }
+        }, SERVE3D_POLL_MS);
     },
 
     /** What the Writes wrote: said, and the first file of each in the History. */

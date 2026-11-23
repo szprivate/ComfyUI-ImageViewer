@@ -222,11 +222,57 @@ class Routes(unittest.TestCase):
             self.assertFalse(any("own renderer" in x for x in s["result"]["notes"]), s["result"]["notes"])
             st, r = await self.j(c, "/imageviewer/comp_write_3d", {"job": jid, "key": "x", "w": 2, "h": 2, "data": "AAAA"})
             self.assertEqual(st, 422, r)
-            # No page: drawn here, said.
-            st, d = await self.j(c, "/imageviewer/comp_write", {"path": path, "first": 0, "last": 0, "handles": 0})
+            # No page answers: drawn here, said.
+            st, d = await self.j(c, "/imageviewer/comp_write", {"path": path, "first": 0, "last": 0, "handles": 0, "wait3d": 0})
             s = await self.wait(c, "/imageviewer/comp_write", d["job"])
             self.assertEqual(s["state"], "done", s)
             self.assertTrue(any("own renderer" in x for x in s["result"]["notes"]), s["result"]["notes"])
+        self.run_c(go)
+
+    def test_a_job_no_page_started_is_served_by_any_viewer_page(self):
+        """The agent's render (no page3d): each Render3D frame goes out as imageviewer.comp.need3d and is listed by
+        comp_3d_pending; the first page to hand one over serves the job, another page's frames are refused."""
+        path = os.path.join(self.dirs["output"], "r3b.comp.json")
+        comp = {"comp": 1, "format": {"width": 8, "height": 6, "fps": 24, "frames": 2}, "output": "Output1",
+                "nodes": [{"id": "card1", "type": "card3d", "inputs": [None]},
+                          {"id": "cam1", "type": "camera3d", "inputs": [None]},
+                          {"id": "R1", "type": "render3d", "inputs": ["card1", "cam1", None]},
+                          {"id": "Write1", "type": "write", "name": "r3b", "inputs": ["R1"]},
+                          {"id": "Output1", "type": "output", "inputs": ["Write1"]}]}
+
+        async def go(c):
+            st, d = await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            self.assertEqual(st, 200, d)
+            self.sent.clear()
+            st, d = await self.j(c, "/imageviewer/comp_write", {"path": path, "first": 0, "last": 1, "handles": 0, "wait3d": 20})
+            self.assertEqual(st, 200, d)
+            jid, served = d["job"], []
+            for _ in range(600):
+                await asyncio.sleep(0.02)
+                s = await (await c.get("/imageviewer/comp_write", params={"job": jid})).json()
+                if s["state"] != "running":
+                    break
+                p = await (await c.get("/imageviewer/comp_3d_pending")).json()
+                for job in p["jobs"]:
+                    self.assertEqual((job["job"], job["route"], job["path"]), (jid, "comp_write", path))
+                    for n in job["need"]:
+                        img = np.full((n["h"], n["w"], 4), 0.5, np.float32).tobytes()
+                        body = {"job": jid, "key": n["key"], "w": n["w"], "h": n["h"], "data": base64.b64encode(img).decode()}
+                        st, other = await self.j(c, "/imageviewer/comp_write_3d", dict(body, page="p2")) if served else (200, None)
+                        if other is not None:
+                            self.assertEqual(other.get("taken"), True, other)
+                        st, r = await self.j(c, "/imageviewer/comp_write_3d", dict(body, page="p1"))
+                        self.assertTrue(r.get("ok"), r)
+                        served.append(n["frame"])
+            self.assertEqual(s["state"], "done", s)
+            self.assertEqual(served, [0, 1])
+            self.assertEqual(s["owner3d"], "p1")
+            self.assertFalse(any("own renderer" in x for x in s["result"]["notes"]), s["result"]["notes"])
+            events = [e for e, _ in self.sent if e == "imageviewer.comp.need3d"]
+            self.assertEqual(len(events), 2)
+            self.assertEqual([d for e, d in self.sent if e == "imageviewer.comp.need3d"][1]["owner"], "p1")
+            st, p = await self.j(c, "/imageviewer/comp", {"path": path, "comp": comp})
+            self.assertEqual((await (await c.get("/imageviewer/comp_3d_pending")).json())["jobs"], [])
         self.run_c(go)
 
     def test_writes_planned_and_rendered(self):
