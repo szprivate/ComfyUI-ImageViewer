@@ -201,9 +201,14 @@ export class Comp3DEngine {
                 this.view = new Model3DView(this.box, {});
                 await this.view.ensure();
                 const r = this.view.renderer, gl = r && r.getContext();
-                const ok = !!(gl && (typeof WebGL2RenderingContext !== "undefined" && gl instanceof WebGL2RenderingContext) && r.extensions.has("EXT_color_buffer_float"));
+                // WebGL 2 asked without `instanceof`: popped out, the context comes from the other window's realm,
+                // whose WebGL2RenderingContext is another object (Safari then said "no float pictures").
+                const gl2 = !!(gl && (r.capabilities ? r.capabilities.isWebGL2 !== false : typeof gl.texStorage2D === "function"));
+                const floats = !!(gl2 && (r.extensions.has("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_float")));
+                const ok = gl2 && floats;
                 this.ready = ok;
-                this.why = ok ? "" : "this browser cannot render to float pictures (WebGL 2 with EXT_color_buffer_float)";
+                this.why = ok ? "" : !gl ? "no WebGL context" : !gl2 ? "this browser has no WebGL 2"
+                    : "this browser cannot render to float pictures (EXT_color_buffer_float)";
                 // Nothing of the viewport's own: no grid, no default lights unless a scene asks for them.
                 if (this.view.grid) this.view.grid.visible = false;
                 await this.view.setScene(parseScene({ items: [] }), 0);

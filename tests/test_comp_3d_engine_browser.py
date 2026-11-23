@@ -273,6 +273,27 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertEqual(st["warn"], 0)
         self.assertEqual(errors, [])
 
+    def test_the_renderer_starts_in_another_window(self):
+        # Popped out, the engine's canvas belongs to the other window: its WebGL 2 context is not an instance of
+        # this window's WebGL2RenderingContext (the room then refused to open, "no float pictures").
+        pg = self.browser.new_page()
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate("""async () => {
+              const { Comp3DEngine } = await import('/extensions/viewer/imageViewer_comp3dEngine.js');
+              const here = new Comp3DEngine(document.body); const base = await here.ensure();
+              const f = document.createElement('iframe'); document.body.append(f);
+              await new Promise((r) => setTimeout(r, 100));
+              const e = new Comp3DEngine(f.contentDocument.body); const ok = await e.ensure();
+              return { base, ok, why: e.why };
+            }""")
+        finally:
+            pg.close()
+        if not st["base"]:
+            self.skipTest("no float render targets")
+        self.assertTrue(st["ok"], st["why"])
+
 
 if __name__ == "__main__":
     unittest.main()
