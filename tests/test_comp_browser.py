@@ -1597,12 +1597,12 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.1, 0.2, 0.05, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(400)
         before = self.pixel(pg, 0.5, 0.5)
-        BAR = f"{self.ED}.stage.parentNode.querySelector('.mg-bar')"
+        BAR = f"{self.ED}.stage.closest('.cp-root').querySelector('.mg-bar')"
         # The bar's own exposure and channel menu, on one row with its buttons; the viewer's element stays where
         # it is and is hidden while a comp is on show.
         st = pg.evaluate(f"""() => {{ const bar = {BAR}, exp = bar.querySelector('.cp-exp'), r = exp.getBoundingClientRect(),
                 p = bar.querySelector('select.mg-btn').getBoundingClientRect(), c = __panel.exposureControl;
-            return {{ here: !!bar.querySelector('.cp-chan') && bar.parentNode === {self.ED}.stage.parentNode,
+            return {{ here: !!bar.querySelector('.cp-chan') && bar.parentNode === {self.ED}.stage.closest('.cp-root'),
                 row: Math.abs((r.top + r.bottom) / 2 - (p.top + p.bottom) / 2),
                 readout: bar.querySelector('.cp-exp-v').textContent,
                 atHome: c.parentNode === __panel.viewport, hidden: getComputedStyle(c).display === 'none' }}; }}""")

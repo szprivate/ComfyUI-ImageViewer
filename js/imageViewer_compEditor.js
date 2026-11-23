@@ -45,7 +45,10 @@ const parseLink = E.parseLink;
 const CSS = `
 .cp-root{display:flex;flex-direction:column;position:absolute;inset:0;background:#0f0f12;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif;outline:none}
 .cp-root *{box-sizing:border-box}
-.cp-stage{flex:1;position:relative;overflow:hidden;cursor:default}
+.cp-twin{flex:1;display:flex;min-height:0;position:relative}
+.cp-stage{flex:1;min-width:0;position:relative;overflow:hidden;cursor:default}
+.cp-roomside{flex:1;min-width:0;position:relative;overflow:hidden;display:none;border-left:1px solid #2a2a30}
+.cp-twin.split .cp-roomside{display:block}
 .cp-canvas{position:absolute;left:0;top:0;transform-origin:0 0;image-rendering:auto;box-shadow:0 0 0 1px #444}
 .cp-meta{max-height:220px;overflow:auto;margin:0 6px 6px;font-size:11px}
 .cp-meta-row{display:flex;gap:8px;padding:1px 0;border-bottom:1px solid #ffffff10}
@@ -404,7 +407,14 @@ export function createCompEditor(host, opts = {}) {
     const info = el(doc, "div", "cp-info");
     const over = svgEl(doc, "svg", { class: "cp-over" });
     stage.append(canvas, over, info);
-    root.append(bar, stage);
+    // The 3D room beside the picture (side by side), or over it: roomSide is only shown while it holds the room.
+    const views = el(doc, "div", "cp-twin");
+    const roomSide = el(doc, "div", "cp-roomside");
+    views.append(stage, roomSide);
+    root.append(bar, views);
+    // A press in the room (which keeps its presses to itself) still puts the keys on the comp.
+    roomSide.addEventListener("pointerdown", () => root.focus({ preventScroll: true }), true);
+    stage.addEventListener("pointerdown", () => { if (st.room) root.focus({ preventScroll: true }); }, true);
     host.append(root);
     const graph = el(doc, "div", "cp-graph"); graph.tabIndex = 0;
     // Further views of the same graph (dock instances of the Node Graph panel, imageViewer_compGraphView.js):
@@ -755,7 +765,8 @@ export function createCompEditor(host, opts = {}) {
             el(doc, "span", "mg-spacer"),
             proxy, gpuBtn, ...(disp ? [disp] : []), chanBtn, exp, eyes,
             vtBtn,
-            ...(has3d() && o.room3d ? [btn(st.room ? "3D ●" : "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale)", () => setRoom(!st.room), "cp-3d" + (st.room ? " on" : ""))] : []),
+            ...(has3d() && o.room3d ? [btn(st.room ? "3D ●" : "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d" + (st.room ? " on" : "")),
+                btn("◫", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
             btn("Fit", "Fit the picture (F on the picture)", () => { st.zoom.fit = true; layoutCanvas(); }),
             el(doc, "span", "mg-info", `${fmt().width}×${fmt().height} · ${fmt().fps} fps · ${fmt().frames} f`));
     }
@@ -861,12 +872,23 @@ export function createCompEditor(host, opts = {}) {
         return { w, h, data: img.data, depth: img.ch && img.ch["depth.z"] ? img.ch["depth.z"] : null };
     }
     let roomLastKey = "";
+    // Side by side: the room beside the picture rather than over it (per viewer, in localStorage).
+    st.roomSplit = (() => { try { return localStorage.getItem("imageviewer.comp.roomSplit") === "on"; } catch (_) { return false; } })();
+    const roomHost = () => (st.roomSplit ? roomSide : stage);
+    const roomHovered = () => !!st.room && roomHost().matches(":hover");
+    async function setRoomSplit(on) {
+        st.roomSplit = !!on;
+        try { localStorage.setItem("imageviewer.comp.roomSplit", on ? "on" : "off"); } catch (_) { /* not kept */ }
+        if (st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); await setRoom(true); }
+        else renderBar();
+    }
     async function setRoom(on) {
         if (on && !st.room) {
             st.room = true; renderBar();
-            const ok = await o.room3d(stage, roomApi).catch((e) => { console.warn("[ImageViewer] the 3D room could not open", e); return false; });
+            views.classList.toggle("split", st.roomSplit);
+            const ok = await o.room3d(roomHost(), roomApi).catch((e) => { console.warn("[ImageViewer] the 3D room could not open", e); return false; });
             if (!ok) {
-                st.room = false; renderBar();
+                st.room = false; views.classList.remove("split"); renderBar();
                 const why = (o.engine3dWhy && o.engine3dWhy()) || "WebGL 2 with float pictures is needed";
                 console.warn("[ImageViewer] the 3D room could not open:", why);
                 toast(`The 3D room could not open: ${why}.`, "warn");
@@ -874,7 +896,7 @@ export function createCompEditor(host, opts = {}) {
             }
             roomLastKey = "";
             queueRender();
-        } else if (!on && st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); renderBar(); queueRender(); }
+        } else if (!on && st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); views.classList.remove("split"); renderBar(); queueRender(); }
     }
     /** After a draw: the room's scene again when the Render3D or the frame changed (drawn small: only its objects count). */
     async function roomAfterDraw() {
@@ -2188,10 +2210,10 @@ export function createCompEditor(host, opts = {}) {
         else if ((k === "Delete" || k === "Backspace") && part !== root) removeSel();
         else if (k.toLowerCase() === "d" && !ctrl && part === graph) toggleDisable();
         else if (k === "1" && primary()) setView(primary().id);
+        // W / E / R / F over the 3D room are its own (imageViewer_comp3dRoom.js): the gizmo's tools and framing, not the red channel or Fit.
+        else if (!ctrl && !e.altKey && k.length === 1 && "werf".includes(k.toLowerCase()) && roomHovered() && o.room3dKey && o.room3dKey(k.toLowerCase())) { /* the room's */ }
         else if (k.toLowerCase() === "f" && part === graph) frameAll();
         else if (k.toLowerCase() === "f" && part === root) { st.zoom.fit = true; layoutCanvas(); }
-        // W / E / R over the 3D room are its gizmo's tools (imageViewer_comp3dRoom.js), not the red channel or the viewer's keys.
-        else if (!ctrl && !e.altKey && st.room && k.length === 1 && "wer".includes(k.toLowerCase()) && stage.matches(":hover") && o.room3dKey && o.room3dKey(k.toLowerCase())) { /* the room's */ }
         else if (!ctrl && !e.altKey && part === root && "rgba".includes(k.toLowerCase()) && k.length === 1) setChannel(st.channel === k.toLowerCase() ? "rgb" : k.toLowerCase());
         else if (k === " " && o.transport) o.transport.toggle();
         else if (k === "ArrowLeft" && o.transport) o.transport.step(-1);
@@ -3933,6 +3955,8 @@ export function createCompEditor(host, opts = {}) {
         /** The 3D room up (true) or the picture (false); resolves when it is there. */
         setRoom: (on) => setRoom(!!on),
         roomOn: () => !!st.room,
+        roomSplit: () => !!st.roomSplit,
+        setRoomSplit,
         /** Forget every kept result (a source changed on disk). */
         clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
