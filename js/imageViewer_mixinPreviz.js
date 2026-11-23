@@ -35,8 +35,7 @@ export function fbxMetreScale(unitScaleFactor) {
 }
 
 // What File > Import Model… offers: the model formats the 3D view reads (MODEL_FORMATS in imageViewer_model3d.js).
-const MODEL_IMPORT_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
-                           ".spz", ".splat", ".ksplat", ".sog"];
+const MODEL_IMPORT_EXTS = S.MODEL_IMPORT_EXTS;
 
 // Maya's manipulator keys, which is what the hotkeys below bind to.
 export const PrevizMixin = {

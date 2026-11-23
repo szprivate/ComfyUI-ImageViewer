@@ -347,6 +347,10 @@ export function makeScene(patch = {}) {
     return scene;
 }
 
+/** What File > Import Model takes, and what Comp's SceneFile opens as a model (imageViewer_comp3dEngine.js). */
+export const MODEL_IMPORT_EXTS = [".glb", ".gltf", ".fbx", ".obj", ".stl", ".ply", ".usd", ".usda", ".usdc", ".usdz", ".abc",
+    ".spz", ".splat", ".ksplat", ".sog"];
+
 export function makeModelItem(src, name) {
     return {
         id: newId("m"),
