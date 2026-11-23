@@ -638,6 +638,9 @@ export const CompPanelMixin = {
             grainAnalyse: (id, frames) => this._cpGrainAnalyse(rec, id, frames),
             aiStop: (id) => this._cpAiStop(id),
             aiModels: (id) => this._cpAiModels(rec, id),
+            aiTakeWorkflow: (how) => this.compAiTakeWorkflow(how),
+            aiReloadWorkflow: (c) => this.compAiReloadWorkflow(c),
+            aiSavedWorkflows: () => this._cpWfSaved(),
             vfxRun: (id) => this._cpVfxRun(rec, id),
             vfxStop: (id) => this._cpVfxStop(id),
         });
@@ -798,10 +801,22 @@ export const CompPanelMixin = {
      * ComfyUI's model folders hold ({workflows, choice, using, inputs}). */
     async _cpAiModels(rec, id) {
         const ed = rec.editor, n = ed && ed.node(id);
+        if (n && n.type === "ai_workflow") {
+            const c = C.EX.customOf(n);
+            if (!c) return { workflows: [], inputs: [], custom: null };
+            const r = await cpPost("/imageviewer/comp_ai_models", { kind: "workflow", workflow: "custom", graph: c.graph });
+            return { workflows: [], using: "custom", inputs: r.inputs || [] };
+        }
         const a = await this._cpAiList(n);
         if (!a) return { workflows: [], inputs: [] };
-        const using = n.workflow && a.workflows.some((w) => w.id === n.workflow) ? n.workflow : a.choice;
+        const custom = C.EX.usesCustom(n);
+        const using = custom ? "custom" : n.workflow && a.workflows.some((w) => w.id === n.workflow) ? n.workflow : a.choice;
         const out = { workflows: a.workflows, choice: a.choice, using, inputs: [] };
+        if (custom) {
+            const r = await cpPost("/imageviewer/comp_ai_models", { kind: a.kind, workflow: "custom", graph: C.EX.customOf(n).graph });
+            out.inputs = r.inputs || [];
+            return out;
+        }
         if (!using) return out;
         const item = a.workflows.find((w) => w.id === using);
         const graph = item ? await this._paintPrompt(item, () => {}) : null;
@@ -914,6 +929,9 @@ export const CompPanelMixin = {
         const runs = this._cpAiRuns || (this._cpAiRuns = new Map());
         if (runs.has(id)) return { done: 0, error: "the node is running already" };
         const n0 = ed.node(id);
+        // A workflow of the node's own (imageViewer_compAiWorkflow.js).
+        if (C.EX.usesCustom(n0)) return this._cpAiRunCustom(rec, id, frames, { agent });
+        if (n0 && n0.type === "ai_workflow") { notice("warn", "No workflow on the node yet", "Take one from the canvas or a file first."); return { done: 0, error: "the AI Workflow node has no workflow yet: take one from the canvas or a file" }; }
         let a;
         try { a = await this._cpAiList(n0); } catch (e) { notice("error", "The workflows are not here", String(e.message || e)); return { done: 0, error: `no workflows: ${e.message || e}` }; }
         if (!a) return { done: 0, error: `${id} is not an AI node` };
@@ -1021,7 +1039,7 @@ export const CompPanelMixin = {
             const named = hit.length ? hit : nodes.filter((n) => n.name === want);
             if (named.length !== 1) throw new Error(named.length ? `${named.length} nodes are named ${want}: use the id` : `no node ${want}`);
             const node = named[0];
-            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_inpaint, ai_upscale)`);
+            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_inpaint, ai_upscale, ai_workflow)`);
             const fmt = ed.comp().format || {};
             const count = Math.max(1, Math.round(fmt.frames || 1));
             const first = Number.isInteger(args.first) ? Math.min(args.first, count - 1) : 0;

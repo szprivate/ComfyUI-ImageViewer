@@ -96,7 +96,7 @@ The **⇢** row links the number to another node's with a scale and an offset (i
 | 3D | Camera, Card, Geometry (cube, sphere, cylinder), Scene, SceneFile, Light, Project, PointCloud, Render |
 | Deep | DeepRead, DeepFromImage, DeepMerge, DeepHoldout, DeepCrop, DeepFlatten |
 | Views | OneView, JoinViews, Anaglyph, SideBySide |
-| AI | AI Matte, AI Depth, AI Inpaint, AI Upscale |
+| AI | AI Matte, AI Depth, AI Inpaint, AI Upscale, AI Workflow |
 | VFX | VFX Alpha Matte, VFX SDR to HDR, VFX Reframe, VFX Upscale |
 | Graph | Group, Input, GroupOutput, Dot, Backdrop, StickyNote |
 
@@ -180,6 +180,17 @@ Each node can pick its own:
 - **model files**: one row per model input of that workflow (diffusion model, checkpoint, text encoder, VAE, LoRA, upscale model, and loaders of node packs whose file sits in a ComfyUI model folder). Each row lists the files in that model folder; "workflow's own" keeps the file the workflow names. Only files ComfyUI lists can be picked.
 
 A changed workflow or model marks the node's results as out of date.
+
+#### Your own workflow
+
+Every AI node can run a ComfyUI workflow of your own instead of its list, and the **AI Workflow** node runs nothing else. In the node's Parameters, **From canvas** takes the workflow open on the ComfyUI canvas (as ComfyUI would queue it), and **From file** lists the workflows saved in ComfyUI, with **Browse this computer…** for any `.json`. Both formats work: a workflow as the canvas saves it is turned into a prompt by ComfyUI itself, off your canvas. A copy is kept inside the comp, so the comp still renders when the canvas or the file changes; **Reload** takes it again from where it came, **Remove** takes it off. On the four built-in AI nodes it shows up in the workflow menu as "Own workflow", and switching back to a list entry keeps it for later.
+
+How the workflow meets the comp:
+
+- **Inputs.** Every Load Image becomes an input and gets the picture wired into it, frame by frame (straight sRGB with its alpha, as a ComfyUI image is). A Load Image (as Mask) gets the alpha of what is wired into it, white where the mask is. A Load Video gets the frames of the run as one film. Name a loader by titling it `comp:<name>` (`comp:plate`, `comp:ref`); otherwise its title or its kind names it. On the AI Workflow node each one is a pipe of the node. The built-in nodes hand their **src** to the first Load Image (or the one named src, image or plate) and an AI Inpaint's **mask** to a mask loader, or, without one, through the picture's alpha as Paint's Generate does.
+- **Parameters.** Every plain value of a node titled `comp:<name>` (a sampler's steps and denoise, a primitive) and the workflow's prompt become parameters of the node. Numbers can be keyed. Every other seed gets one seed per run.
+- **Outputs.** Every Save Image, Preview Image or video save is an output. The first one (or the one titled `comp:out`) is the node's picture; on an AI Workflow node every further one becomes a layer of that picture, named after the output (take it out with a Shuffle). The built-in nodes finish their picture as they always do (a matte becomes the alpha, depth is mapped to one range). An AI Workflow node takes its result's size; a float EXR save stays EXR.
+- **Runs.** With picture inputs, every frame of the run is filled in and all of them go as one ComfyUI job, with the parts that are the same for every frame there once. With a film input the workflow runs once over the range. Without any input it runs once and its picture is held over the frames. The node's model file rows work for your workflow too. A changed workflow, input or parameter marks the results as out of date.
 
 Nothing runs by itself. In the node's Parameters section, **This frame** runs it on the frame at the playhead and **All frames** on every frame of the comp; **Out of date** reruns only the frames whose results are stale. A frame range is queued as **one ComfyUI job**: every frame's input is rendered and written out, and one prompt holds each frame's part of the workflow while the parts that are the same for all frames (model loaders, text encoders) appear once, so the models load once. All frames of a run share one seed. While it runs, Parameters shows how many frames are done and a **Stop** button (frames that already came back are kept). The answers are saved next to the comp as a PNG sequence, `<comp>_ai/<node>/<run>/<node>_<kind>.####.png`, and stored in the node, so they travel with the comp (one undo step per job).
 

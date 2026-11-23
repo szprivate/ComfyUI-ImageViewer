@@ -2283,6 +2283,101 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
         self.assertEqual(self.errors, [])
 
+    def test_an_ai_workflow_node_takes_the_canvas_workflow_and_runs_it(self):
+        """Sebastian 2026-11-23: a workflow of his own in the AI nodes, from the canvas or a file, and an AI Workflow
+        node: its loaders become the node's inputs, comp:<name> values its parameters, its saves the picture and a
+        layer; the frames go as ONE prompt and come back beside the comp."""
+        fp = sys.modules[self.pkg + ".viewer_api"].folder_paths
+        lists = {"checkpoints": ["sd.safetensors"]}
+        fp.folder_names_and_paths = {k: ([], set()) for k in lists}
+        fp.get_filename_list = lambda f: list(lists.get(f, []))
+        fp.get_full_path = lambda f, n: (n if n in lists.get(f, []) else None)
+
+        def undo():
+            for k in ("folder_names_and_paths", "get_filename_list", "get_full_path"):
+                if hasattr(fp, k):
+                    delattr(fp, k)
+        self.addCleanup(undo)
+        flow = {
+            "1": {"class_type": "LoadImage", "_meta": {"title": "comp:plate"}, "inputs": {"image": "x.png"}},
+            "2": {"class_type": "LoadImageMask", "inputs": {"image": "m.png", "channel": "alpha"}},
+            "3": {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "sd.safetensors"}},
+            "5": {"class_type": "KSampler", "_meta": {"title": "comp:sampler"}, "inputs": {"seed": 1, "steps": 20, "model": ["3", 0], "image": ["1", 0]}},
+            "6": {"class_type": "SaveImage", "inputs": {"images": ["5", 0], "filename_prefix": "a"}},
+            "7": {"class_type": "PreviewImage", "_meta": {"title": "depth"}, "inputs": {"images": ["5", 0]}},
+        }
+        pg = self.page()
+        saved = {"5": {"class_type": "SaveImage", "inputs": {"images": ["4", 0], "filename_prefix": "b"}},
+                 "4": {"class_type": "EmptyImage", "inputs": {"width": 8, "height": 8}}}
+        pg.evaluate("""([flow, saved]) => { const f = window.__fetchApi;
+            window.__fetchApi = (p, o) => {
+                if (p.startsWith('/userdata?')) return Promise.resolve({ ok: true, json: async () => [{ path: 'mine/gen.json', modified: 2 }] });
+                if (p.startsWith('/userdata/')) { window.__savedAsked = p; return Promise.resolve({ ok: true, json: async () => saved }); }
+                return f(p, o); };
+            return import('/scripts/app.js').then((m) => { m.app.graphToPrompt = async () => ({ output: flow }); }); }""", [flow, saved])
+        path = self.new_comp(pg)
+        ai = pg.evaluate(f"""(file) => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const r = e.addNode('read', {{ file }}); const m = e.addNode('read', {{ file }}); m.id = 'MaskRead'; const a = e.addNode('ai_workflow');
+            a.inputs = [r.id]; out.inputs = [a.id]; e.refresh(); e.select([a.id]); return a.id; }}""", self.png)
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-take')", timeout=10000)
+        self.assertIn("No workflow yet", pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai').textContent"))
+        pg.evaluate("() => Array.from(__panel.shadowRoot.querySelectorAll('.cp-ai-take button')).find((b) => b.textContent === 'From canvas').click()")
+        pg.wait_for_function(f"(id) => {self.ED}.node(id).custom", arg=ai, timeout=10000)
+        n = pg.evaluate(f"(id) => {self.ED}.node(id)", ai)
+        self.assertEqual([x["name"] for x in n["custom"]["inputs"]], ["plate", "mask"])
+        self.assertEqual(n["inputs"][0] is not None, True)            # the wire into src stays on the first input
+        self.assertEqual(len(n["inputs"]), 2)
+        self.assertEqual(sorted(p["id"] for p in n["custom"]["params"]), ["wf_sampler_seed", "wf_sampler_steps"])
+        pg.wait_for_function(f"(id) => __panel.shadowRoot.querySelector(`[data-fk=\"${{id}}:wf_sampler_steps\"]`)", arg=ai, timeout=10000)
+        self.assertIn("Outputs: out, depth (a layer)", pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-own').textContent"))
+        pg.evaluate(f"""(id) => {{ const e = {self.ED}; const n = e.node(id); n.inputs[1] = 'MaskRead'; n.wf_sampler_steps = 7; e.refresh(); }}""", ai)
+        pg.evaluate(f"() => {self.ED}.save()")
+        pg.evaluate("""() => { window.__queued = []; __api.queuePrompt = async (n, p) => { window.__queued.push(p.output);
+            return { prompt_id: 'Q' + window.__queued.length }; }; }""")
+        pg.evaluate(f"(id) => {{ window.__run = __panel._cpAiRun(__panel._cpActive(), id, [0, 1]); }}", ai)
+        pg.wait_for_function("() => window.__queued.length === 1", timeout=20000)
+        g = pg.evaluate("() => window.__queued[0]")
+        kinds = [v["class_type"] for v in g.values()]
+        self.assertEqual(kinds.count("CheckpointLoaderSimple"), 1)
+        self.assertEqual(kinds.count("KSampler"), 2)
+        self.assertEqual({v["inputs"]["steps"] for v in g.values() if v["class_type"] == "KSampler"}, {7})
+        from PIL import Image
+        os.makedirs(os.path.join(self.dirs["output"], "gen"), exist_ok=True)
+        outs = {}
+        for k, v in g.items():
+            if v["class_type"] in ("SaveImage", "PreviewImage"):
+                name = f"w{k}.png"
+                Image.fromarray(np.full((10, 20, 3), 90, np.uint8), "RGB").save(os.path.join(self.dirs["output"], "gen", name))
+                outs[k] = name
+        pg.evaluate("""(outs) => { for (const [node, name] of Object.entries(outs))
+                __api.dispatch('executed', { prompt_id: 'Q1', node, output: { images: [{ filename: name, subfolder: 'gen', type: 'output' }] } });
+            __api.dispatch('execution_success', { prompt_id: 'Q1' }); }""", outs)
+        res = pg.evaluate("() => window.__run")
+        self.assertEqual(res["done"], 2, res)
+        r = pg.evaluate(f"(id) => {self.ED}.node(id).results", ai)
+        self.assertEqual(sorted(r["frames"]), ["0", "1"])
+        self.assertEqual(sorted(r["layers"]["depth"]), ["0", "1"])
+        self.assertEqual((r["width"], r["height"]), (20, 10))
+        self.assertTrue(all(os.path.isfile(os.path.join(os.path.dirname(path), *rel.split("/"))) for rel in r["frames"].values()))
+        # From file: ComfyUI's saved workflows are listed; one taken replaces it (its own inputs: none).
+        pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-fromfile').click()")
+        pg.wait_for_function("() => Array.from(__panel.shadowRoot.querySelectorAll('.cp-pop div')).some((d) => d.textContent === 'mine/gen')", timeout=10000)
+        pg.evaluate("() => Array.from(__panel.shadowRoot.querySelectorAll('.cp-pop div')).find((d) => d.textContent === 'mine/gen').click()")
+        pg.wait_for_function(f"(id) => {self.ED}.node(id).custom.name === 'gen'", arg=ai, timeout=10000)
+        self.assertEqual(pg.evaluate("() => window.__savedAsked"), "/userdata/" + "workflows%2Fmine%2Fgen.json")
+        self.assertEqual(pg.evaluate(f"(id) => {self.ED}.node(id).inputs", ai), [])
+        # An AI Matte takes one too and offers it in its workflow menu.
+        m = pg.evaluate(f"""() => {{ const e = {self.ED}; const a = e.addNode('ai_matte'); e.refresh(); e.select([a.id]); return a.id; }}""")
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-take')", timeout=10000)
+        pg.evaluate("() => Array.from(__panel.shadowRoot.querySelectorAll('.cp-ai-take button')).find((b) => b.textContent === 'From canvas').click()")
+        pg.wait_for_function(f"(id) => {self.ED}.node(id).workflow === 'custom'", arg=m, timeout=10000)
+        pg.wait_for_function("() => { const s = __panel.shadowRoot.querySelector('.cp-ai-wf'); return s && s.value === 'custom'; }", timeout=10000)
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.wait_for_timeout(300)
+            pg.screenshot(path=os.path.join(SHOTS, "comp-ai-own-workflow.png"))
+        self.assertEqual(self.errors, [])
+
     def test_an_agent_runs_an_ai_node_through_the_page_and_the_comp_is_saved(self):
         """edit_comp's run_ai: comp_routes sends imageviewer.comp.agent, the page runs the node as its Run button does,
         asks nothing, saves the comp with the results and reports to /comp_agent_done (promo run 2026-11-15: the

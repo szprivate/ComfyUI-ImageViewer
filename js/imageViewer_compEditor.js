@@ -3468,13 +3468,15 @@ export function createCompEditor(host, opts = {}) {
         const key = aiKeyOf(n), here = C.EX.aiResultFrame(n, st.frame);
         const stale = made.filter((f) => (r.keys || {})[f] !== key);
         const line = el(doc, "div", "mg-empty cp-ai");
-        line.textContent = !made.length ? "Not run yet: it passes its input through. Run sends the picture coming in through a ComfyUI workflow; a frame range goes as one job and comes back as a PNG sequence."
+        line.textContent = n.type === "ai_workflow" && !C.EX.customOf(n) ? "No workflow yet: take one From canvas, or From file (a workflow saved in ComfyUI, or a .json). Its Load Image nodes become this node's inputs, its first save its picture, further saves layers of it; values of nodes titled comp:<name> become parameters here."
+            : !made.length ? "Not run yet: it passes its input through. Run sends the picture coming in through a ComfyUI workflow; a frame range goes as one job and comes back as a PNG sequence."
             : `Results for ${made.length === 1 ? `frame ${made[0]}` : `${made.length} frames (${made[0]}–${made[made.length - 1]})`}; `
               + (here === st.frame ? "this frame has its own." : `this frame shows frame ${here}'s.`)
               + (stale.length ? ` ${stale.length === made.length ? "All are" : `${stale.length} are`} out of date: what comes in, the words or the model changed since.` : "");
         if (stale.length) line.classList.add("cp-warn");
         pane.append(line);
         aiModelRows(n);
+        workflowRows(n);
         // Frames per job: 0 = the whole range in one job (the models load once); a number splits a long range.
         const pj = el(doc, "input"); pj.type = "number"; pj.min = "0"; pj.step = "1"; pj.value = String(Math.max(0, Math.round(n.per_job || 0)));
         pj.title = "0: every frame in one ComfyUI job. A number: jobs of that many frames (a long range, or little memory)";
@@ -3498,9 +3500,78 @@ export function createCompEditor(host, opts = {}) {
     }
     /** The node's workflow and model files: the node's own short list of workflows, and the model folders' files
      * each of that workflow's model inputs can take (asked once per workflow, through the panel). */
+    /** A workflow of the node's own (imageViewer_compAiWorkflow.js): take it from the canvas or a file, reload it,
+     *  forget it; what it takes and gives; its parameters (wf_<name>, numbers keyable). */
+    function takeCustom(n, c) {
+        mutate(() => {
+            const had = C.EX.customOf(n);
+            const oldPorts = n.type === "ai_workflow" ? C.inputsOf(n) : null, oldIns = (n.inputs || []).slice();
+            n.custom = c;
+            if (n.type !== "ai_workflow") n.workflow = "custom";
+            if (!had || had.sig !== c.sig) delete n.models;
+            const ids = new Set((c.params || []).map((q) => q.id));
+            for (const k of Object.keys(n)) if (k.startsWith("wf_") && !ids.has(k)) delete n[k];
+            if (n.tracks) {
+                for (const k of Object.keys(n.tracks)) if (k.startsWith("wf_") && !ids.has(k)) delete n.tracks[k];
+                if (!Object.keys(n.tracks).length) delete n.tracks;
+            }
+            if (n.type === "ai_workflow") {
+                // Wires stay on the inputs of the same name (the first workflow keeps what was wired into src).
+                n.inputs = C.inputsOf(n).map((name, i) => {
+                    const j = oldPorts.indexOf(name);
+                    return j >= 0 ? (oldIns[j] || null) : (!had ? (oldIns[i] || null) : null);
+                });
+            }
+        });
+    }
+    function forgetCustom(n) {
+        mutate(() => {
+            delete n.custom; delete n.models;
+            if (n.workflow === "custom") delete n.workflow;
+            for (const k of Object.keys(n)) if (k.startsWith("wf_")) delete n[k];
+            if (n.tracks) { for (const k of Object.keys(n.tracks)) if (k.startsWith("wf_")) delete n.tracks[k]; if (!Object.keys(n.tracks).length) delete n.tracks; }
+        });
+    }
+    function workflowRows(n) {
+        const c = C.EX.customOf(n), using = C.EX.usesCustom(n);
+        const row = el(doc, "div", "mg-prop cp-btnrow cp-ai-take");
+        row.title = n.type === "ai_workflow" ? "The workflow this node runs" : "A workflow of your own in place of the node's list";
+        const btns = row;
+        const take = (how) => Promise.resolve(o.aiTakeWorkflow && o.aiTakeWorkflow(how)).then((got) => {
+            if (!got) return;
+            takeCustom(n, got);
+            toast(`Workflow ${got.name}: ${got.inputs.length} input(s), ${got.outputs.length} output(s), ${got.params.length} parameter(s)`, "success");
+        });
+        btns.append(btn("From canvas", "The workflow on the ComfyUI canvas now, as ComfyUI would queue it (a copy is kept in the comp)", () => take({ how: "canvas" })));
+        const fb = btn("From file ▾", "A workflow saved in ComfyUI, or a .json file on this computer (either format; a copy is kept in the comp)", () => {
+            Promise.resolve(o.aiSavedWorkflows ? o.aiSavedWorkflows() : []).then((list) => {
+                const items = (list || []).slice(0, 40).map((p) => [p.replace(/\.json$/i, ""), () => take({ how: "saved", path: p })]);
+                popMenu(fb, items.concat(items.length ? [null] : [], [["Browse this computer…", () => take({ how: "file" })]]));
+            });
+        });
+        fb.classList.add("cp-ai-fromfile");
+        btns.append(fb);
+        if (c) btns.append(btn("Reload", c.source === "canvas" ? "Take the canvas's workflow again" : c.source === "saved" ? `Read ${c.path} again` : "Choose the file again", () => {
+            Promise.resolve(o.aiReloadWorkflow && o.aiReloadWorkflow(c)).then((got) => { if (got) { takeCustom(n, got); toast(`Workflow ${got.name} taken again`, "success"); } });
+        }));
+        if (c) btns.append(btn("Remove", n.type === "ai_workflow" ? "Take the workflow off the node" : "Take the workflow off the node: its own list runs again", () => forgetCustom(n)));
+        pane.append(row);
+        if (!c) return;
+        const from = c.source === "canvas" ? "from the canvas" : c.source === "saved" ? `ComfyUI's ${c.path}` : `the file ${c.path || ""}`;
+        const ins = (c.inputs || []).map((x) => `${x.name}${x.kind === "picture" ? "" : ` (${x.kind})`}`).join(", ") || "none (it runs once and is held)";
+        const outs = (c.outputs || []).map((x, i) => (i ? `${x.name} (a layer)` : x.name)).join(", ");
+        const info = el(doc, "div", "mg-empty cp-ai-own");
+        info.textContent = `${c.source === "canvas" && c.name === "canvas" ? "The canvas's workflow" : c.name}, ${c.source === "canvas" && c.name === "canvas" ? "taken" : from}${c.saved ? `, ${String(c.saved).slice(0, 16)}` : ""}${n.type !== "ai_workflow" && !using ? " (not used: pick it under workflow)" : ""}. `
+            + (n.type === "ai_workflow" ? `Inputs: ${ins}. Outputs: ${outs}.`
+               : `src goes into ${((c.inputs || []).find((x) => x.kind !== "mask") || {}).name || "(no picture input!)"}${n.type === "ai_inpaint" ? `, mask into ${((c.inputs || []).find((x) => x.kind === "mask") || {}).name || "its alpha"}` : ""}; its first output is the result.`);
+        pane.append(info);
+        if (using) for (const [p, d] of C.EX.wfParams(n)) pane.append(paramRow(n, p, d));
+    }
     function aiModelRows(n) {
         if (!o.aiModels) return;
-        const want = `${n.type}|${n.workflow || ""}|${n.type === "ai_inpaint" && (n.prompt || "").trim() ? "fill" : ""}`;
+        if (n.type === "ai_workflow" && !C.EX.customOf(n)) return;
+        const own = C.EX.customOf(n);
+        const want = `${n.type}|${n.workflow || ""}|${n.type === "ai_inpaint" && (n.prompt || "").trim() ? "fill" : ""}|${own && C.EX.usesCustom(n) ? own.sig : ""}`;
         const cache = st.aiModels || (st.aiModels = new Map());
         const got = cache.get(want);
         if (!got) {
@@ -3515,17 +3586,20 @@ export function createCompEditor(host, opts = {}) {
             pane.append(row);
             return;
         }
-        const wf = el(doc, "select", "mg-btn cp-ai-wf");
         const opt = (v, t) => { const x = el(doc, "option", "", t); x.value = v; return x; };
-        const list = got.workflows || [];
-        if (!list.length) { pane.append(el(doc, "div", "mg-empty cp-warn", "This ComfyUI has none of the node packs this node's workflows need.")); return; }
-        // The first one is the default: a node that never picked runs it (and keeps no `workflow`).
-        for (const w of list) wf.append(opt(w.id === got.choice ? "" : w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · downloads its model first" : ""}`));
-        const cur = n.workflow && n.workflow !== got.choice && list.some((w) => w.id === n.workflow) ? n.workflow : "";
-        wf.value = cur;
-        wf.title = "The workflow (the model) this node runs";
-        wf.onchange = () => mutate(() => { if (wf.value) n.workflow = wf.value; else delete n.workflow; delete n.models; }, { structure: false });
-        pane.append(field("workflow", wf));
+        if (n.type !== "ai_workflow") {
+            const wf = el(doc, "select", "mg-btn cp-ai-wf");
+            const list = got.workflows || [];
+            if (!list.length && !own) { pane.append(el(doc, "div", "mg-empty cp-warn", "This ComfyUI has none of the node packs this node's workflows need: take a workflow of your own.")); return; }
+            // The first one is the default: a node that never picked runs it (and keeps no `workflow`).
+            for (const w of list) wf.append(opt(w.id === got.choice ? "" : w.id, `${w.label}${w.api ? " · API" : ""}${w.missing && w.missing.length ? " · downloads its model first" : ""}`));
+            if (own) wf.append(opt("custom", `Own workflow: ${own.name}`));
+            const cur = C.EX.usesCustom(n) ? "custom" : n.workflow && n.workflow !== got.choice && list.some((w) => w.id === n.workflow) ? n.workflow : "";
+            wf.value = cur;
+            wf.title = "The workflow (the model) this node runs";
+            wf.onchange = () => mutate(() => { if (wf.value) n.workflow = wf.value; else delete n.workflow; delete n.models; }, { structure: false });
+            pane.append(field("workflow", wf));
+        }
         const ins = got.inputs || [];
         if (!ins.length) {
             pane.append(el(doc, "div", "mg-empty", "This workflow has no model files to pick (an API model, or one the node pack chooses)."));
@@ -4209,7 +4283,7 @@ export function createCompEditor(host, opts = {}) {
         /** The workflows and model files on this machine changed (a download): ask again when Parameters is drawn. */
         forgetAiModels() { if (st.aiModels) st.aiModels.clear(); refresh(["props"]); },
         /** A run's results ({frame: file relative to the comp}, a PNG sequence): ONE undo step for them all. */
-        aiResults(id, frames, key0) {
+        aiResults(id, frames, key0, extra = null) {
             const flat = G.flatNode(st.comp, id), n = flat || node(id);
             if (!n || !frames || !Object.keys(frames).length) return false;
             const fl = G.flattenComp(st.comp), key = key0 || C.aiKey(fl, C.nodeById(fl, id) || n);
@@ -4218,6 +4292,14 @@ export function createCompEditor(host, opts = {}) {
                 for (const [f, file] of Object.entries(frames)) {
                     (r.frames || (r.frames = {}))[String(f)] = file;
                     (r.keys || (r.keys = {}))[String(f)] = key;
+                }
+                // An AI Workflow node: its further outputs as layers, and the size its picture has.
+                if (extra && n.type === "ai_workflow") {
+                    for (const [name, fr] of Object.entries(extra.layers || {})) {
+                        const L = (r.layers || (r.layers = {}))[name] || (r.layers[name] = {});
+                        Object.assign(L, fr);
+                    }
+                    if (extra.width > 0 && extra.height > 0) { r.width = extra.width; r.height = extra.height; }
                 }
             }, { structure: false });
             return true;
