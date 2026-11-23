@@ -8,6 +8,7 @@ and on the ComfyUI canvas; leaving the tab gives the viewport back.
 import asyncio
 import importlib
 import json
+import re
 import os
 import shutil
 import socket
@@ -917,8 +918,8 @@ class CompBrowserTests(unittest.TestCase):
         pg.wait_for_timeout(400)
         P = ".cp-pane.first"
         labels = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('{P} .mg-prop label')].map((l) => l.textContent)")
-        self.assertIn("write into", labels)
-        sel = pg.locator(f'{P} .mg-prop').filter(has_text="write into").locator("select")
+        self.assertIn("output", labels)
+        sel = pg.locator(f'{P} .mg-prop').filter(has=pg.locator("label", has_text=re.compile(r"^output$"))).locator("select")
         self.assertEqual(sel.input_value(), "rgba")
         opts = sel.evaluate("(s) => [...s.options].map((o) => o.value)")
         self.assertIn("depth", opts); self.assertIn("depth.z", opts); self.assertIn("motion", opts)
@@ -983,7 +984,7 @@ class CompBrowserTests(unittest.TestCase):
         # Roto has the channel menu and the premult switch.
         rid = pg.evaluate(f"() => {{ const e = {ED}; const r = e.addNode('roto'); e.select([r.id]); return r.id; }}")
         fks = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('.cp-pane.first .mg-prop label')].map((l) => l.textContent)")
-        self.assertIn("write into", fks); self.assertIn("premult", fks)
+        self.assertIn("output", fks); self.assertIn("premult", fks)
         if SHOTS:
             pg.screenshot(path=os.path.join(SHOTS, "comp-roto-channel-premult.png"))
         self.assertEqual(pg.evaluate(f"() => {ED}.node('{rid}').write || 'rgba'"), "rgba")

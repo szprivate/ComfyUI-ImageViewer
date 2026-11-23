@@ -1728,7 +1728,7 @@ export function vfxKey(comp, n) {
 export { OC, CH, PT, O, EX };
 
 /**
- * Every node that makes a picture from what comes in has a "write into" (`write`): rgba (default, the node's
+ * Every node that makes a picture from what comes in has an "output" (`write`): rgba (default, the node's
  * whole picture as it always was), one channel, or a layer - the node's result goes there and everything else of
  * what comes in passes. Left out: the channel nodes (they say channel by channel what goes where), nodes that
  * pass pixels on unchanged or only route them, 3D, deep, views and trackers.
@@ -1736,13 +1736,15 @@ export { OC, CH, PT, O, EX };
 export const NO_WRITE = new Set(["shuffle", "addchannels", "removechannels", "copy", "channelmerge", "output", "write", "metadata",
     "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph", "sidebyside",
     "tracker", "planartracker", ...GEO3D, ...DEEP]);
-export const WRITE_PARAM = { kind: "target", def: "rgba", label: "write into", help: "Where the result goes: rgba (the whole picture), one channel, or a layer; the rest of what comes in passes" };
+export const WRITE_PARAM = { kind: "target", def: "rgba", label: "output", help: "Where the result goes: rgba (the whole picture), one channel, or a layer; the rest of what comes in passes" };
 for (const [t, d] of Object.entries(NODE_TYPES)) {
     if (NO_WRITE.has(t)) continue;
     if (d.params.write) { d.params.write = Object.assign({}, WRITE_PARAM); continue; }
     if (!d.inputs.length) continue;
     d.params = Object.assign({ write: Object.assign({}, WRITE_PARAM) }, d.params);
 }
+// A node with both: its own "output" choice (premultiplied / matte ...) is called "result", so the two rows differ.
+for (const d of Object.values(NODE_TYPES)) if (d.params.write && d.params.output && d.params.output.kind === "enum" && !d.params.output.label) d.params.output.label = "result";
 /** Nodes that make something and so have a "write" (the channel or layer it goes into). */
 export const WRITES = new Set(Object.keys(NODE_TYPES).filter((t) => NODE_TYPES[t].params.write));
 /** Nodes that move pixels: the extra channels are moved with the picture. */
