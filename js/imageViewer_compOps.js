@@ -579,46 +579,384 @@ export function defocusImage(img, p) {
     return out;
 }
 
+// ── ZDefocus: a lens's depth of field from a depth channel ───────────────────
+//
+// Clean-room, from what a depth-of-field node is documented to do (no code of any program): each pixel's
+// circle of confusion (its blur's diameter, pixels of this picture) comes from its depth, the focus plane and
+// `math` (how the depth channel is written); the picture is cut into layers of blur sizes on either side of
+// the focus plane and they are defocused and laid over each other from the back to the front, so a blurred
+// foreground spreads over what is behind it and a blurred background does not bleed over a sharp foreground.
+// The setup outputs show the depth of field without defocusing anything, so the focus plane can be set at once.
+
+export const ZD_MATHS = ["direct", "depth", "far = 0", "far = 1", "-direct", "-depth", "far = -0", "far = -1"];
+export const ZD_OUTPUTS = ["result", "focal plane setup", "layer setup", "filter shape setup"];
+export const ZD_FILTERS = ["disc", "bladed"];
+export const ZD_CHANNELS = ["rgba", "rgb", "alpha"];
+const ZD_INSIDE = 0.25;   // "blur inside": the share of the plain blur kept inside the depth of field
+
+/** One pixel's signed blur from its depth (base math, already turned for the negative maths); edge e of the focus slice. */
+function zdCocOf(base, v, e, size) {
+    if (base === "depth") return v > 0 ? size * (1 - e / v) : size;            // nothing there (0): as far as can be
+    if (base === "far = 0") return e > 1e-12 ? size * (1 - v / e) : (v > 1e-12 ? -Infinity : 0);
+    return size * (v - e);                                                        // far = 1: a 0..1 depth
+}
+
 /**
- * A defocus that grows with the distance from the focus, as DepthBlur, but through the aperture (Defocus's
- * shape and bloom): `z` is one plane of depth per pixel; each pixel's circle of confusion is
- * clamp((|z - focus| - dof / 2) / falloff, 0, 1) of `size`. The picture is defocused at `layers` sizes from
- * 0 to `size` and each pixel takes the two nearest, weighted by where its circle lies between them.
+ * Each pixel's signed circle of confusion: positive behind the focus plane, negative in front, 0 sharp
+ * (clamped to +-maximum), and `sharp` = inside the depth of field. `z` is the depth channel, one value a pixel.
+ */
+export function zDefocusCoc(z, p) {
+    const N = z.length, coc = new Float64Array(N), sharp = new Uint8Array(N);
+    const m = ZD_MATHS.includes(p.math) ? p.math : "depth";
+    const neg = m.includes("-"), base = m.replace("-", "");
+    const size = p.size, mx = Math.max(0, p.maximum);
+    const C = neg ? -p.focus : p.focus, half = Math.max(0, p.dof) / 2, lo = C - half, hi = C + half;
+    const inside = p.blur_inside === "on";
+    for (let i = 0; i < N; i++) {
+        const v = neg ? -z[i] : z[i];
+        let c;
+        if (base === "direct") { c = v * size; if (Math.abs(c) < 0.5) sharp[i] = 1; }
+        else {
+            if (v >= lo && v <= hi) { c = 0; sharp[i] = 1; }
+            else c = zdCocOf(base, v, v < lo ? lo : hi, size);
+            if (inside) { const pl = ZD_INSIDE * zdCocOf(base, v, C, size); if (Math.abs(pl) > Math.abs(c)) c = pl; }
+        }
+        if (!(c === c)) c = 0;
+        coc[i] = c > mx ? mx : c < -mx ? -mx : c;
+    }
+    return { coc, sharp };
+}
+
+/** The layers' blur sizes on each side of the focus plane: sizes[0] = 0 (sharp) .. sizes[L] = maximum. */
+export function zLayerSizes(p) {
+    const mx = Math.max(0, p.maximum);
+    const auto = p.auto_layers !== "off";
+    const L = auto ? Math.max(2, Math.min(12, Math.ceil(mx / 4))) : Math.max(1, Math.min(32, Math.round(p.layers)));
+    const curve = auto ? 1 : p.layer_curve;
+    const e = curve >= 0 ? 1 + curve : 1 / (1 - curve);
+    const sizes = [];
+    for (let k = 0; k <= L; k++) sizes.push(mx * Math.pow(k / L, e));
+    return sizes;
+}
+
+/** The aperture's span on each row of pixels for a blur of diameter D: [{dy, l, r}] (rows run down). */
+export function zApertureRows(D, p) {
+    const a = p.aspect > 0 ? p.aspect : 1, ax = a < 1 ? a : 1, ay = a > 1 ? 1 / a : 1;
+    const r = D / 2, rows = [];
+    if (!(r > 0)) return rows;
+    if (p.filter !== "bladed") {
+        const rx = r * ax, ry = r * ay, R = Math.ceil(ry);
+        for (let dy = -R; dy <= R; dy++) {
+            if (Math.abs(dy) > ry) continue;
+            const q = dy / ry;
+            rows.push({ dy, l: -rx * Math.sqrt(Math.max(0, 1 - q * q)), r: rx * Math.sqrt(Math.max(0, 1 - q * q)) });
+        }
+        return rows;
+    }
+    const n = Math.max(3, Math.floor(p.blades + 0.5)), rot = (p.rotation * Math.PI) / 180, rd = p.roundness, M = 6;
+    const cx = [], cy = [];
+    for (let k = 0; k < n; k++) { const t = rot + (2 * Math.PI * k) / n + Math.PI / 2; cx.push(r * Math.cos(t)); cy.push(r * Math.sin(t)); }
+    const pts = [];
+    let ymax = 0;
+    for (let k = 0; k < n; k++) {
+        const k1 = (k + 1) % n;
+        for (let j = 0; j < M; j++) {
+            const t = j / M;
+            const x = cx[k] + (cx[k1] - cx[k]) * t, y = cy[k] + (cy[k1] - cy[k]) * t;
+            const rp = Math.sqrt(x * x + y * y);
+            const s = rp > 1e-12 ? (rp + rd * (r - rp)) / rp : 1;
+            const px = x * s * ax, py = -(y * s * ay);
+            pts.push([px, py]);
+            if (Math.abs(py) > ymax) ymax = Math.abs(py);
+        }
+    }
+    const R = Math.ceil(ymax);
+    for (let dy = -R; dy <= R; dy++) {
+        let lo = Infinity, hi = -Infinity;
+        for (let k = 0; k < pts.length; k++) {
+            const P = pts[k], Q = pts[(k + 1) % pts.length];
+            if ((P[1] <= dy) !== (Q[1] <= dy)) {
+                const x = P[0] + ((dy - P[1]) * (Q[0] - P[0])) / (Q[1] - P[1]);
+                if (x < lo) lo = x;
+                if (x > hi) hi = x;
+            }
+        }
+        if (hi > lo) rows.push({ dy, l: lo, r: hi });
+    }
+    return rows;
+}
+
+/** The sum over the aperture's rows around each pixel of an h x w x C stack (edge repeated), and the rows' area. */
+function zdSum(s, C, w, h, rows) {
+    const spans = rows.map((row) => ({ dy: row.dy, ...rowSpan(row) }));
+    if (!spans.length) return { sum: new Float64Array(s), total: 1 };
+    let reach = 1;
+    for (const k of spans) reach = Math.max(reach, Math.abs(k.a) + 1, Math.abs(k.b) + 1);
+    let total = 0;
+    for (const k of spans) {
+        if (k.a === k.b) { total += k.wa; continue; }
+        if (k.b - 1 >= k.a + 1) total += k.b - 1 - (k.a + 1) + 1;
+        total += k.wa; total += k.wb;
+    }
+    const PW = w + 2 * reach;
+    const Q = new Float64Array(h * PW * C), P = new Float64Array(h * (PW + 1) * C);
+    for (let y = 0; y < h; y++) {
+        for (let i = 0; i < PW; i++) {
+            let x = i - reach;
+            x = x < 0 ? 0 : x > w - 1 ? w - 1 : x;
+            const si = (y * w + x) * C, qi = (y * PW + i) * C;
+            for (let c = 0; c < C; c++) Q[qi + c] = s[si + c];
+        }
+        for (let c = 0; c < C; c++) {
+            let sum = 0;
+            for (let i = 0; i < PW; i++) { sum += Q[(y * PW + i) * C + c]; P[(y * (PW + 1) + i + 1) * C + c] = sum; }
+        }
+    }
+    const out = new Float64Array(w * h * C);
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+        const o = (y * w + x) * C, xo = x + reach;
+        for (const k of spans) {
+            let yy = y + k.dy;
+            yy = yy < 0 ? 0 : yy > h - 1 ? h - 1 : yy;
+            const qb = (yy * PW + xo) * C, pb = (yy * (PW + 1) + xo) * C;
+            for (let c = 0; c < C; c++) {
+                if (k.a === k.b) { out[o + c] += k.wa * Q[qb + k.a * C + c]; continue; }
+                if (k.b - 1 >= k.a + 1) out[o + c] += P[pb + k.b * C + c] - P[pb + (k.a + 1) * C + c];
+                out[o + c] += k.wa * Q[qb + k.a * C + c];
+                out[o + c] += k.wb * Q[qb + k.b * C + c];
+            }
+        }
+    }
+    return { sum: out, total };
+}
+
+/** Mean over 2r+1 along one axis of an h x w x C stack, in place, the edge repeated (the numpy twin's order). */
+function zdBox(a, C, w, h, r, horizontal) {
+    if (r <= 0) return;
+    const n = horizontal ? w : h, lines = horizontal ? h : w, div = 2 * r + 1;
+    const S = new Float64Array(n + 2 * r + 1);
+    for (let li = 0; li < lines; li++) for (let c = 0; c < C; c++) {
+        const at = (i) => (horizontal ? (li * w + i) * C + c : (i * w + li) * C + c);
+        const first = a[at(0)], last = a[at(n - 1)];
+        let sum = 0, j = 0;
+        for (let k = 0; k <= r; k++) { sum += first; S[j++] = sum; }
+        for (let i = 0; i < n; i++) { sum += a[at(i)]; S[j++] = sum; }
+        for (let k = 0; k < r; k++) { sum += last; S[j++] = sum; }
+        for (let i = 0; i < n; i++) a[at(i)] = (S[2 * r + 1 + i] - S[i]) / div;
+    }
+}
+
+/** A Gaussian of `sigma` over an h x w x C stack (three box passes each way), a new array. */
+function zdGauss(s, C, w, h, sigma) {
+    const out = new Float64Array(s);
+    if (!(sigma > 0)) return out;
+    for (const b of boxesForGauss(sigma)) { const r = (b - 1) >> 1; zdBox(out, C, w, h, r, true); zdBox(out, C, w, h, r, false); }
+    return out;
+}
+
+/** The stack seen through the aperture of a blur of diameter D: the mean of the kernel around each pixel. */
+function zdConv(s, C, w, h, D, p) {
+    const n = s.length;
+    if (p.filter === "bladed") {
+        const o = zdSum(s, C, w, h, zApertureRows(D, p));
+        const b = clamp01(p.inner_brightness), cat = p.catadioptric === "on";
+        const num = o.sum;
+        let den = o.total;
+        if (b < 1) {
+            const i = zdSum(s, C, w, h, zApertureRows(D * clamp01(p.inner_size), p));
+            for (let j = 0; j < n; j++) num[j] = num[j] - (1 - b) * i.sum[j];
+            den = den - (1 - b) * i.total;
+        }
+        if (cat) {
+            let sh = clamp01(p.catadioptric_size);
+            if (b < 1) sh = Math.min(sh, clamp01(p.inner_size));
+            const k = zdSum(s, C, w, h, zApertureRows(D * sh, p));
+            for (let j = 0; j < n; j++) num[j] = num[j] - b * k.sum[j];
+            den = den - b * k.total;
+        }
+        const out = new Float64Array(n);
+        if (den > 1e-9 * o.total) { for (let j = 0; j < n; j++) out[j] = num[j] / den; return out; }
+        const plain = zdSum(s, C, w, h, zApertureRows(D, p));
+        for (let j = 0; j < n; j++) out[j] = plain.sum[j] / plain.total;
+        return out;
+    }
+    const fs = clamp01(p.filter_shape);
+    const out = new Float64Array(n);
+    if (fs <= 0) return zdGauss(s, C, w, h, (D / 2) / 2);
+    const o = zdSum(s, C, w, h, zApertureRows(D, p));
+    if (fs >= 1) { for (let j = 0; j < n; j++) out[j] = o.sum[j] / o.total; return out; }
+    const g = zdGauss(s, C, w, h, (D / 2) / 2);
+    for (let j = 0; j < n; j++) out[j] = (o.sum[j] / o.total) * fs + g[j] * (1 - fs);
+    return out;
+}
+
+/**
+ * zdConv over only the part of the stack that is not 0 (bb = [x0, y0, x1, y1]) grown by the kernel's reach:
+ * outside it the result is 0 anyway, and inside the sums are the same numbers (the zeros add nothing).
+ */
+function zdConvBoxed(s, C, w, h, D, p, bb) {
+    let reach = Math.ceil(D / 2) + 2;
+    for (const b of boxesForGauss((D / 2) / 2)) reach += (b - 1) >> 1;
+    const x0 = Math.max(0, bb[0] - reach), y0 = Math.max(0, bb[1] - reach), x1 = Math.min(w, bb[2] + reach), y1 = Math.min(h, bb[3] + reach);
+    if (x0 === 0 && y0 === 0 && x1 === w && y1 === h) return zdConv(s, C, w, h, D, p);
+    const sw = x1 - x0, sh = y1 - y0, sub = new Float64Array(sw * sh * C);
+    for (let y = 0; y < sh; y++) sub.set(s.subarray(((y + y0) * w + x0) * C, ((y + y0) * w + x1) * C), y * sw * C);
+    const r = zdConv(sub, C, sw, sh, D, p), out = new Float64Array(w * h * C);
+    for (let y = 0; y < sh; y++) out.set(r.subarray(y * sw * C, (y + 1) * sw * C), ((y + y0) * w + x0) * C);
+    return out;
+}
+
+const zdGamma = (v) => (v > 0 ? Math.pow(v, 2.2) : v);
+const zdUngamma = (v) => (v > 0 ? Math.pow(v, 1 / 2.2) : v);
+
+/** A setup picture's colour: red in front of the focus, green inside the depth of field, blue behind. */
+function zdSetup(img, coc, sharp, p, lev) {
+    const w = img.w, h = img.h, N = w * h, d = img.data, out = blank(w, h), o = out.data;
+    const show = p.show_image !== "off";
+    for (let i = 0; i < N; i++) {
+        const j = i * 4;
+        let r = 0, g = 0, b = 0;
+        if (sharp[i]) g = 1;
+        else { const v = 0.25 + 0.75 * lev(i); if (coc[i] < 0) r = v; else b = v; }
+        if (show) {
+            const base = LUM[0] * d[j] + LUM[1] * d[j + 1] + LUM[2] * d[j + 2];
+            r = 0.35 * base + 0.65 * r; g = 0.35 * base + 0.65 * g; b = 0.35 * base + 0.65 * b;
+        }
+        o[j] = r; o[j + 1] = g; o[j + 2] = b; o[j + 3] = 1;
+    }
+    return out;
+}
+
+/**
+ * ZDefocus: `z` is the depth channel (one value a pixel); `p` its settings with `size` and `maximum` in pixels
+ * of this picture. `output` "result" defocuses; "focal plane setup" / "layer setup" only colour the depth of
+ * field (nothing is blurred, so they are instant); "filter shape setup" draws the aperture at `maximum`.
  */
 export function zDefocusImage(img, z, p) {
     const w = img.w, h = img.h, d = img.data, N = w * h;
-    const L = Math.max(2, Math.round(p.layers));
-    const pos = new Float64Array(N);
-    const fall = Math.max(p.falloff, 1e-6);
-    for (let i = 0; i < N; i++) pos[i] = clamp01((Math.abs(z[i] - p.focus) - p.dof / 2) / fall) * (L - 1);
-    const num = new Float64Array(N * 4), den = new Float64Array(N);
-    for (let l = 0; l < L; l++) {
-        const col = blank(w, h), wt = blank(w, h);
+    const out0 = p.output || "result";
+    if (out0 === "filter shape setup") {
+        const s = new Float64Array(N), cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+        s[cy * w + cx] = 1;
+        const k = zdConvBoxed(s, 1, w, h, Math.max(0, p.maximum), p, [cx, cy, cx + 1, cy + 1]);
+        let mx = 0;
+        for (let i = 0; i < N; i++) if (k[i] > mx) mx = k[i];
+        const out = blank(w, h), o = out.data;
+        for (let i = 0; i < N; i++) { const v = mx > 0 ? k[i] / mx : 0; o[i * 4] = v; o[i * 4 + 1] = v; o[i * 4 + 2] = v; o[i * 4 + 3] = 1; }
+        return out;
+    }
+    const { coc, sharp } = zDefocusCoc(z, p);
+    const mx = Math.max(0, p.maximum);
+    const sizes = zLayerSizes(p), L = sizes.length - 1;
+    // Where each pixel's blur lies between two layers: k and k + 1, t of the way.
+    const K = new Int32Array(N), T = new Float64Array(N);
+    for (let i = 0; i < N; i++) {
+        const ac = Math.abs(coc[i]);
+        let k = 0;
+        for (let j = 1; j <= L - 1; j++) if (sizes[j] <= ac) k = j;
+        const span = sizes[k + 1] - sizes[k];
+        const t = span > 0 ? (ac - sizes[k]) / span : 0;
+        K[i] = k; T[i] = t < 0 ? 0 : t > 1 ? 1 : t;
+    }
+    if (out0 === "focal plane setup") return zdSetup(img, coc, sharp, p, (i) => (mx > 0 ? Math.min(1, Math.abs(coc[i]) / mx) : 1));
+    if (out0 === "layer setup") {
+        const q = new Uint8Array(N);
+        for (let i = 0; i < N; i++) q[i] = K[i] + (T[i] >= 0.5 ? 1 : 0) === 0 ? 1 : 0;
+        return zdSetup(img, coc, q, p, (i) => (mx > 0 ? sizes[K[i] + (T[i] >= 0.5 ? 1 : 0)] / mx : 1));
+    }
+    if (!(mx > 0)) return img;
+    // The colour as it is blurred: highlights bloomed, then (gamma correction) made brighter to spread.
+    const col = new Float64Array(N * 4);
+    const bloom = p.bloom === "on", thr = p.bloom_threshold, gain = p.bloom_gain, gam = p.gamma === "on";
+    for (let i = 0; i < N; i++) {
+        const j = i * 4;
+        let r = d[j], g = d[j + 1], b = d[j + 2];
+        if (bloom) {
+            const Lm = LUM[0] * r + LUM[1] * g + LUM[2] * b;
+            if (Lm > thr && Lm > 0) { const m = (thr + (Lm - thr) * gain) / Lm; r = r * m; g = g * m; b = b * m; }
+        }
+        if (gam) { r = zdGamma(r); g = zdGamma(g); b = zdGamma(b); }
+        col[j] = r; col[j + 1] = g; col[j + 2] = b; col[j + 3] = d[j + 3];
+    }
+    // The layers from the back to the front: behind the focus (largest blur first), sharp, then in front.
+    const order = [];
+    for (let k = L; k >= 1; k--) order.push([1, k]);
+    order.push([0, 0]);
+    for (let k = 1; k <= L; k++) order.push([-1, k]);
+    const acc = new Float64Array(N * 4), A = new Float64Array(N);
+    const fill = p.fill_foreground !== "off";
+    let filled = false;
+    const st = new Float64Array(N * 5);
+    for (const [side, k] of order) {
+        st.fill(0);
         let any = false;
+        const bb = [w, h, 0, 0];
         for (let i = 0; i < N; i++) {
-            const k = 1 - Math.abs(pos[i] - l);
-            if (k <= 0) continue;
+            if (k > 0 && (side > 0 ? !(coc[i] > 0) : !(coc[i] < 0))) continue;
+            const wt = K[i] === k ? 1 - T[i] : K[i] + 1 === k ? T[i] : 0;
+            if (!(wt > 0)) continue;
             any = true;
-            const j = i * 4;
-            col.data[j] = d[j] * k; col.data[j + 1] = d[j + 1] * k; col.data[j + 2] = d[j + 2] * k; col.data[j + 3] = d[j + 3] * k;
-            wt.data[j] = k;
+            const x = i % w, y = (i - x) / w;
+            if (x < bb[0]) bb[0] = x; if (y < bb[1]) bb[1] = y; if (x + 1 > bb[2]) bb[2] = x + 1; if (y + 1 > bb[3]) bb[3] = y + 1;
+            const j = i * 4, q = i * 5;
+            st[q] = col[j] * wt; st[q + 1] = col[j + 1] * wt; st[q + 2] = col[j + 2] * wt; st[q + 3] = col[j + 3] * wt; st[q + 4] = wt;
         }
         if (!any) continue;
-        const size = (p.size * l) / (L - 1);
-        const ap = { size, shape: p.shape, blades: p.blades, rotation: p.rotation, aspect: p.aspect };
-        const bc = defocusImage(col, { ...ap, threshold: p.threshold, bloom: p.bloom });
-        const bw = defocusImage(wt, { ...ap, threshold: 1, bloom: 0 });
+        if (side < 0 && fill && !filled) {
+            // What the blurred foreground uncovers: the background around it, spread into the hole it leaves.
+            filled = true;
+            const fs = new Float64Array(N * 5);
+            for (let i = 0; i < N; i++) { const j = i * 4, q = i * 5; fs[q] = acc[j]; fs[q + 1] = acc[j + 1]; fs[q + 2] = acc[j + 2]; fs[q + 3] = acc[j + 3]; fs[q + 4] = A[i]; }
+            const g = zdGauss(fs, 5, w, h, Math.max(1, mx / 2));
+            for (let i = 0; i < N; i++) {
+                const q = i * 5, den = g[q + 4];
+                if (!(den > 1e-6)) continue;
+                const j = i * 4, hole = 1 - A[i];
+                for (let c = 0; c < 4; c++) acc[j + c] = acc[j + c] + (g[q + c] / den) * hole;
+                A[i] = 1;
+            }
+        }
+        const bl = k > 0 ? zdConvBoxed(st, 5, w, h, sizes[k], p, bb) : st;
         for (let i = 0; i < N; i++) {
-            const j = i * 4;
-            num[j] += bc.data[j]; num[j + 1] += bc.data[j + 1]; num[j + 2] += bc.data[j + 2]; num[j + 3] += bc.data[j + 3];
-            den[i] += bw.data[j];
+            const q = i * 5, j = i * 4, W = bl[q + 4];
+            for (let c = 0; c < 4; c++) acc[j + c] = bl[q + c] + acc[j + c] * (1 - W);
+            A[i] = W + A[i] * (1 - W);
         }
     }
     const out = blank(w, h), o = out.data;
+    const ch = p.channels || "rgba";
     for (let i = 0; i < N; i++) {
         const j = i * 4;
-        if (den[i] > 1e-6) { o[j] = num[j] / den[i]; o[j + 1] = num[j + 1] / den[i]; o[j + 2] = num[j + 2] / den[i]; o[j + 3] = num[j + 3] / den[i]; }
-        else { o[j] = d[j]; o[j + 1] = d[j + 1]; o[j + 2] = d[j + 2]; o[j + 3] = d[j + 3]; }
+        if (!(A[i] > 1e-6)) { o[j] = d[j]; o[j + 1] = d[j + 1]; o[j + 2] = d[j + 2]; o[j + 3] = d[j + 3]; continue; }
+        let r = acc[j] / A[i], g = acc[j + 1] / A[i], b = acc[j + 2] / A[i];
+        const a = acc[j + 3] / A[i];
+        if (gam) { r = zdUngamma(r); g = zdUngamma(g); b = zdUngamma(b); }
+        if (ch === "alpha") { o[j] = d[j]; o[j + 1] = d[j + 1]; o[j + 2] = d[j + 2]; o[j + 3] = a; }
+        else { o[j] = r; o[j + 1] = g; o[j + 2] = b; o[j + 3] = ch === "rgb" ? d[j + 3] : a; }
     }
     return out;
+}
+
+/**
+ * An older ZDefocus (focus / dof / falloff on a 0..1 depth, `shape`, `layers`, `threshold` / `bloom` amounts)
+ * in today's settings: math "far = 1", size = the old size / falloff and maximum = the old size give the
+ * same circles of confusion. Returns the fields to set and the ones to take off.
+ */
+export function zDefocusUpgrade(n) {
+    const num = (v, d) => (typeof v === "number" && Number.isFinite(v) ? v : d);
+    const size = num(n.size, 20), fall = Math.max(num(n.falloff, 0.3), 1e-6), bl = num(n.bloom, 0);
+    const set = {
+        math: "far = 1", size: Math.round((size / fall) * 1e4) / 1e4, maximum: size,
+        auto_layers: "off", layers: Math.max(1, Math.round(num(n.layers, 6)) - 1), layer_curve: 0,
+        filter: n.shape === "polygon" ? "bladed" : "disc", filter_shape: 1, roundness: 0, inner_brightness: 1,
+        blur_inside: "off", bloom: bl > 0 ? "on" : "off", bloom_threshold: num(n.threshold, 1), bloom_gain: 1 + bl,
+    };
+    const tracks = n.tracks && typeof n.tracks === "object" ? { ...n.tracks } : null;
+    if (tracks) {
+        if (tracks.size) { tracks.maximum = tracks.size; delete tracks.size; }
+        if (tracks.threshold) { tracks.bloom_threshold = tracks.threshold; delete tracks.threshold; }
+        delete tracks.bloom; delete tracks.falloff;
+        set.tracks = tracks;
+    }
+    return { set, drop: ["falloff", "shape", "threshold"] };
 }

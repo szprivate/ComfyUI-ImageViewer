@@ -1066,7 +1066,24 @@ export function createCompEditor(host, opts = {}) {
         const at = (p, def) => C.paramAt(n, p, st.frame) || def;
         const r1 = (v) => Math.round(v * 10) / 10;
         if (n.type === "lensflare") return [{ param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" }];
+        if (n.type === "zdefocus") return [{ param: "focal_point", at: at("focal_point", mid), set: (xy) => [r1(xy[0]), r1(xy[1])],
+            title: "The focal point: drag it onto what should be sharp (the focus plane follows the depth under it)",
+            patch: (xy) => { const pt = [r1(xy[0]), r1(xy[1])], z = depthUnder(n, pt); return z === null ? { focal_point: pt } : { focal_point: pt, focus: z }; } }];
         return [];
+    }
+    /** ZDefocus: the depth channel's value under xy (pixels of the node's input), or null (no picture / channel yet). */
+    function depthUnder(n, xy) {
+        if (!lastPics || !n.inputs || !n.inputs[0]) return null;
+        const srcId = fid(n.inputs[0]);
+        const { pics, scale, frame } = lastPics;
+        const ctx = Object.assign(sourcesCtx(pics), { scale, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES });
+        const img = C.renderNode(st.comp, srcId, frame, ctx);
+        const ex = (ctx.xmemo && ctx.xmemo.get(`${srcId}@${frame}`)) || {};
+        const z = C.CH.channelOf(img, ex, C.paramAt(n, "channel", st.frame) || "depth.z");
+        if (!z) return null;
+        const x = Math.max(0, Math.min(img.w - 1, Math.floor(xy[0] * scale))), y = Math.max(0, Math.min(img.h - 1, Math.floor(xy[1] * scale)));
+        const v = z[y * img.w + x];
+        return Number.isFinite(v) ? Math.round(v * 1e5) / 1e5 : null;
     }
     let layer = over;   // where the handles go: a group in the pixels of the selected node's input
     function drawHandles() {
@@ -1086,7 +1103,10 @@ export function createCompEditor(host, opts = {}) {
             const g = svgEl(doc, "circle", { class: "cp-handle" + (h.small ? " small" : ""), cx: h.at[0], cy: h.at[1], r: (h.small ? 4 : 7) / z });
             g.dataset.param = h.param;
             const tip = svgEl(doc, "title", {}); tip.textContent = `${h.title} (${h.param}): drag`; g.append(tip);
-            g.addEventListener("pointerdown", (e) => dragPatch(e, n.id, (xy0, xy) => ({ [h.param]: h.set([h.at[0] + xy[0] - xy0[0], h.at[1] + xy[1] - xy0[1]]) })));
+            g.addEventListener("pointerdown", (e) => dragPatch(e, n.id, (xy0, xy) => {
+                const pt = [h.at[0] + xy[0] - xy0[0], h.at[1] + xy[1] - xy0[1]];
+                return h.patch ? h.patch(pt) : { [h.param]: h.set(pt) };
+            }));
             layer.append(g);
             if (!h.small) {
                 const k = 11 / z;
@@ -1096,7 +1116,7 @@ export function createCompEditor(host, opts = {}) {
         });
     }
     const tipped = (elm, text) => { const t = svgEl(doc, "title", {}); t.textContent = text; elm.append(t); return elm; };
-    const ROUND = { translate: 10, center: 10, rotate: 100, scale: 1000, skew: 1000, topleft: 10, bottomright: 10 };
+    const ROUND = { translate: 10, center: 10, rotate: 100, scale: 1000, skew: 1000, topleft: 10, bottomright: 10, focal_point: 10, focus: 1e5 };
     const rounded = (p, v) => { const k = ROUND[p] || 1000, r = (x) => Math.round(x * k) / k; return Array.isArray(v) ? v.map(r) : r(v); };
     /** The Transform's jack: move (the middle), the centre (Ctrl), the ring and its squares (scale), the bars (turn, skew). */
     function drawJack(n) {
@@ -2228,7 +2248,7 @@ export function createCompEditor(host, opts = {}) {
             sw.onclick = () => mutate(() => {
                 for (const t of tg) {
                     if (!!Mo.isAnimated(t, p) !== !!animated) continue;
-                    if (!animated && (t[p] === undefined || t[p] === null)) t[p] = C.paramAt(t, p, st.frame) ?? (p === "center" || p === "position" ? [inFmt(t).width / 2, inFmt(t).height / 2] : d.def);
+                    if (!animated && (t[p] === undefined || t[p] === null)) t[p] = C.paramAt(t, p, st.frame) ?? (p === "center" || p === "position" || p === "focal_point" ? [inFmt(t).width / 2, inFmt(t).height / 2] : d.def);
                     Mo.toggleAnimated(keyHost(), t, p, st.frame);
                 }
             }, { structure: false });
@@ -2250,7 +2270,7 @@ export function createCompEditor(host, opts = {}) {
             row.append(inp);
         }
         else if (d.kind === "vec2") {
-            const mid = p === "center" || p === "position";
+            const mid = p === "center" || p === "position" || p === "focal_point";
             const base = cur || (mid ? [inFmt(n).width / 2, inFmt(n).height / 2] : [0, 0]);
             const axisMixed = (a) => tg.some((t) => { const tv = C.paramAt(t, p, st.frame); return (tv ? tv[a] : null) !== (cur ? cur[a] : null); });
             for (let a = 0; a < 2; a++) {
@@ -3221,7 +3241,7 @@ export function createCompEditor(host, opts = {}) {
         } else if (n.type === "shuffle") {
             shuffleSection(pn);
             for (const [p, d] of ps) if (!SHUFFLE_OWN.has(p) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p)) && (!d.only || d.only(pn))) pane.append(paramRow(pn, p, d));
         if (n.type === "paint") paintTool.section(n, pane, first);
         if (WUI.draws(n.type)) WUI.section(wctx(), n);
         if (n.type === "cdl") cdlSection(n, t.params);

@@ -325,13 +325,30 @@ def new_node_cases(sources):
         c.append(one(node("defocus", 1, ["Read1"], **kw)))
     # ZDefocus: the depth is a channel of the picture itself (depth.z by default); the aperture's shape and bloom.
     zdepth = lambda: node("lumakeyer", 1, ["Read1"], write="depth.z", low=0.1)
-    for kw in ({"focus": 0.4, "dof": 0.1, "falloff": 0.25, "size": 6, "layers": 5},
-               {"focus": 0.4, "size": 7, "shape": "polygon", "blades": 5, "rotation": 17, "aspect": 1.4, "bloom": 3, "threshold": 0.3},
-               {"channel": "r", "focus": 0.4, "size": 5}, {"size": 0.6}):
+    # The settings of before (focus / dof / falloff) are read as today's (math "far = 1").
+    old = node("zdefocus", 1, ["lumakeyer1"], focus=0.4, dof=0.1, falloff=0.25, size=6, layers=5, shape="polygon", blades=5, threshold=0.3, bloom=3)
+    for k in ("math", "maximum", "auto_layers", "filter", "bloom_threshold", "bloom_gain"):
+        old.pop(k, None)
+    c.append(({"comp": comp([read(1), zdepth(), old, out("zdefocus1")])}, sources))
+    for kw in ({"math": "far = 1", "focus": 0.4, "dof": 0.1, "size": 20, "maximum": 6},
+               {"math": "far = 1", "focus": 0.4, "size": 25, "maximum": 7, "filter": "bladed", "blades": 5, "rotation": 17, "aspect": 1.4,
+                "bloom": "on", "bloom_threshold": 0.3, "bloom_gain": 3, "roundness": 0.4, "inner_brightness": 0.5, "catadioptric": "on"},
+               {"math": "far = 1", "focus": 0.4, "size": 30, "maximum": 8, "filter_shape": 0.4, "aspect": 0.6, "gamma": "on", "fill_foreground": "off"},
+               {"math": "far = 1", "focus": 0.6, "size": 12, "maximum": 6, "auto_layers": "off", "layers": 3, "layer_curve": -1.5, "channels": "rgb"},
+               {"math": "depth", "focus": 0.5, "size": 8, "maximum": 9, "blur_inside": "off"},
+               {"math": "far = 0", "focus": 0.5, "dof": 0.05, "size": 6, "maximum": 6, "channels": "alpha"},
+               {"math": "-depth", "focus": -0.5, "size": 6, "maximum": 6, "filter_shape": 0},
+               {"math": "direct", "size": 6, "maximum": 5}, {"math": "-direct", "size": 6, "maximum": 5},
+               {"math": "far = 1", "focus": 0.4, "size": 20, "maximum": 6, "output": "focal plane setup"},
+               {"math": "far = 0", "focus": 0.4, "dof": 0.1, "size": 20, "maximum": 6, "output": "focal plane setup", "show_image": "off"},
+               {"math": "far = 1", "focus": 0.4, "size": 20, "maximum": 6, "output": "layer setup"},
+               {"filter": "bladed", "blades": 6, "maximum": 9, "output": "filter shape setup"},
+               {"channel": "r", "math": "far = 1", "focus": 0.4, "size": 5}, {"size": 0.6}):
         c.append(({"comp": comp([read(1), zdepth(), node("zdefocus", 1, ["lumakeyer1"], **kw), out("zdefocus1")])}, sources))
-    c.append(({"comp": comp([read(1), zdepth(), node("zdefocus", 1, ["lumakeyer1"], focus=0.4, size=6), out("zdefocus1")]), "scale": 0.5}, sources))
+    c.append(({"comp": comp([read(1), zdepth(), node("zdefocus", 1, ["lumakeyer1"], math="far = 1", focus=0.4, size=30, maximum=6), out("zdefocus1")]),
+               "scale": 0.5}, sources))
     c.append(one(node("zdefocus", 1, ["Read1"], size=6)))   # no depth channel: the picture passes
-    c.append(({"comp": comp([read(1), read(2), zdepth(), node("zdefocus", 1, ["lumakeyer1", "Read2"], focus=0.4, size=6, mix=0.6, mask_channel="g"),
+    c.append(({"comp": comp([read(1), read(2), zdepth(), node("zdefocus", 1, ["lumakeyer1", "Read2"], math="far = 1", focus=0.4, size=20, maximum=6, mix=0.6, mask_channel="g"),
                              out("zdefocus1")])}, sources))
     cc = [
         {"master_hue": 25, "master_saturation": 140, "master_contrast": 120, "master_brightness": 0.02},

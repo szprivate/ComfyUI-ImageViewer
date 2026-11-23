@@ -61,6 +61,15 @@ export const EXR_COMPRESSIONS = ["zip", "zips", "none"];
 export const REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"];
 export const VIEW_ANAGLYPH = ["colour", "grey"];
 export const VIEW_LAYOUTS = ["side by side", "over under"];
+// ZDefocus's rows shown only where they do something (the Parameters panel asks a spec's `only(node)`).
+const ZD_SETUP = (n) => n.output === "focal plane setup" || n.output === "layer setup";
+const ZD_FOCUS = (n) => n.math !== "direct" && n.math !== "-direct";
+const ZD_MANUAL = (n) => n.auto_layers === "off";
+const ZD_DISC = (n) => n.filter !== "bladed";
+const ZD_BLADED = (n) => n.filter === "bladed";
+const ZD_CATA = (n) => n.filter === "bladed" && n.catadioptric === "on";
+const ZD_BLOOM = (n) => n.bloom === "on";
+
 export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
         file: { kind: "file", def: "" },
@@ -286,18 +295,35 @@ export const NODE_TYPES = {
         bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
     } },
     zdefocus: { label: "ZDefocus", cat: "Filter", inputs: ["src"], params: {
-        channel: { kind: "chan", def: "depth.z", help: "Where the picture holds its depth (no such channel: the picture passes)" },
-        focus: { kind: "num", def: 0.5, key: true, step: 0.01, help: "The depth in focus" },
-        dof: { kind: "num", def: 0.05, min: 0, key: true, step: 0.01, help: "How deep the sharp part is" },
-        falloff: { kind: "num", def: 0.3, min: 0.001, key: true, step: 0.01, help: "How much further it takes to reach the full blur" },
-        size: { kind: "num", def: 20, min: 0, max: 400, key: true, step: 0.5, help: "The fullest aperture's diameter, in pixels of the comp" },
-        layers: { kind: "int", def: 6, min: 2, max: 16, help: "Aperture sizes between none and the fullest: more is smoother and slower" },
-        shape: { kind: "enum", def: "disc", choices: O.DEFOCUS_SHAPES },
-        blades: { kind: "int", def: 6, min: 3, max: 16, help: "The aperture's sides (polygon)" },
-        rotation: { kind: "num", def: 0, key: true, step: 1, help: "The aperture turned, in degrees (polygon)" },
-        aspect: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.05, help: "Above 1 wider, as an anamorphic lens" },
-        threshold: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "Brighter than this is a highlight" },
-        bloom: { kind: "num", def: 0, min: 0, key: true, step: 0.1, help: "How much brighter the highlights' bokeh gets" },
+        channels: { kind: "enum", def: "rgba", choices: O.ZD_CHANNELS, help: "What is defocused: rgb only keeps the alpha, alpha only keeps the colour" },
+        channel: { kind: "chan", def: "depth.z", label: "depth channel", help: "Where the picture holds its depth (no such channel: the picture passes). Not anti-aliased: an edge pixel's depth is between two" },
+        math: { kind: "enum", def: "depth", choices: O.ZD_MATHS, help: "How the depth is written. depth: the distance; far = 0: 1 / distance; far = 1: 0 near, 1 far; direct: the blur itself (size x depth). A minus: the same, negated" },
+        output: { kind: "enum", def: "result", choices: O.ZD_OUTPUTS, label: "output mode", help: "focal plane setup: red in front of the focus, green in focus, blue behind - nothing is blurred, so it is instant; layer setup: the same after the depth is cut into layers; filter shape setup: the aperture" },
+        show_image: { only: ZD_SETUP, kind: "enum", def: "on", choices: ["on", "off"], label: "show image", help: "The setup colours over the picture" },
+        focus: { only: ZD_FOCUS, kind: "num", def: 1, key: true, step: 0.01, label: "focus plane (C)", help: "The depth that is sharp, in the depth channel's numbers. Drag the focal point on the picture to take it from there" },
+        focal_point: { only: ZD_FOCUS, kind: "vec2", def: null, key: true, step: 1, label: "focal point", help: "Dragged on the picture, it sets the focus plane to the depth under it" },
+        dof: { only: ZD_FOCUS, kind: "num", def: 0, min: 0, key: true, step: 0.01, label: "depth of field", help: "How deep the sharp slice around the focus plane is, in the depth channel's numbers (a real lens: 0)" },
+        blur_inside: { only: ZD_FOCUS, kind: "enum", def: "on", choices: ["on", "off"], label: "blur inside", help: "A little blur inside the depth of field too, so the sharp slice runs into the blur without a step" },
+        size: { kind: "num", def: 10, min: 0, key: true, step: 0.5, help: "The blur's diameter far away, in pixels of the comp (nearer than the focus can be larger). direct: the blur is size x depth" },
+        maximum: { kind: "num", def: 30, min: 0, max: 400, key: true, step: 0.5, help: "The largest blur, in pixels of the comp: smaller is faster" },
+        fill_foreground: { kind: "enum", def: "on", choices: ["on", "off"], label: "fill foreground", help: "Where a blurred foreground uncovers what is behind it, fill that in from the background around it" },
+        auto_layers: { kind: "enum", def: "on", choices: ["on", "off"], label: "automatic layer spacing", help: "on: the layers chosen from maximum, dense near the focus; off: depth layers and layer curve" },
+        layers: { only: ZD_MANUAL, kind: "int", def: 8, min: 1, max: 32, label: "depth layers", help: "Blur sizes on each side of the focus: fewer is faster" },
+        layer_curve: { only: ZD_MANUAL, kind: "num", def: 1, min: -5, max: 5, step: 0.1, label: "layer curve", help: "0: layers evenly spaced; above 0: closer together near the focus; below 0: near the maximum" },
+        filter: { kind: "enum", def: "disc", choices: O.ZD_FILTERS, label: "filter type", help: "The aperture: a round disc, or iris blades" },
+        filter_shape: { only: ZD_DISC, kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, label: "filter shape", help: "disc: 0 a soft Gaussian, 1 a hard-edged disc" },
+        aspect: { kind: "num", def: 1, min: 0.1, max: 10, key: true, step: 0.05, label: "aspect ratio", help: "Below 1 narrower, above 1 flatter: cat's eye and anamorphic bokeh" },
+        blades: { only: ZD_BLADED, kind: "int", def: 5, min: 3, max: 16, help: "bladed: how many iris blades" },
+        roundness: { only: ZD_BLADED, kind: "num", def: 0.2, min: -1, max: 1, key: true, step: 0.05, help: "bladed: the blades' edges bowed out (1 nearly a circle) or in (below 0)" },
+        rotation: { only: ZD_BLADED, kind: "num", def: 0, key: true, step: 1, help: "bladed: the aperture turned, degrees anticlockwise" },
+        inner_size: { only: ZD_BLADED, kind: "num", def: 0.8, min: 0, max: 1, key: true, step: 0.05, label: "inner size", help: "bladed: the inner part's size, a share of the aperture" },
+        inner_brightness: { only: ZD_BLADED, kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.05, label: "inner brightness", help: "bladed: how bright the inner part is (1: the same as the rim)" },
+        catadioptric: { only: ZD_BLADED, kind: "enum", def: "off", choices: ["off", "on"], help: "bladed: a mirror lens - a hole in the middle of every bokeh" },
+        catadioptric_size: { only: ZD_CATA, kind: "num", def: 0.3, min: 0, max: 1, key: true, step: 0.05, label: "catadioptric size", help: "bladed: the hole's size, a share of the aperture" },
+        gamma: { kind: "enum", def: "off", choices: ["off", "on"], label: "gamma correction", help: "Blur with a 2.2 gamma laid on (taken off after): brighter, rounder bokeh" },
+        bloom: { kind: "enum", def: "off", choices: ["off", "on"], help: "Highlights brightened before the blur, so the aperture's shape shows in them" },
+        bloom_threshold: { only: ZD_BLOOM, kind: "num", def: 0.8, min: 0, key: true, step: 0.05, label: "bloom threshold", help: "Brighter than this (luminance) is a highlight" },
+        bloom_gain: { only: ZD_BLOOM, kind: "num", def: 2, min: 0, key: true, step: 0.1, label: "bloom gain", help: "How much more of a highlight's brightness above the threshold" },
     } },
     // ── 3D (imageViewer_comp3d.js): geometry and cameras are not pictures; Render 3D makes one ──
     camera3d: { label: "Camera", cat: "3D", inputs: [], params: {
@@ -625,6 +651,12 @@ function normalizeLevel(raw, errors, where, depth) {
             Object.assign(node, CH.shuffleUpgrade(n));
             for (const k of ["out", "r", "g", "b", "a"]) delete node[k];
             ins = [ins[0], null, ins[1]];
+        }
+        // An older ZDefocus (focus / dof / falloff on a 0..1 depth): today's settings with the same blur.
+        if (n.type === "zdefocus" && n.math === undefined && n.falloff !== undefined) {
+            const up = O.zDefocusUpgrade(n);
+            for (const k of up.drop) delete node[k];
+            Object.assign(node, up.set);
         }
         node.inputs = inputsOf(node).map((_, i) => (typeof ins[i] === "string" ? ins[i] : null));
         if (node.tracks && !isObj(node.tracks)) delete node.tracks;
@@ -2251,7 +2283,7 @@ export function renderNode(comp, id, frame, ctx) {
             for (const k of Object.keys(NODE_TYPES.zdefocus.params)) p[k] = paramAt(n, k, f);
             const z = CH.channelOf(src, exOf(n.inputs[0], f), p.channel || "depth.z");
             if (!z) return src;
-            p.size *= scale;
+            p.size *= scale; p.maximum *= scale;
             return O.zDefocusImage(src, z, p);
         }
         case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": {
