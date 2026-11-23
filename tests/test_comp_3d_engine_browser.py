@@ -135,8 +135,10 @@ ROOM = """async () => {
   if (!btn) return { error: 'no 3D button', starter };
   btn.click();
   for (let i = 0; i < 60 && !(rec.engine.roomInfo() && rec.engine.roomInfo().objects >= 2); i++) await sleep(100);
-  ed.select([card.id]); ed.refresh();
-  await sleep(200); rec.engine.roomSync();
+  ed.select([card.id]);
+  await sleep(200);
+  const free = rec.engine.view.activeCameraObject() === rec.engine.view.camera;
+  const keyR = rec.engine.roomKey('r') && rec.engine._room.gizmo.mode; rec.engine.roomKey('w');
   const info1 = rec.engine.roomInfo();
   const room = rec.engine._room, hist0 = ed.state.hist.past.length;
   room.gizmo.dispatchEvent({ type: 'dragging-changed', value: true });
@@ -149,7 +151,7 @@ ROOM = """async () => {
   const canvasW = rec.engine.view.canvas.clientWidth;
   await ed.setRoom(false);
   const info2 = rec.engine.roomInfo();
-  return { ready: true, starter, info1, moved, canvasW, closed: info2 === null, hidden: rec.engine.box.style.visibility,
+  return { ready: true, starter, info1, free, keyR, moved, canvasW, closed: info2 === null, hidden: rec.engine.box.style.visibility,
     hist: ed.state.hist.past.length - hist0, warn: P.shadowRoot.querySelectorAll('.cp-wbadge').length };
 }"""
 
@@ -258,7 +260,9 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertTrue(st["info1"]["shown"])
         self.assertTrue(st["info1"]["camera"], "the render camera is drawn")
         self.assertGreaterEqual(st["info1"]["objects"], 2)
-        self.assertTrue(st["info1"]["gizmo"], "the gizmo is on the selected Card")
+        self.assertEqual(st["info1"]["gizmo"], "Card1", "selecting the Card in the graph puts the gizmo on it")
+        self.assertTrue(st["free"], "the room is looked at through its free camera, not a scene camera")
+        self.assertEqual(st["keyR"], "scale")
         self.assertGreater(st["canvasW"], 300, "the room fills the picture's place")
         self.assertEqual(st["moved"]["translate"], [0.5, 0.25, -1])
         self.assertAlmostEqual(st["moved"]["rotate"][1], 45, places=1)

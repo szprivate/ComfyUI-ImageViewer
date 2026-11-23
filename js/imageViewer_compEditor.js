@@ -2184,6 +2184,8 @@ export function createCompEditor(host, opts = {}) {
         else if (k === "1" && primary()) setView(primary().id);
         else if (k.toLowerCase() === "f" && part === graph) frameAll();
         else if (k.toLowerCase() === "f" && part === root) { st.zoom.fit = true; layoutCanvas(); }
+        // W / E / R over the 3D room are its gizmo's tools (imageViewer_comp3dRoom.js), not the red channel or the viewer's keys.
+        else if (!ctrl && !e.altKey && st.room && k.length === 1 && "wer".includes(k.toLowerCase()) && stage.matches(":hover") && o.room3dKey && o.room3dKey(k.toLowerCase())) { /* the room's */ }
         else if (!ctrl && !e.altKey && part === root && "rgba".includes(k.toLowerCase()) && k.length === 1) setChannel(st.channel === k.toLowerCase() ? "rgb" : k.toLowerCase());
         else if (k === " " && o.transport) o.transport.toggle();
         else if (k === "ArrowLeft" && o.transport) o.transport.step(-1);
@@ -3071,6 +3073,8 @@ export function createCompEditor(host, opts = {}) {
         return wrap;
     }
     function renderProps() {
+        // The 3D room's gizmo follows the selection (a node picked in the graph, the Layers or a marquee).
+        if (st.room && o.room3dSync) o.room3dSync();
         renderPropsInto(props, null);
         for (const fn of propsViews) fn();
     }
