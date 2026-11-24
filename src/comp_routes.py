@@ -263,7 +263,8 @@ def register(add, *, web, path_access, export_rules, folder_paths, resolve=None,
 
     def read_node(q):
         node = {"type": "read", "file": q.get("file") or "", "offset": 0, "colorspace": q.get("cs") or "auto",
-                "missing": q.get("missing") or "black", "local": q.get("local") or ""}
+                "missing": q.get("missing") or "black", "local": q.get("local") or "",
+                "alpha": q.get("alpha") or "auto"}
         try:
             node["offset"] = int(q.get("offset") or 0)
         except ValueError:

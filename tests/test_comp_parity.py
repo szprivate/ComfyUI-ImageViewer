@@ -99,6 +99,11 @@ def mask_cases(sources):
     c.append(({"comp": comp([read(1), read(2), N("blur", 1, ["Read1", "Read2"], size=3, mask_channel="g", mask_invert="on"),
                              out("blur1")])}, sources))
     c.append(({"comp": comp([read(1), N("blur", 1, ["Read1", None], size=2, mix=0.35), out("blur1")])}, sources))
+    # A mask from a channel of the stream itself (nothing in the mask input): its alpha, and a layer's channel.
+    c.append(({"comp": comp([read(1), N("grade", 1, ["Read1", None], gain=2.5, mask_in="a"), out("grade1")])}, sources))
+    c.append(({"comp": comp([read(1), N("blur", 1, ["Read1", None], size=2, mask_in="g", mask_invert="on"), out("blur1")])}, sources))
+    c.append(({"comp": comp([read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
+                             N("grade", 1, ["lumakeyer1", None], gain=2, mask_in="m.a"), out("grade1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
                              N("glow", 1, ["Read1", "lumakeyer1"], mask_channel="m.a", mix=0.8), out("glow1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("reformat", 1, ["Read2"], width=12, height=9, resize="none"),

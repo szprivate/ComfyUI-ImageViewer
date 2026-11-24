@@ -146,6 +146,8 @@ REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"]
 VIEW_ANAGLYPH = ["colour", "grey"]
 VIEW_LAYOUTS = ["side by side", "over under"]
 GHOST_SHAPES = ["disc", "polygon"]
+# A Read's alpha: auto (EXR / HDR as stored, the rest premultiplied as they load), premultiply, as stored.
+READ_ALPHA = ["auto", "premultiply", "as stored"]
 MISSING_FRAMES = ["black", "hold", "error"]
 WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"]
 WRITE_CHANNELS = ["rgba", "rgb", "all"]
@@ -202,6 +204,7 @@ NODE_TYPES = {
         "colorspace": {"kind": "ocio_cs", "def": "auto", "choices": COLORSPACES},
         "fit": {"kind": "enum", "def": "fit", "choices": FITS},
         "missing": {"kind": "enum", "def": "black", "choices": MISSING_FRAMES},
+        "alpha": {"kind": "enum", "def": "auto", "choices": READ_ALPHA},
     }},
     "constant": {"inputs": [], "params": {
         "color": {"kind": "color", "def": [0, 0, 0, 1], "key": True},
@@ -2913,6 +2916,7 @@ for _mt in MASKABLE:
         _md["params"]["mix"] = {"kind": "num", "def": 1, "min": 0, "max": 1, "key": True}
     _md["params"]["mask_channel"] = {"kind": "chan", "def": "a"}
     _md["params"]["mask_invert"] = {"kind": "enum", "def": "off", "choices": ["off", "on"]}
+    _md["params"]["mask_in"] = {"kind": "chan", "def": "none"}   # a channel of what comes in, with no mask input
 MASKABLE = set(MASKABLE)
 
 
@@ -2991,7 +2995,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
         ins = n.get("inputs") or []
         k = mask_index(n["type"])
         mi = ins[k] if len(ins) > k else None
-        if not mi and mix == 1:
+        own = n.get("mask_in") if not mi and n.get("mask_in") not in (None, "", "none") else None
+        if not mi and not own and mix == 1:
             return img, ex
         h, w = img.shape[:2]
         i0 = ins[0] if ins else None
@@ -3003,6 +3008,10 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             mp = run(mi, f, depth + 1)
             plane = channel_of(mp, ex_of(mi, f), n.get("mask_channel") or "a")
             m = conform(plane, w, h) if plane is not None else np.zeros((h, w), np.float32)
+        elif own:
+            # A channel of the node's own input (its alpha, or a layer's): the mask rides in the stream.
+            plane = channel_of(src, sex, own)
+            m = plane if plane is not None else np.zeros((h, w), np.float32)
         return mask_mix(src, sex, img, ex, m, mix, (n.get("mask_invert") or "off") == "on")
 
     def spatial(i0, f, d1, fn):

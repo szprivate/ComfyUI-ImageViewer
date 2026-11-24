@@ -433,6 +433,7 @@ class Sources:
         self.infos = {}
         self.videos = {}
         self.stills = {}
+        self.stored = {}          # id(picture) -> (picture, its colour as stored): Reads whose alpha is "as stored"
         self.deeps = {}
         self.numbers = {}
         self.precomps = {}
@@ -515,6 +516,36 @@ class Sources:
         return img
 
     def __call__(self, node, frame):
+        """A Read's picture at comp ``frame`` (linear, premultiplied as the comp works), or None. The decoders
+        premultiply what they read; a Read whose alpha is "as stored" (auto: an EXR / HDR, which a renderer
+        writes premultiplied already) gets the file's own colour back - so an EXR is not multiplied twice, and
+        straight colour kept that way is cut out by a Premult later."""
+        img = self._picture(node, frame)
+        if img is None or img.ndim != 3 or img.shape[2] < 4 or not self._as_stored(node, frame):
+            return img
+        hit = self.stored.get(id(img))
+        if hit is not None and hit[0] is img:
+            return hit[1]
+        out = img.copy()
+        a = img[..., 3:4]
+        np.divide(img[..., :3], a, out=out[..., :3], where=a > 0)
+        self.stored[id(img)] = (img, out)
+        while len(self.stored) > 8:
+            self.stored.pop(next(iter(self.stored)))
+        return out
+
+    def _as_stored(self, node, frame):
+        mode = node.get("alpha") or "auto"
+        if mode == "as stored":
+            return True
+        if mode != "auto":
+            return False
+        path, info = self.info(node)
+        if info.get("kind") not in ("still", "sequence"):
+            return False
+        return os.path.splitext(path)[1].lower() in LINEAR_EXTS
+
+    def _picture(self, node, frame):
         path, info = self.info(node)
         kind = info.get("kind")
         if kind not in ("still", "sequence", "video", "comp"):

@@ -2940,14 +2940,17 @@ export function createCompEditor(host, opts = {}) {
      */
     function channelSelect(n, p, d, value, write) {
         // A map's channels are the map's (STMap, VectorWarp: input 1), everyone else's what comes in.
-        const have = C.channelsAt(st.comp, fid(n.type === "stmap" || n.type === "vectorwarp" || d.from === "A" ? n.inputs[1] : n.inputs[0]));
+        // The mask channel's are the mask input's.
+        const at = d.from === "mask" ? n.inputs[C.maskIndex(n.type)] : n.type === "stmap" || n.type === "vectorwarp" || d.from === "A" ? n.inputs[1] : n.inputs[0];
+        const have = C.channelsAt(st.comp, fid(at));
         const s = el(doc, "select");
         const add = (v, label, parent = s) => parent.append(new Option(label || v, v));
         const group = (label) => { const g = doc.createElement("optgroup"); g.label = label; s.append(g); return g; };
         if (d.kind === "chan") {
+            if (p === "mask_in") add("none", "none (everywhere)");
             for (const c of C.CH.RGBA) add(c);
             if (have.length) { const g = group("extra"); for (const c of have) add(c, c, g); }
-            if (d.from !== "mask") {
+            if (d.from !== "mask" && p !== "mask_in") {
                 const g = group("constant");
                 add("0", "0 (black)", g); add("1", "1 (white)", g);
                 if (n.type === "shuffle") add("-", "- (not written)", g);
@@ -3785,15 +3788,17 @@ export function createCompEditor(host, opts = {}) {
         }
         const pn = sp || n;
         // The mask's channel and invert only matter with something in the mask input.
+        // With a mask wired in: its channel. Without: a channel of what comes in (mask_in), "none" by default.
         const mi = C.maskIndex(n.type), masked = mi >= 0 && !!n.inputs[mi];
-        const maskRow = (p) => p === "mask_channel" || p === "mask_invert";
+        const ownMask = mi >= 0 && !masked && n.mask_in && n.mask_in !== "none";
+        const maskShown = (p) => (p === "mask_channel" ? masked : p === "mask_in" ? mi >= 0 && !masked : p === "mask_invert" ? masked || ownMask : true);
         if (n.type === "colorcorrect") {
             ccSection(pn, t.params);
-            if (masked) for (const [p, d] of ps) if (maskRow(p)) pane.append(paramRow(pn, p, d));
+            for (const [p, d] of ps) if ((p === "mask_channel" || p === "mask_in" || p === "mask_invert") && maskShown(p)) pane.append(paramRow(pn, p, d));
         } else if (n.type === "shuffle") {
             shuffleSection(pn);
-            for (const [p, d] of ps) if (!SHUFFLE_OWN.has(p) && (masked || !maskRow(p))) pane.append(paramRow(pn, p, d));
-        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && (masked || !maskRow(p)) && (!d.only || d.only(pn))) pane.append(paramRow(pn, p, d));
+            for (const [p, d] of ps) if (!SHUFFLE_OWN.has(p) && maskShown(p)) pane.append(paramRow(pn, p, d));
+        } else for (const [p, d] of ps) if (d.kind !== "roto" && d.kind !== "ai" && d.kind !== "grainprofile" && d.kind !== "strokes" && !WUI.OWN_KINDS.has(d.kind) && maskShown(p) && (!d.only || d.only(pn))) pane.append(paramRow(pn, p, d));
         // A pinned view (propsSel) does not mount the picture's tools: they draw on the first panel's top node,
         // and mounting them here would take them off it (and Paint's stroke list with it).
         if (n.type === "paint") {
