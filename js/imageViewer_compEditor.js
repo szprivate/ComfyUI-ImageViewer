@@ -1285,7 +1285,7 @@ export function createCompEditor(host, opts = {}) {
             e.preventDefault(); stage.setPointerCapture(e.pointerId);
             let lx = e.clientX;
             stage.onpointermove = (ev) => { o.nudgeExposure((ev.clientX - lx) * 0.02); lx = ev.clientX; };
-            stage.onpointerup = () => { stage.onpointermove = null; };
+            stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; };
             return;
         }
         if (e.button === 0 && st.pick) { e.preventDefault(); pickAt(compXY(e)); return; }
@@ -1297,7 +1297,7 @@ export function createCompEditor(host, opts = {}) {
         e.preventDefault(); stage.setPointerCapture(e.pointerId);
         const sx = e.clientX, sy = e.clientY, ox = st.zoom.x, oy = st.zoom.y;
         stage.onpointermove = (ev) => { st.zoom.fit = false; st.zoom.x = ox + ev.clientX - sx; st.zoom.y = oy + ev.clientY - sy; layoutCanvas(); };
-        stage.onpointerup = () => { stage.onpointermove = null; };
+        stage.onpointerup = () => { stage.onpointermove = null; stage.onpointerup = null; };
     });
     stage.addEventListener("pointermove", (e) => { if (!stage.onpointermove && st.comp) { paintTool.move(e); viewTools.move(compXY(e)); } });
     stage.addEventListener("pointerleave", () => { paintTool.leave(); viewTools.leave(); });
@@ -1827,7 +1827,7 @@ export function createCompEditor(host, opts = {}) {
             n.w = Math.max(60, Math.round(w)); n.h = Math.max(40, Math.round(h));
             renderGraph();
         };
-        graph.onpointerup = () => { graph.onpointermove = null; if (pushed) { st.dirty = true; renderBar(); renderGraph(); } };
+        graph.onpointerup = () => { graph.onpointermove = null; graph.onpointerup = null; if (pushed) { st.dirty = true; renderBar(); renderGraph(); } };
     }
     /** A sticky note's words, written on it. */
     function editNote(id) {
@@ -1915,7 +1915,7 @@ export function createCompEditor(host, opts = {}) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
         const sx = e.clientX, sy = e.clientY, ox = st.graph.x, oy = st.graph.y;
         graph.onpointermove = (ev) => { st.graph.x = ox + ev.clientX - sx; st.graph.y = oy + ev.clientY - sy; placeWorld(); };
-        graph.onpointerup = () => { graph.onpointermove = null; };
+        graph.onpointerup = () => { graph.onpointermove = null; graph.onpointerup = null; };
     }
     function dragNodes(e, id, { dup = false } = {}) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
@@ -1970,7 +1970,7 @@ export function createCompEditor(host, opts = {}) {
         };
         let hotWire = null, dupMade = false;
         graph.onpointerup = () => {
-            graph.onpointermove = null;
+            graph.onpointermove = null; graph.onpointerup = null;
             st.wireHot = null;
             if (!moved && chain) {
                 if (toggles) { st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id]; syncBatches(); refresh(["graph", "props", "layers"]); }
@@ -2021,7 +2021,7 @@ export function createCompEditor(host, opts = {}) {
         draw_(...gxy(e));
         graph.onpointermove = (ev) => { draw_(...gxy(ev)); mark(ev); };
         graph.onpointerup = (ev) => {
-            graph.onpointermove = null;
+            graph.onpointermove = null; graph.onpointerup = null;
             ghost.remove();
             if (dropBox) { dropBox.classList.remove("cp-drop"); dropBox = null; }
             const hit = hitAt(ev);
@@ -2079,7 +2079,7 @@ export function createCompEditor(host, opts = {}) {
             if (going) win().requestAnimationFrame(step);
         };
         host.onpointerup = () => {
-            host.onpointermove = null;
+            host.onpointermove = null; host.onpointerup = null;
             if (!moved) return;
             if (tween) { tween.t0 = -1e9; step(); }
             st.hist.push(before);
@@ -2104,7 +2104,7 @@ export function createCompEditor(host, opts = {}) {
             draw_();
         };
         host.onpointerup = () => {
-            host.onpointermove = null;
+            host.onpointermove = null; host.onpointerup = null;
             line.remove();
             if (cut.size) mutate(() => { C.cutWires(gc(), [...cut.values()]); });
             else renderGraph();
@@ -2123,7 +2123,7 @@ export function createCompEditor(host, opts = {}) {
             Object.assign(box.style, { left: Math.min(x, sx) + "px", top: Math.min(y, sy) + "px", width: Math.abs(x - sx) + "px", height: Math.abs(y - sy) + "px" });
         };
         graph.onpointerup = (ev) => {
-            graph.onpointermove = null;
+            graph.onpointermove = null; graph.onpointerup = null;
             if (!moved) { select([]); return; }
             box.remove();
             const toW = (px, py) => [(px - st.graph.x) / st.graph.s, (py - st.graph.y) / st.graph.s];
