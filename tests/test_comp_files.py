@@ -13,6 +13,7 @@ import tempfile
 import unittest
 
 import numpy as np
+from json import dumps as json_dumps
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_edit_takes import _load, web  # noqa: E402
@@ -206,7 +207,7 @@ class CompFiles(unittest.TestCase):
 
     def test_each_ai_node_lists_only_its_own_workflows(self):
         real = self.G.comp_table()["lists"]
-        self.assertEqual(sorted(real), ["depth", "inpaint", "matte", "upscale"])
+        self.assertEqual(sorted(real), ["depth", "inpaint", "matte", "normals", "upscale"])
         self.assertNotIn("relight", real)
         got = self.AI.workflows_for("depth")
         self.assertEqual([w["id"] for w in got["workflows"]], self.DEPTH_IDS)
@@ -237,12 +238,38 @@ class CompFiles(unittest.TestCase):
     DEPTH_IDS = ["comp_da3_metric", "comp_da3_mono", "comp_da3_base", "comp_da3_small", "comp_moge3_vitl",
                  "comp_moge3_vitg", "comp_moge2_vitl", "comp_lotus_depth", "comp_marigold_v2_depth"]
 
+    NORMALS_IDS = ["comp_moge2_normals", "comp_marigold_v2_normals", "comp_moge3_vitl_normals", "comp_moge3_vitg_normals"]
+
     def test_every_depth_workflow_is_a_whole_graph_of_comfyuis_own_nodes(self):
+        self._whole_graphs(self.DEPTH_IDS, "depth")
+        near = [w for w in self.DEPTH_IDS if self.AI.near_white(w)]
+        self.assertEqual(near, ["comp_moge3_vitl", "comp_moge3_vitg", "comp_moge2_vitl", "comp_lotus_depth", "comp_marigold_v2_depth"])
+
+    def test_every_normals_workflow_is_a_whole_graph_making_an_opengl_normal_map(self):
+        self._whole_graphs(self.NORMALS_IDS, "normals")
+        got = self.AI.workflows_for("normals")
+        self.assertEqual([w["id"] for w in got["workflows"]], self.NORMALS_IDS)
+        self.assertEqual((got["choice"], got["action"]), ("comp_moge2_normals", "normals"))
+        self.assertEqual(self.AI.action_of("normals", ""), ("normals", ""))
+        for wid in self.NORMALS_IDS:
+            _e, g = self.G._builtin(wid)
+            for n in g.values():
+                if n["class_type"] == "MoGeRender":       # x right, y up, z towards the camera
+                    self.assertEqual(n["inputs"]["output"], "normal_opengl", wid)
+                if n["class_type"] == "MarigoldV2PostProcess":
+                    self.assertEqual(n["inputs"]["prediction"], "normals", wid)
+                if n["class_type"] in ("LoraLoaderModelOnly", "VAELoader", "ConditioningLoader"):
+                    self.assertNotIn("depth", json_dumps(n["inputs"]), wid)     # the normals model, not the depth one
+        have = {"LoadImage", "SaveImageAdvanced", "LoadMoGeModel", "MoGeInference", "MoGeRender"}
+        self.assertEqual([w["id"] for w in self.AI.workflows_for("normals", node_classes=have)["workflows"]],
+                         ["comp_moge2_normals", "comp_moge3_vitl_normals", "comp_moge3_vitg_normals"])
+
+    def _whole_graphs(self, ids, action):
         loaders = self.G.LOADERS
-        for wid in self.DEPTH_IDS:
+        for wid in ids:
             e, g = self.G._builtin(wid)
             self.assertIsNotNone(e, wid)
-            self.assertEqual(e["actions"], ["depth"], wid)
+            self.assertEqual(e["actions"], [action], wid)
             self.assertEqual(sorted({n["class_type"] for n in g.values()}), sorted(e["nodes"]), wid)
             titles = [((n.get("_meta") or {}).get("title")) for n in g.values()]
             self.assertIn("paint:image", titles, wid)
@@ -261,8 +288,6 @@ class CompFiles(unittest.TestCase):
             for m in e["models"]:
                 self.assertTrue(self.G._allowed_url(m["url"]), m["url"])
                 self.assertTrue(m["url"].endswith("/" + m["name"]), m["url"])
-        near = [w for w in self.DEPTH_IDS if self.AI.near_white(w)]
-        self.assertEqual(near, ["comp_moge3_vitl", "comp_moge3_vitg", "comp_moge2_vitl", "comp_lotus_depth", "comp_marigold_v2_depth"])
 
     def test_a_depth_model_this_comfyui_cannot_run_is_not_listed(self):
         have = {"LoadImage", "SaveImageAdvanced", "LoadDA3Model", "DA3Inference", "DA3Render"}
@@ -380,6 +405,73 @@ class CompFiles(unittest.TestCase):
         placed = self.run_c(moge)
         px = np.asarray(Image.open(os.path.join(self.dirs["output"], *placed["frames"]["0"].split("/"))))
         self.assertGreater(int(px[20, 2]), int(px[20, 57]))
+
+    def _exr_rgb(self, path, rgb):
+        import av
+        cc = av.CodecContext.create("exr", "w")
+        h, w = rgb.shape[:2]
+        cc.width, cc.height, cc.pix_fmt = w, h, "gbrpf32le"
+        fr = av.VideoFrame.from_ndarray(np.ascontiguousarray(rgb.astype(np.float32)), format="gbrpf32le")
+        with open(path, "wb") as fh:
+            fh.write(b"".join(bytes(p) for p in cc.encode(fr)) + b"".join(bytes(p) for p in cc.encode(None)))
+
+    def test_a_normals_range_runs_moge_once_and_lands_as_unit_normal_maps_the_node_reads(self):
+        try:
+            import av  # noqa: F401
+        except ImportError:
+            self.skipTest("needs PyAV")
+        self.MODELS = {"geometry_estimation": ["moge_2_vitl_normal_fp16.safetensors"]}
+        self._fake_models()
+        comp_path = os.path.join(self.dirs["output"], "nrm.comp.json")
+        comp = {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 4}, "output": "Output1",
+                "nodes": [{"id": "Read1", "type": "read", "file": "plate.png", "inputs": []},
+                          {"id": "AI1", "type": "ai_normals", "inputs": ["Read1"]},
+                          {"id": "Output1", "type": "output", "inputs": ["AI1"]}]}
+        out = os.path.join(self.dirs["output"], "gen")
+        os.makedirs(out, exist_ok=True)
+        # The model's map at half the size: the left half turned left (-x), the right half up (+y); one pixel
+        # with no normal at all (a masked sky: 0.5 grey) and the map's values a little short of unit length.
+        n = np.zeros((20, 30, 3), np.float32)
+        n[:, :15] = [-0.6, 0.0, 0.8]
+        n[:, 15:] = [0.0, 0.6, 0.8]
+        rgb = n * 0.45 + 0.5
+        rgb[0, 0] = 0.5
+        self._exr_rgb(os.path.join(out, "n.exr"), rgb)
+        got = self.AI.read_normals(os.path.join(out, "n.exr"))
+        self.assertLess(float(np.abs(got - rgb).max()), 1e-5)          # read back as r g b
+
+        async def go(c):
+            r = await c.post("/imageviewer/comp_ai_batch", json={"path": comp_path, "comp": comp, "node": "AI1", "frames": [0, 1]})
+            prep = await r.json()
+            self.assertEqual(r.status, 200, prep)
+            self.assertEqual((prep["workflow"], prep["action"]), ("comp_moge2_normals", "normals"))
+            kinds = [v["class_type"] for v in prep["graph"].values()]
+            self.assertEqual(kinds.count("LoadMoGeModel"), 1)
+            self.assertEqual(kinds.count("MoGeInference"), 2)
+            images = {str(f): {"filename": "n.exr", "subfolder": "gen", "type": "output"} for f in prep["frames"]}
+            r = await c.post("/imageviewer/comp_ai_batch_place", json={"run": prep["run"], "images": images})
+            placed = await r.json()
+            self.assertEqual(r.status, 200, placed)
+            return placed
+        placed = self.run_c(go)
+        from PIL import Image
+        px = np.asarray(Image.open(os.path.join(self.dirs["output"], *placed["frames"]["1"].split("/"))).convert("RGBA"))
+        self.assertEqual(px.shape, (40, 60, 4))
+        v = px[..., :3].astype(np.float64) / 255 * 2 - 1
+        self.assertLess(abs(float(np.linalg.norm(v[20, 5])) - 1), 0.02)   # unit length again
+        self.assertLess(float(v[20, 5, 0]), -0.55)                          # left half: turned left
+        self.assertGreater(float(v[20, 50, 1]), 0.55)                       # right half: up
+        self.assertGreater(float(v[0, 0, 2]), 0.95)                         # no normal: facing the camera
+        self.assertTrue((px[..., 3] == 255).all())
+        # The node shows it as numbers (linear), the map's own colours, opaque.
+        comp["nodes"][1]["results"] = {"frames": placed["frames"], "keys": {}}
+        src = importlib.import_module(self.pkg + ".comp_io").Sources(comp_path)
+        try:
+            img = self.M.render_node(comp, "AI1", 1, src, 1.0)
+        finally:
+            src.close()
+        self.assertLess(abs(float(img[20, 5, 0]) - px[20, 5, 0] / 255), 0.01)
+        self.assertEqual(float(img[20, 5, 3]), 1.0)
 
     # ── a frame range as one job; picking the models ──
 

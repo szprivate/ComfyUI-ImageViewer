@@ -32,6 +32,7 @@ import * as OC from "./imageViewer_compOcio.js";
 import * as LT from "./imageViewer_compLight.js";
 import * as CH from "./imageViewer_compChannels.js";
 import * as G3 from "./imageViewer_comp3d.js";
+import * as RL from "./imageViewer_compRelight.js";
 import { sceneCameraSamples, focalFor, eulerOf } from "./imageViewer_compCamImport.js";
 import * as DP from "./imageViewer_compDeep.js";
 import * as PT from "./imageViewer_compPaint.js";
@@ -70,6 +71,7 @@ const ZD_DISC = (n) => n.filter !== "bladed";
 const ZD_BLADED = (n) => n.filter === "bladed";
 const ZD_CATA = (n) => n.filter === "bladed" && n.catadioptric === "on";
 const ZD_BLOOM = (n) => n.bloom === "on";
+const RL_MAP = (n) => n.normals === "from a layer" || n.normals === "normals input";
 
 export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
@@ -383,6 +385,28 @@ export const NODE_TYPES = {
         bounces: { kind: "int", def: 5, min: 1, max: 32, only: (n) => n.renderer === "path traced", help: "Path traced: how often a ray bounces" },
         depth: { kind: "enum", def: "depth.z", choices: G3.DEPTH_OUT, help: "depth.z: the distance to the nearest surface goes into the depth.z channel (0: nothing)" },
     } },
+    // A picture lit again in 2.5D (imageViewer_compRelight.js): its normals - from its depth, a layer or a normal
+    // map wired into "normals" - and the Light nodes wired into "lights" (none: its own key light).
+    relight: { label: "Relight", cat: "3D", inputs: ["src", "lights", "camera", "normals"], params: {
+        mode: { kind: "enum", def: "add light", choices: RL.RELIGHT_MODES, help: "add light: the light laid on top of the picture; relight: the picture taken as the surface's colour, lit by these lights alone" },
+        output: { kind: "enum", def: "result", choices: RL.RELIGHT_OUTPUTS, label: "result", help: "light only: just the light the node adds; normals: the normals it lit with (camera space, as a normal map)" },
+        gain: { kind: "num", def: 1, min: 0, key: true, step: 0.05, help: "All the light times this" },
+        normals: { kind: "enum", def: "from depth", choices: RL.RELIGHT_NORMALS, help: "Where the surface's directions come from: the depth channel, a layer of the picture, or a normal map wired into normals (AI Normals makes one)" },
+        layer: { kind: "layer", def: "rgba", only: (n) => n.normals === "from a layer", help: "The layer holding the normals (x y z, or r g b)" },
+        space: { kind: "enum", def: "camera", choices: RL.RELIGHT_SPACES, only: RL_MAP, help: "camera: x right, y up, z towards the camera (AI Normals); world: the scene's axes" },
+        encoding: { kind: "enum", def: "0..1", choices: RL.RELIGHT_ENCODINGS, only: RL_MAP, help: "0..1: a normal map's colours (0.5 is no tilt); -1..1: the vectors as they are" },
+        green: { kind: "enum", def: "up", choices: RL.RELIGHT_GREEN, only: RL_MAP, help: "down: a map whose green points down the picture (DirectX's convention)" },
+        depth_channel: { kind: "chan", def: "depth.z", label: "depth", help: "Where the picture holds its depth: it places each pixel for point and spot lights and, from depth, gives the normals. None there: a flat card" },
+        depth_mode: { kind: "enum", def: "distance", choices: G3.DEPTH_MODES, label: "depth is", help: "distance: along the camera's view; inverse: 1 / distance (AI Depth's maps, near white, read best this way)" },
+        multiply: { kind: "num", def: 1, min: 0.0001, key: true, step: 0.01, help: "The depth times this (inverse: this over the depth); where there is none, the distance taken" },
+        smooth: { kind: "num", def: 2, min: 0, max: 50, key: true, step: 0.5, only: (n) => (n.normals || "from depth") === "from depth", help: "From depth: the depth blurred by this many pixels first (less grain in the normals)" },
+        wrap: { kind: "num", def: 0, min: 0, max: 1, key: true, step: 0.05, help: "Light reaching round the edge: 0 hard, 1 half lit at right angles" },
+        specular: { kind: "num", def: 0, min: 0, key: true, step: 0.05, help: "A highlight where the surface mirrors the light towards the camera" },
+        shininess: { kind: "num", def: 32, min: 1, max: 2000, key: true, step: 1, only: (n) => n.specular > 0, help: "How tight the highlight is" },
+        key_direction: { kind: "vec3", def: [-0.5, 0.6, 0.6], key: true, step: 0.05, label: "key direction", help: "No Light wired into lights: the node's own light comes from this direction (camera space: x right, y up, z towards the camera)" },
+        key_color: { kind: "color", def: [1, 1, 1, 1], key: true, label: "key colour" },
+        key_intensity: { kind: "num", def: 0.5, min: 0, key: true, step: 0.05, label: "key intensity" },
+    } },
     // ── deep (imageViewer_compDeep.js): any number of samples a pixel; viewed, a deep node shows itself flattened ──
     deepread: { label: "DeepRead", cat: "Deep", inputs: [], params: {
         file: { kind: "file", def: "" },
@@ -495,7 +519,7 @@ export const NODE_TYPES = {
  */
 export const MASKABLE = new Set(["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
     "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer", "chromakeyer",
-    "keyer", "motionblur", "depthblur", "defocus", "zdefocus"]);
+    "keyer", "motionblur", "depthblur", "defocus", "zdefocus", "relight"]);
 /** MASKABLE nodes whose own arithmetic already takes `mix` (the mask stage then does not apply it twice). */
 export const OWN_MIX = new Set([...MASKABLE].filter((t) => NODE_TYPES[t].params.mix));
 for (const t of MASKABLE) maskable(t);
@@ -2193,6 +2217,15 @@ export function renderNode(comp, id, frame, ctx) {
         }
         return [];
     };
+    // The Light nodes node `nid` brings (a Light, or a Scene holding them): their light objects, as sceneOf makes them.
+    const lightsOf = (nid, f, depth) => {
+        const n = nid && depth < 256 ? viewNode(nodeById(comp, nid), view) : null;
+        if (!n || n.disable) return [];
+        if (n.type === "scene3d") return [].concat(...n.inputs.map((s) => lightsOf(s, f, depth + 1)));
+        if (n.type !== "light3d") return [];
+        const p = P3(n, f);
+        return [{ kind: "light", id: n.id, type: p.light, color: p.color, intensity: p.intensity, cone: p.cone, world: G3.trs(p.translate, p.rotate, [1, 1, 1]) }];
+    };
     const render3d = (n, f, d1) => {
         const objs = sceneOf(n.inputs[0], f, d1), cam = cameraOf(n.inputs[1], f, W, H, true), ns = paramAt(n, "samples", f);
         // The 3D space's renderer when the page has one ready (ctx.engine3d); Comp's own otherwise, which draws
@@ -2435,6 +2468,14 @@ export function renderNode(comp, id, frame, ctx) {
             if (!z) return src;
             p.size *= scale; p.maximum *= scale;
             return O.zDefocusImage(src, z, p);
+        }
+        case "relight": {
+            const src = run(n.inputs[0], f, d1), sex = exOf(n.inputs[0], f);
+            const p = {};
+            for (const k of Object.keys(NODE_TYPES.relight.params)) p[k] = paramAt(n, k, f);
+            const depth = CH.channelOf(src, sex, p.depth_channel || "depth.z");
+            const normals = p.normals === "normals input" && n.inputs[3] ? conform(run(n.inputs[3], f, d1), src.w, src.h) : null;
+            return RL.relightImage(src, sex, { cam: cameraOf(n.inputs[2], f, src.w, src.h, false), lights: lightsOf(n.inputs[1], f, d1), depth, normals, scale }, p);
         }
         case "camera3d": case "card3d": case "geo3d": case "scene3d": case "pointcloud": case "scenefile3d": case "light3d": {
             // Geometry on its own: seen through the comp's first Camera, as Render3D would draw it.

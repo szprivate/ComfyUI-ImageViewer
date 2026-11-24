@@ -1,4 +1,4 @@
-"""Comp's AI nodes (matte, depth, inpaint, upscale): frames through a ComfyUI workflow.
+"""Comp's AI nodes (matte, depth, normals, inpaint, upscale): frames through a ComfyUI workflow.
 
 Each node has a short list of workflows of its own (``comp_ai_workflows/index.json``): the ones that suit its
 task on a film's frames, some of them Paint's Generate built-ins (the background removers, the masked fills, the
@@ -15,7 +15,9 @@ needs to lay the answer back. The page queues the graphs; ``place`` writes the a
 What each node asks for: matte = background removal (its matte), depth = a depth map (near white), inpaint =
 fill (with words) or remove (without), upscale = the upscalers. A depth workflow answers the model's own depth as
 a float EXR; the frames of one job are brought to 0..1 together (``depth_maps``: near = 1, the 1st and 99th
-percentile of all of them), so the map does not pump from frame to frame, and written as 16-bit PNGs.
+percentile of all of them), so the map does not pump from frame to frame, and written as 16-bit PNGs. A normals
+workflow answers a normal map (camera space: x right, y up, z towards the camera, 0..1) as a float EXR; each
+normal is made unit length again at the picture's size and written as an 8-bit PNG (``normal_map``).
 
 A frame range is ONE ComfyUI job (``prepare_batch``): every frame's input is rendered and filled into the workflow
 as for one frame, then the per-frame graphs are laid into one prompt (``merge_graphs``) in which every node that is
@@ -43,7 +45,7 @@ from . import comp_model as M
 from . import paint_generate as G
 from . import paint_io as P
 
-AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
+AI_KINDS = {"ai_matte": "matte", "ai_depth": "depth", "ai_normals": "normals", "ai_inpaint": "inpaint", "ai_upscale": "upscale"}
 DEPTH_LOW, DEPTH_HIGH = 1.0, 99.0     # percentiles of a job's depth that become far (0) and near (1)
 MAX_JOBS = 8
 MAX_BATCH_FRAMES = 1000
@@ -64,6 +66,8 @@ def action_of(kind, prompt):
         return "background", ""
     if kind == "depth":
         return "depth", ""
+    if kind == "normals":
+        return "normals", ""
     if kind == "inpaint":
         return ("fill", words) if words else ("remove", "")
     if kind == "upscale":
@@ -177,7 +181,7 @@ def prepare(comp, comp_path, node_id, frame, sources, input_dir, *, ocio=None, w
     pic, sel = _frame_input(comp, kind, ins, f, sources, ocio)
     h, w = pic.shape[:2]
     wid = wid or n.get("workflow") or None
-    if kind == "depth":
+    if kind in ("depth", "normals"):
         wid = pick_workflow(kind, "", wid, node_classes)
     res, action, k = _generate(kind, n, pic, sel, input_dir, wid=wid, graph=graph,
                                tune=tune, models=_node_models(n, models), folder_paths=folder_paths,
@@ -413,6 +417,39 @@ def depth_maps(depths):
     return out
 
 
+def read_normals(path):
+    """A normals workflow's answer as float32 [H, W, 3], a normal map's 0..1 colours (x right, y up, z towards the
+    camera): a float EXR as ComfyUI wrote it (PyAV), or a picture (8 or 16 bits)."""
+    if not str(path).lower().endswith(".exr"):
+        px = P.image_pixels(path)[..., :3].astype(np.float32)
+        return px / (65535.0 if px.max(initial=0) > 255 else 255.0)
+    import av
+    with open(path, "rb") as fh:
+        data = fh.read()
+    frames = av.CodecContext.create("exr", "r").decode(av.Packet(data))
+    if not frames:
+        raise AiError(f"{os.path.basename(path)} could not be read")
+    f = frames[0]
+    if f.format.name.startswith("gray"):
+        raise AiError(f"{os.path.basename(path)} holds one channel, not a normal map")
+    a = f.to_ndarray(format="gbrpf32le").astype(np.float32)   # PyAV hands the planes back as r g b
+    return np.nan_to_num(a[..., :3], nan=0.5, posinf=1.0, neginf=0.0)
+
+
+def normal_map(rgb, w, h):
+    """A normal map (float 0..1 [H, W, 3]) at w x h, every normal made unit length again (a resize shortens them;
+    none at all - a model's masked sky - faces the camera), as 8-bit RGBA, opaque."""
+    chans = [_fit_float(np.ascontiguousarray(rgb[..., c], dtype=np.float32), w, h) for c in range(3)]
+    v = np.stack(chans, axis=-1).astype(np.float64) * 2.0 - 1.0
+    ln = np.sqrt((v * v).sum(axis=-1, keepdims=True))
+    ok = ln > 1e-6
+    v = np.where(ok, v / np.where(ok, ln, 1.0), np.array([0.0, 0.0, 1.0]))
+    out = np.empty((h, w, 4), np.uint8)
+    out[..., :3] = np.clip((v * 0.5 + 0.5) * 255.0 + 0.5, 0, 255).astype(np.uint8)
+    out[..., 3] = 255
+    return out
+
+
 def _answer(rec, px, plate=None):
     """The workflow's picture as the node's result for one frame (uint8)."""
     w, h, kind = rec["w"], rec["h"], rec["kind"]
@@ -455,6 +492,8 @@ def place(job, result_path):
         raise AiError("that run is no longer known (the server restarted?) - run it again")
     if rec["kind"] == "depth":
         out = depth_maps([_fit_float(read_depth(result_path, rec.get("near")), rec["w"], rec["h"])])[0]
+    elif rec["kind"] == "normals":
+        out = normal_map(read_normals(result_path), rec["w"], rec["h"])
     else:
         out = _answer(rec, P.image_pixels(result_path))
     path, rel = result_name(rec["comp"], rec["node"], rec["kind"], rec["frame"], job[:6])
@@ -493,6 +532,8 @@ def place_batch(run, results):
     for i, (f, src, per) in enumerate(todo):
         if outs is not None:
             out = outs[i]
+        elif rec["kind"] == "normals":
+            out = normal_map(read_normals(src), per["w"], per["h"])
         else:
             one = dict(per, kind=rec["kind"])
             plate = P.image_pixels(per["plate"]) if per.get("plate") else None

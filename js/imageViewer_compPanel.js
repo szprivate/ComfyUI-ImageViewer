@@ -1039,7 +1039,7 @@ export const CompPanelMixin = {
             const named = hit.length ? hit : nodes.filter((n) => n.name === want);
             if (named.length !== 1) throw new Error(named.length ? `${named.length} nodes are named ${want}: use the id` : `no node ${want}`);
             const node = named[0];
-            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_inpaint, ai_upscale, ai_workflow)`);
+            if (!C.EX.AI_KINDS[node.type]) throw new Error(`${want} is a ${node.type}, not an AI node (ai_matte, ai_depth, ai_normals, ai_inpaint, ai_upscale, ai_workflow)`);
             const fmt = ed.comp().format || {};
             const count = Math.max(1, Math.round(fmt.frames || 1));
             const first = Number.isInteger(args.first) ? Math.min(args.first, count - 1) : 0;

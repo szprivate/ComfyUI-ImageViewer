@@ -246,6 +246,41 @@ def cases():
     c.append(({"comp": comp([read(1, colorspace="linear"), out("Read1")])}, straight))
     c.extend(new_node_cases(sources))
     c.extend(paint_cases(sources))
+    c.extend(relight_cases(sources))
+    return c
+
+
+def relight_cases(sources):
+    """Relight: normals from depth (smoothed or not, distance or inverse, none = a flat card), from a layer, from a
+    normal map wired in (camera / world space, 0..1 / -1..1, green down); its own key light, Light nodes of every
+    type through a Scene, a camera; add / relight, light only, the normals, a highlight, wrap; mask and mix."""
+    N = node
+    c = []
+    zdepth = lambda: N("lumakeyer", 1, ["Read1"], write="depth.z", low=0.1)
+    one = lambda rl, extra=(), **kw: (dict({"comp": comp([read(1), read(2), zdepth(), *extra, rl, out(rl["id"])])}, **kw), sources)
+    c.append(one(N("relight", 1, ["lumakeyer1"])))
+    c.append(one(N("relight", 1, ["Read1"])))                       # no depth: a flat card
+    c.append(one(N("relight", 1, ["lumakeyer1"], smooth=0, depth_mode="inverse", multiply=0.7, specular=0.6, shininess=12, wrap=0.3,
+                   key_direction=[0.4, -0.2, 0.8], key_color=[1, 0.6, 0.3, 1], key_intensity=1.3, gain=0.8)))
+    c.append(one(N("relight", 1, ["lumakeyer1"], output="normals")))
+    c.append(one(N("relight", 1, ["lumakeyer1"], output="light only", smooth=3.5)))
+    lights = [N("light3d", 1, [], light="point", translate=[0.4, 0.9, 2.2], color=[1, 0.8, 0.6, 1], intensity=1.2),
+              N("light3d", 2, [], light="spot", translate=[-0.6, 0.3, 1.9], rotate=[-8, -14, 0], cone=12, intensity=2),
+              N("light3d", 3, [], light="directional", rotate=[-35, 25, 0], intensity=0.6, color=[0.5, 0.7, 1, 1]),
+              N("light3d", 4, [], light="ambient", intensity=0.15),
+              N("scene3d", 1, ["light3d1", "light3d2", "light3d3", "light3d4"]),
+              N("camera3d", 1, [], translate=[0.05, -0.02, 2.3], rotate=[2, -3, 1], focal=42)]
+    c.append(one(N("relight", 1, ["lumakeyer1", "scene3d1", "camera3d1"], mode="relight", specular=0.4, smooth=1.5), lights))
+    c.append(one(N("relight", 1, ["lumakeyer1", "light3d2", "camera3d1"], multiply=1.4), lights))
+    # normals from a normal map wired in, and from a layer
+    for kw in ({}, {"space": "world"}, {"encoding": "-1..1", "green": "down"}):
+        c.append(one(N("relight", 1, ["lumakeyer1", "scene3d1", "camera3d1", "Read2"], normals="normals input", specular=0.3, **kw), lights))
+    nl = N("shuffle", 1, ["lumakeyer1", "Read2"], in2="rgba", out2="N", route={"N.r": "A:r", "N.g": "A:g", "N.b": "A:b"})
+    c.append(one(N("relight", 1, ["shuffle1", "light3d1"], normals="from a layer", layer="N"), lights + [nl]))
+    c.append(one(N("relight", 1, ["Read2", "light3d1"], normals="from a layer", layer="rgba"), lights))
+    # masked, mixed, at a proxy scale
+    c.append(one(N("relight", 1, ["lumakeyer1", None, None, None, "Read2"], mix=0.6, mask_channel="g", smooth=4)))
+    c.append(one(N("relight", 1, ["lumakeyer1"], smooth=4), scale=0.5))
     return c
 
 
