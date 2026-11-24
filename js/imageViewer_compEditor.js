@@ -380,11 +380,14 @@ export function createCompEditor(host, opts = {}) {
     const luts = new Map(), lutAsk = new Map();
     const LUT_RETRY_MS = 15000;
     const lutOf = (spec) => { const e = luts.get(C.OC.ocioKey(spec)); return (e && e.lut) || null; };
-    // st.display: "" plain sRGB, "<display>\u0001<view>", or "\u0002<colourspace>" (the working space into it, shown as is).
+    // st.display: "" the plain sRGB curve, or "\u0003<colourspace>": the picture's values read as that colourspace
+    // and shown through the config's sRGB output (st.ocio.srgb - the viewer's own rule, color_io), as the
+    // viewer's colour menu does. Anything else (an older save naming a display / view) is the plain curve.
     const displaySpec = () => {
-        if (!st.display) return null;
-        if (st.display[0] === "\u0002") return { src: "", dst: st.display.slice(1) };
-        const [display, view] = st.display.split("\u0001"); return { src: "", display, view };
+        if (!st.display || st.display[0] !== "\u0003") return null;
+        const info = st.ocio && !st.ocio.then ? st.ocio : null;
+        const out = (info && info.srgb) || { display: "*", view: "*" };
+        return Object.assign({ src: st.display.slice(1) }, out);
     };
     async function needLuts(specs) {
         if (!o.ocioLut) return;
@@ -802,31 +805,27 @@ export function createCompEditor(host, opts = {}) {
     }
     /** What the picture on show has, for the channel menu (each draw). */
     function fillLook(chans) { lastChans = chans; paintLook(); }
-    /** The display menu: plain sRGB; each display's views (ACES output transforms among them), grouped by
-     *  display; then the config's colourspaces - the picture taken from the working space into one (ACEScg,
-     *  ACES2065-1, ACEScct ...) and shown as its values are. */
+    /** The colour menu: what the picture's values are - the plain sRGB curve, or one of the config's colourspaces
+     *  (the working space first, then the ACES ones) - always shown on sRGB. */
     function fillDisplay(sel) {
-        const info = st.ocio, short = (d) => String(d).replace(/\s*-\s*Display$/i, "");
-        sel.append(new Option("sRGB (plain)", ""));
-        for (const d of info.displays) {
-            const g = el(doc, "optgroup");
-            g.label = d.name;
-            for (const v of d.views) g.append(new Option(`${short(d.name)} · ${v}`, `${d.name}\u0001${v}`));
-            sel.append(g);
-        }
+        const info = st.ocio;
+        sel.append(new Option("sRGB curve (plain)", ""));
         const names = (info.colorspaces || []).map((c) => c.name);
         if (names.length) {
             const g = el(doc, "optgroup");
-            g.label = "Colourspace (values as they are)";
-            const aces = names.filter((n) => /aces/i.test(n)), rest = names.filter((n) => !/aces/i.test(n));
-            for (const n of aces.concat(rest)) g.append(new Option(n, `\u0002${n}`));
+            g.label = "Input colourspace → sRGB";
+            const first = names.includes(info.working) ? [info.working] : [];
+            const aces = names.filter((n) => /aces/i.test(n) && !first.includes(n));
+            const rest = names.filter((n) => !first.includes(n) && !aces.includes(n));
+            for (const n of first.concat(aces, rest)) g.append(new Option(n === info.working ? `${n} (working)` : n, `\u0003${n}`));
             sel.append(g);
         }
         const known = [...sel.options].some((x) => x.value === st.display);
         sel.value = known ? st.display : "";
         const shown = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : "";
-        sel.title = `How the picture is shown${shown ? ` (now: ${shown})` : ""}: plain sRGB, a display and view of the OCIO config, `
-            + `or the picture in one of its colourspaces. Config: ${info.source}${info.path ? ` (${info.path})` : ""}; working space ${info.working}`;
+        const out = info.srgb ? (info.srgb.display ? `${info.srgb.display} · ${info.srgb.view}` : info.srgb.dst) : "sRGB";
+        sel.title = `What the picture's values are${shown ? ` (now: ${shown})` : ""}: the plain sRGB curve, or a colourspace of the OCIO config, `
+            + `shown on ${out}. Config: ${info.source}${info.path ? ` (${info.path})` : ""}; working space ${info.working}`;
     }
     let lastDirty = null;
     function renderBar() {
@@ -4337,6 +4336,8 @@ export function createCompEditor(host, opts = {}) {
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
         renderAhead: () => { if (ahead) { clearTimeout(ahead.t); ahead.stop = true; } const job = { stop: false, gen: renderGen, t: 0 }; ahead = job; return aheadRun(job); },
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
+        /** The OCIO transform the picture is shown through (null: the plain sRGB curve). */
+        displaySpec: () => displaySpec(),
         /** The OCIO config changed (Settings): its lists asked again, every baked transform forgotten. */
         reloadOcio: () => {
             luts.clear(); lutAsk.clear();

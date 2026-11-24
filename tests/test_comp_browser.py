@@ -1706,16 +1706,16 @@ class CompBrowserTests(unittest.TestCase):
         # A display and view of the config in the bar: the picture is drawn through its LUT.
         bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
         self.assertTrue(any(n > 2 for n in bar), bar)
-        # A mid grey (linear 0.18) shown plainly, then through a display / view that is not the plain sRGB curve.
+        # A mid grey (linear 0.18) shown plainly, then read as ACEScg and shown on the config's sRGB output.
         pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes = e.comp().nodes.filter((n) => n.type !== 'ocio_colorspace'); const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.18, 0.18, 0.18, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(500)
         plain = self.pixel(pg, 0.5, 0.5)
-        views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)').options).map((o) => o.value)")
-        pick = next(v for v in views if v and "ACES" in v and "sRGB" in v.split("\u0001")[0])
+        views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB curve (plain)').options).map((o) => o.value)")
+        pick = next(v for v in views if v.startswith("\u0003") and "ACEScg" in v)
         # The bake is slow the first time (an ACES config reads its LUT files): redraws asked for meanwhile wait
         # for the same answer - once they drew the plain picture and the menu seemed to do nothing.
         pg.evaluate("() => { const was = __panel._cpOcioLut.bind(__panel); __panel._cpOcioLut = async (spec) => { await new Promise((r) => setTimeout(r, 700)); return was(spec); }; }")
-        pg.evaluate("(v) => { const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB (plain)'); s.value = v; s.dispatchEvent(new Event('change')); }", pick)
+        pg.evaluate("(v) => { const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB curve (plain)'); s.value = v; s.dispatchEvent(new Event('change')); }", pick)
         for _ in range(4):
             pg.wait_for_timeout(120)
             pg.evaluate(f"() => {self.ED}.refresh()")
@@ -1741,19 +1741,19 @@ class CompBrowserTests(unittest.TestCase):
                 options: [...sel.options].map((o) => [o.textContent, o.value]) }}; }}""")
         self.assertEqual(st["disp"], st["exp"] + 1, st)
         self.assertLess(st["chan"], st["exp"], st)
-        self.assertEqual(st["groups"], ["sRGB - Display", "Colourspace (values as they are)"])
-        labels = [o[0] for o in st["options"]]
-        self.assertIn("sRGB · ACES 2.0 - SDR 100 nits (Rec.709)", labels)
-        self.assertIn("ACEScg", labels)
-        # The ACES spaces lead the colourspaces.
-        self.assertLess(labels.index("ACEScg"), labels.index("sRGB Encoded Rec.709 (sRGB)"))
-        # A colourspace picked: the picture is taken into it (a {dst} transform).
-        spec = pg.evaluate(f"""() => {{ const sel = {BAR}.querySelector('.cp-display'); sel.value = '\\u0002ACEScg';
-            sel.dispatchEvent(new Event('change')); return {self.ED}.state.display; }}""")
-        self.assertEqual(spec, "\u0002ACEScg")
+        self.assertEqual(st["groups"], ["Input colourspace → sRGB"])
+        values = [o[1] for o in st["options"]]
+        self.assertEqual(values[:3], ["", "\u0003ACEScg", "\u0003ACES2065-1"], st)     # the working space, then the ACES ones
+        self.assertIn("ACEScg (working)", [o[0] for o in st["options"]])
+        # A colourspace picked: the picture read as it and shown on the config's sRGB output - never the other way.
+        spec = pg.evaluate(f"""() => {{ const e = {self.ED}; e.state.ocio.srgb = {{ display: 'sRGB - Display', view: 'ACES 2.0 - SDR 100 nits (Rec.709)' }};
+            const sel = {BAR}.querySelector('.cp-display'); sel.value = '\\u0003ACES2065-1';
+            sel.dispatchEvent(new Event('change')); return [e.state.display, e.displaySpec ? e.displaySpec() : null]; }}""")
+        self.assertEqual(spec[0], "\u0003ACES2065-1")
+        self.assertEqual(spec[1], {"src": "ACES2065-1", "display": "sRGB - Display", "view": "ACES 2.0 - SDR 100 nits (Rec.709)"})
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
-            pg.evaluate(f"() => {{ const e = {self.ED}; e.state.display = 'sRGB - Display\\u0001ACES 2.0 - SDR 100 nits (Rec.709)'; e.addNode('grade', {{}}); }}")
+            pg.evaluate(f"() => {{ const e = {self.ED}; e.state.display = '\\u0003ACEScg'; e.addNode('grade', {{}}); }}")
             pg.wait_for_timeout(400)
             top = pg.evaluate("() => __panel.shadowRoot.querySelector('.tab').getBoundingClientRect().top")
             bot = pg.evaluate(f"() => {BAR}.getBoundingClientRect().bottom")

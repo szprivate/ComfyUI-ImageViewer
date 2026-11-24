@@ -55,7 +55,10 @@ def info():
             displays.append({"name": d, "views": list(cfg.getViews(d)), "default": cfg.getDefaultView(d)})
     except Exception:  # noqa: BLE001 - a v1 config without displays still converts colourspaces
         pass
-    return {"available": True, "source": st["source"], "working": st["linear"],
+    # The viewer's one output (color_io): the config's sRGB display with its default view on v2, else its
+    # sRGB output colourspace. The bar's menu picks the INPUT colourspace and always shows through this.
+    srgb = {"display": st["view"][0], "view": st["view"][1]} if st.get("view") else {"dst": st["target"]}
+    return {"available": True, "source": st["source"], "working": st["linear"], "srgb": srgb,
             "colorspaces": [{"name": n, "family": st["families"].get(n, "")} for n in st["names"]],
             "displays": displays, "default_display": displays[0]["name"] if displays else ""}
 

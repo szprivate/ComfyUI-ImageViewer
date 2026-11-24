@@ -86,6 +86,10 @@ class OcioConfig(unittest.TestCase):
         self.color_io.set_config("")
         names = [c["name"] for c in self.comp_ocio.info()["colorspaces"]]
         self.assertIn("ACEScg", names)
+        # The bar's one output: the sRGB display and its default view (the menu picks the input).
+        srgb = self.comp_ocio.info()["srgb"]
+        self.assertIn("srgb", srgb["display"].lower())
+        self.assertTrue(self.comp_ocio.resolve(dict({"src": "ACEScg"}, **srgb)))
         st, d = self.call("GET")
         self.assertEqual(st, 200)
         self.assertEqual(d["source"], "built-in")
