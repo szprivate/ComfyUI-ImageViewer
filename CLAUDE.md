@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A ComfyUI custom node pack whose real product is a **frontend viewer panel**: a floating, dockable image/video/3D viewer with tabs, history, comparison, playback, a file browser, drawing tools and a 3D previz tool. Python here is the thin half — four nodes and a set of `/imageviewer/*` HTTP routes; the JavaScript in `js/` is the thick half.
 
-`__init__.py` exports the nodes, imports `viewer_api` (which registers the routes as a side effect of import), and sets `WEB_DIRECTORY = "js"`, which is how ComfyUI serves the frontend from `/extensions/ComfyUI-ImageViewer/`.
+`__init__.py` exports the nodes, imports `viewer_api` (which registers the routes as a side effect of import), and sets `WEB_DIRECTORY = "js"`, which is how ComfyUI serves the frontend from `/extensions/ComfyUI-ImageViewer/`. ComfyUI's page imports EVERY .js file under `js/` as an extension at startup (a few hundred), so `__init__.py` first raises the process's soft open-file limit to 8192 when it is lower (`src/open_files.py`; macOS shells give 256, and the viewer's button vanished when serving ran out - Sebastian 2026-11-24; `IMAGE_VIEWER_KEEP_FILE_LIMIT=1` leaves it alone; never on Windows).
 
 The repository root holds only what the ComfyUI custom node layout needs there (`__init__.py`, `pyproject.toml`, `requirements.txt`, `js/`) plus `docs/`, `tests/` and `vendor/`. Every other Python module is in the `src/` package (`src/nodes.py`, `src/viewer_api.py`, ...) and imports its siblings relatively (`from . import timeline_io`); a module named below without a folder is in `src/`.
 
