@@ -747,6 +747,7 @@ export function createCompEditor(host, opts = {}) {
         if (which.includes("layers")) renderLayers();
         if (which.includes("stage")) { queueRender(); renderOverlay(); }
         if (curvesEl.isConnected && (which.includes("curves") || which.includes("props"))) curves().draw();
+        if (o.onKeys) o.onKeys();
     }
 
     // ── toolbar ──────────────────────────────────────────────────────────────
@@ -4352,6 +4353,16 @@ export function createCompEditor(host, opts = {}) {
         roomOn: () => !!st.room,
         roomSplit: () => !!st.roomSplit,
         setRoomSplit,
+        /** The frames that carry a key on the selected node(s), sorted: the main timeline's key ticks (none selected, none). */
+        keyFrames: () => {
+            const out = new Set();
+            for (const id of st.sel) {
+                const n = node(id);
+                if (!n || !n.tracks) continue;
+                for (const keys of Object.values(n.tracks)) for (const k of keys || []) if (Number.isFinite(k.f)) out.add(k.f);
+            }
+            return [...out].sort((a, b) => a - b);
+        },
         /** Forget every kept result (a source changed on disk). */
         clearCache: () => { heavy.clear(); heavy.__bytes = 0; frameKeys.clear(); if (o.onCache) o.onCache(); },
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */

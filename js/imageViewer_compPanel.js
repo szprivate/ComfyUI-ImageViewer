@@ -386,6 +386,7 @@ export const CompPanelMixin = {
         if (!this._cpOn) return;
         const st = this._cpState();
         this._cpOn = false;
+        this._cpKeyTicks();
         this.stop();
         if (this._cpSavedFps != null) { this._setFpsUi(this._cpSavedFps); this._cpSavedFps = null; }
         const endEl = this.container.querySelector("#total-f");
@@ -423,6 +424,34 @@ export const CompPanelMixin = {
         return c ? c.format.frames : 0;
     },
 
+    /** Key ticks on the main timeline for the selected node(s): only while a node is selected (Sebastian 2026-11-24). */
+    _cpKeyTicks() {
+        const host = this.container && this.container.querySelector("#kf-ticks");
+        if (!host) return;
+        const rec = this._cpOn ? this._cpActive() : null;
+        const ed = rec && rec.editor;
+        if (!ed) {
+            if (host.dataset.owner === "comp") { host.innerHTML = ""; delete host.dataset.owner; }
+            return;
+        }
+        host.dataset.owner = "comp";
+        host.innerHTML = "";
+        const frames = ed.keyFrames();
+        const bounds = this.getTimelineBounds();
+        const span = Math.max(1, bounds.max - bounds.min);
+        const cur = Math.round(this.currentFrame || 0);
+        const doc = host.ownerDocument;
+        for (const f of frames) {
+            if (f < bounds.min || f > bounds.max) continue;
+            const tick = doc.createElement("div");
+            tick.className = "kf-tick" + (f === cur ? " cur" : "");
+            tick.style.left = `${((f - bounds.min) / span) * 100}%`;
+            tick.title = `Key at frame ${f} — click to go there`;
+            tick.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); this.stop(); this.setFrame(f); };
+            host.appendChild(tick);
+        }
+    },
+
     _cpSetFrame(idx) {
         const rec = this._cpActive();
         const ed = rec && rec.editor;
@@ -433,6 +462,7 @@ export const CompPanelMixin = {
         const cur = this.container.querySelector("#cur-f");
         if (cur) cur.innerText = f;
         if (ed && ed.state.frame !== f) ed.setFrame(f, { fromHost: true });
+        this._cpKeyTicks();
     },
 
     _cpSyncBar() {
@@ -597,7 +627,8 @@ export const CompPanelMixin = {
             onComp: () => { if (this.activeTab === key) this._cpSyncBar(); },
             onDirty: (dirty) => this._cpTabDirty(key, dirty),
             showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("params")) this.setPanelDocked("params", true); else if (this.dockTabFront) this.dockTabFront("params"); },
-            onSelect: (n) => { if (this.activeTab === key) this._cpParamsTitle(n || null); },
+            onSelect: (n) => { if (this.activeTab === key) { this._cpParamsTitle(n || null); this._cpKeyTicks(); } },
+            onKeys: () => { if (this.activeTab === key) this._cpKeyTicks(); },
             // The Roto node is the viewer's Roto tool's (imageViewer_compRoto.js).
             roto: {
                 mount: (n, slot) => { if (this.activeTab === key) this._cpRotoMount(rec, n, slot); },
