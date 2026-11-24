@@ -652,7 +652,7 @@ def proxy_for_colorspace(path, colorspace, ev=0.0):
     import numpy as np
     from PIL import Image
     ev = 0.0 if identity else _ev(ev)
-    key = "srgb" if identity else hashlib.sha1(colorspace.encode("utf-8", "replace")).hexdigest()[:10]
+    key = "srgb" if identity else hashlib.sha1((colorspace + "|" + color_io.config_tag()).encode("utf-8", "replace")).hexdigest()[:10]
     if ev:
         key += "e%d" % round(ev * 10)
     base = os.path.splitext(_cache_path(path, "cs" + key))[0]

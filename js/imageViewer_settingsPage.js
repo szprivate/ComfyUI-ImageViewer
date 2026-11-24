@@ -36,6 +36,8 @@ export const LAYOUT = [
              note: "For a shot that has never been rendered. A shot keeps what its render dialog last used." } },
     { key: "paint", title: "Paint: Generate workflows", family: "models",
       rows: ["paintWorkflows"] },
+    { key: "comp", title: "Comp", family: "canvas",
+      rows: ["ocioConfig"] },
     { key: "experimental", title: "Experimental", family: "safety", adv: true,
       rows: ["atlasMove"] },
 ];

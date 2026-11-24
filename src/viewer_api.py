@@ -3507,6 +3507,29 @@ try:
             out.update(editable=True, reason="")
             return web.json_response(out)
 
+        async def _imageviewer_ocio_config(request):
+            """The OCIO config the viewer and Comp use (Settings -> ComfyUI Image Viewer -> Comp):
+            GET what is in use; POST {config} picks a .ocio file or a built-in ``ocio://`` config
+            ("" goes back to $OCIO / the built-in one). The POST makes the server read a file,
+            so it is fenced by path_access.may_edit like the folder list; only the config's
+            colourspace names ever reach the page."""
+            from . import color_io
+            loop = asyncio.get_running_loop()
+            editable, reason = path_access.may_edit(request)
+            if request.method == "POST":
+                if not editable:
+                    return web.json_response({"error": reason}, status=403)
+                try:
+                    body = await request.json()
+                    await loop.run_in_executor(None, color_io.set_config, (body or {}).get("config", ""))
+                except ValueError as e:
+                    return web.json_response({"error": str(e)}, status=400)
+                except OSError as e:
+                    return web.json_response({"error": f"could not keep the choice: {e}"}, status=500)
+            out = await loop.run_in_executor(None, color_io.config_state)
+            out.update(editable=editable, reason=reason)
+            return web.json_response(out, headers={"Cache-Control": "no-cache"})
+
         async def _imageviewer_roots_folders(request):
             """Sub-folders of a path, for the settings page's folder picker.
             Looks outside the allowed folders — that is its job — so it is
@@ -3709,6 +3732,10 @@ try:
         _safe_add("POST", "/imageviewer/roots", _imageviewer_roots_save)
         _safe_add("POST", "/api/imageviewer/roots", _imageviewer_roots_save)
         _safe_add("POST", "/imageviewer/roots/folders", _imageviewer_roots_folders)
+        _safe_add("GET", "/imageviewer/ocio_config", _imageviewer_ocio_config)
+        _safe_add("GET", "/api/imageviewer/ocio_config", _imageviewer_ocio_config)
+        _safe_add("POST", "/imageviewer/ocio_config", _imageviewer_ocio_config)
+        _safe_add("POST", "/api/imageviewer/ocio_config", _imageviewer_ocio_config)
         _safe_add("POST", "/api/imageviewer/roots/folders", _imageviewer_roots_folders)
         # Paint: a picture in layers (paint_routes.py; paint_io / paint_ops / paint_math).
         try:

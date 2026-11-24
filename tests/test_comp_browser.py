@@ -1689,7 +1689,8 @@ class CompBrowserTests(unittest.TestCase):
         pg.wait_for_function(f"() => {self.ED}.state.ocio && {self.ED}.state.ocio.available", timeout=10000)
         pg.evaluate(f"() => {{ {self.ED}.select(['Constant1']); {self.ED}.addNode('ocio_colorspace'); }}")
         P = "__panel.compPropsPanel"
-        opts = pg.evaluate(f"() => Array.from({P}.querySelectorAll('select')[0].options).map((o) => o.value)")
+        # The colourspace menu (the node's first selects are its channel rows now).
+        opts = pg.evaluate(f"() => (Array.from({P}.querySelectorAll('select')).map((s) => Array.from(s.options).map((o) => o.value)).find((v) => v.includes('ACEScg')) || [])")
         self.assertIn("ACEScct", opts)
         # A display and view of the config in the bar: the picture is drawn through its LUT.
         bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
@@ -1713,6 +1714,54 @@ class CompBrowserTests(unittest.TestCase):
             pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
         self.assertEqual(self.errors, [])
 
+    def test_the_ocio_menu_sits_right_of_the_exposure_and_offers_aces(self):
+        pg = self.page()
+        self.new_comp(pg)
+        BAR = f"{self.ED}.stage.closest('.cp-root').querySelector('.mg-bar')"
+        st = pg.evaluate(f"""() => {{ const e = {self.ED};
+            e.state.ocio = {{ available: true, source: 'built-in', working: 'ACEScg',
+                displays: [{{ name: 'sRGB - Display', views: ['ACES 2.0 - SDR 100 nits (Rec.709)', 'Un-tone-mapped', 'Raw'] }}],
+                colorspaces: [{{ name: 'sRGB Encoded Rec.709 (sRGB)' }}, {{ name: 'ACES2065-1' }}, {{ name: 'ACEScg' }}, {{ name: 'Raw' }}] }};
+            e.refresh();
+            const kids = [...{BAR}.children], at = (s) => kids.findIndex((x) => x.matches(s));
+            const sel = {BAR}.querySelector('.cp-display');
+            return {{ exp: at('.cp-exp'), disp: at('.cp-display'), chan: at('.cp-chan'),
+                groups: [...sel.querySelectorAll('optgroup')].map((g) => g.label),
+                options: [...sel.options].map((o) => [o.textContent, o.value]) }}; }}""")
+        self.assertEqual(st["disp"], st["exp"] + 1, st)
+        self.assertLess(st["chan"], st["exp"], st)
+        self.assertEqual(st["groups"], ["sRGB - Display", "Colourspace (values as they are)"])
+        labels = [o[0] for o in st["options"]]
+        self.assertIn("sRGB · ACES 2.0 - SDR 100 nits (Rec.709)", labels)
+        self.assertIn("ACEScg", labels)
+        # The ACES spaces lead the colourspaces.
+        self.assertLess(labels.index("ACEScg"), labels.index("sRGB Encoded Rec.709 (sRGB)"))
+        # A colourspace picked: the picture is taken into it (a {dst} transform).
+        spec = pg.evaluate(f"""() => {{ const sel = {BAR}.querySelector('.cp-display'); sel.value = '\\u0002ACEScg';
+            sel.dispatchEvent(new Event('change')); return {self.ED}.state.display; }}""")
+        self.assertEqual(spec, "\u0002ACEScg")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.evaluate(f"() => {{ const e = {self.ED}; e.state.display = 'sRGB - Display\\u0001ACES 2.0 - SDR 100 nits (Rec.709)'; e.addNode('grade', {{}}); }}")
+            pg.wait_for_timeout(400)
+            top = pg.evaluate("() => __panel.shadowRoot.querySelector('.tab').getBoundingClientRect().top")
+            bot = pg.evaluate(f"() => {BAR}.getBoundingClientRect().bottom")
+            pg.screenshot(path=os.path.join(SHOTS, "comp-bar-ocio.png"), clip={"x": 0, "y": max(0, top - 4), "width": 1500, "height": bot - top + 8})
+
+    def test_an_unsaved_comp_has_a_star_in_its_tab(self):
+        pg = self.page()
+        self.new_comp(pg)
+        tab = "() => { const t = [...__panel.shadowRoot.querySelectorAll('.tab')].find((b) => b.dataset.tab === __panel.activeTab); return t ? t.querySelector('.tab-label').textContent : ''; }"
+        clean = pg.evaluate(tab)
+        pg.evaluate(f"() => {{ const e = {self.ED}; e.addNode('grade', {{}}); }}")
+        pg.wait_for_timeout(200)
+        dirty = pg.evaluate(tab)
+        self.assertTrue(clean and not clean.endswith("*"), clean)
+        self.assertTrue(dirty.endswith(" *"), dirty)
+        pg.evaluate(f"() => {self.ED}.markSaved()")
+        pg.wait_for_timeout(100)
+        self.assertEqual(pg.evaluate(tab), clean)
+
     def test_the_comp_bar_has_its_own_exposure_and_channel_menu(self):
         pg = self.page()
         self.new_comp(pg)
@@ -1733,11 +1782,12 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(st["readout"], "0.0 EV")
         # What only changes how the picture is LOOKED AT is one group, right of the file group and by Fit.
         pos = pg.evaluate(f"""() => {{ const kids = [...{BAR}.children]; const at = (s) => kids.findIndex((x) => x.matches(s));
-            return {{ title: at('.mg-title'), spacer: at('.mg-spacer'), gpu: at('.cp-gpu'), chan: at('.cp-chan'),
+            return {{ spacer: at('.mg-spacer'), gpu: at('.cp-gpu'), chan: at('.cp-chan'),
                 exp: at('.cp-exp'), eyes: at('.cp-views'), tools: at('.cp-vtools') }}; }}""")
         self.assertTrue(-1 not in pos.values(), pos)
         self.assertEqual(pg.evaluate(f"() => {BAR}.querySelectorAll('.mg-info').length"), 0)   # no format readout in the bar
-        self.assertLess(pos["title"], pos["spacer"], pos)
+        # No comp name in the bar: it is the viewer tab's (Sebastian 2026-11-24).
+        self.assertEqual(pg.evaluate(f"() => {BAR}.querySelectorAll('.mg-title').length"), 0)
         self.assertEqual([pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")],
                          sorted(pos[k] for k in ("spacer", "gpu", "chan", "exp", "eyes", "tools")), pos)
         # The bar's slider: +2 stops is the colour times four (0.1 -> 0.4: sRGB 170). The value is the viewer's,

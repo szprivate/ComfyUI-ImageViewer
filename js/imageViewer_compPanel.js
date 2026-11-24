@@ -252,6 +252,21 @@ export const CompPanelMixin = {
         this._rebuildTabBar(null);
     },
 
+    /** A comp with changes not saved: " *" after its name in the viewer's tab (the comp's bar names no file). */
+    _cpTabDirty(key, dirty) {
+        const now = this.tabLabels[key];
+        if (now === undefined) return;
+        const base = String(now).replace(/ \*$/, ""), want = dirty ? base + " *" : base;
+        if (want === now) return;
+        this.tabLabels[key] = want;
+        // Only the tab's text: a rebuild of the tab bar would switch tabs again.
+        const root = this.tabsContainer || this.tabBar;
+        const btn = root && [...root.querySelectorAll(".tab")].find((b) => b.dataset.tab === key);
+        const span = btn && btn.querySelector(".tab-label");
+        if (span) span.textContent = String(span.textContent).replace(/ \*$/, "") + (dirty ? " *" : "");
+        if (btn) btn.title = String(btn.title).replace(/ \*$/, "") + (dirty ? " *" : "");
+    },
+
     async compPickFile() {
         await openFilePicker(this.container, {
             id: "comp", title: "Open a comp", kind: "comp", exts: [".json"], go: "Open",
@@ -580,6 +595,7 @@ export const CompPanelMixin = {
             },
             onFrame: (f) => { if (this.activeTab === key) { this.stop(); this.setFrame(f); } },
             onComp: () => { if (this.activeTab === key) this._cpSyncBar(); },
+            onDirty: (dirty) => this._cpTabDirty(key, dirty),
             showProps: () => { if (this.setPanelDocked && !this.isPanelDocked("params")) this.setPanelDocked("params", true); else if (this.dockTabFront) this.dockTabFront("params"); },
             onSelect: (n) => { if (this.activeTab === key) this._cpParamsTitle(n || null); },
             // The Roto node is the viewer's Roto tool's (imageViewer_compRoto.js).
@@ -695,6 +711,14 @@ export const CompPanelMixin = {
         if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
         return data;
     },
+    /** The OCIO config was changed in the settings: Comp's lists and transforms, and the viewer's colour menu, again. */
+    ocioConfigChanged() {
+        const st = this._cpState();
+        st.ocio = null;
+        for (const rec of Object.values(st.tabs || {})) if (rec && rec.editor && rec.editor.reloadOcio) rec.editor.reloadOcio();
+        if (this.initColor) this.initColor().catch(() => {});
+    },
+
     _cpOcioInfo() {
         const st = this._cpState();
         if (!st.ocio) {

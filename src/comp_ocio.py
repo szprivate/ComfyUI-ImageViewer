@@ -25,6 +25,13 @@ _procs = {}
 _luts = {}
 
 
+def reset():
+    """Forget the processors and LUTs (the config changed: color_io.reset)."""
+    with _lock:
+        _procs.clear()
+        _luts.clear()
+
+
 def _cfg():
     st = color_io._load()
     return st["config"], st

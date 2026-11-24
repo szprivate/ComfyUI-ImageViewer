@@ -10,7 +10,7 @@ A node-based compositor for stills, films and image sequences. It works in linea
 
 - **Open Comp…** or **New comp** in the lower bar's Comp menu. With a shot context on the canvas, a new comp is created in that shot's `comps` folder.
 - Double-click a `*.comp.json` in the file browser.
-- The bar above the picture has New, Open and Save; Save's menu holds Save as…, the renders, the farm, the script export, and Relink / Localise footage. On the right, together, is everything that only changes how the picture is *looked at* — proxy, GPU, the OCIO display, the channel menu, exposure, Views and the Viewer tools — and none of it is part of the comp or the render.
+- The bar above the picture has New, Open and Save; Save's menu holds Save as…, the renders, the farm, the script export, and Relink / Localise footage. The comp's name is the viewer tab's, with a `*` after it while there are changes not saved. On the right, together, is everything that only changes how the picture is *looked at* — proxy, GPU, the channel menu, exposure, the OCIO display, Views and the Viewer tools — and none of it is part of the comp or the render.
 - Unsaved changes are kept aside every 30 seconds. If the viewer closes before you save (a crash, a closed tab), opening the comp again offers them back.
 
 ## The node graph
@@ -294,7 +294,9 @@ The **Views** menu in the bar turns a comp into a stereo pair (left, right) or a
 
 ## Colour
 
-The working space is the scene-linear role of the OCIO config. The display menu in the bar views the image through any display / view of the config, or as plain sRGB.
+The working space is the scene-linear role of the OCIO config. The display menu in the bar (right of the exposure) views the image as plain sRGB, through any display / view of the config (the ACES output transforms among them), or in one of the config's colourspaces (ACEScg, ACES2065-1, ACEScct …) with its values shown as they are.
+
+The config is picked in **Settings → ComfyUI Image Viewer → Comp → OCIO config**: a `.ocio` file on the ComfyUI machine or one of OpenColorIO's built-in configs (the default CG config, the studio config). With nothing picked, `$OCIO` is used when it is set, else the built-in default. The choice is kept on the ComfyUI machine (`~/.comfyui_image_viewer/ocio_config.txt`), is checked before it is used, and applies at once to Comp and to the viewer's input colourspace menu.
 
 ## Output
 

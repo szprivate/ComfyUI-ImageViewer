@@ -78,7 +78,7 @@ export const RoomMixin = {
         const proxy = new THREE.Object3D();
         v.scene.add(proxy);
         v._room3d = group;
-        const room = this._room = { api, group, gizmo, helper, proxy, id: null, built: null, framed: false, drag: false };
+        const room = this._room = { api, group, gizmo, helper, proxy, id: null, built: null, framed: false, drag: false, tex: new Map() };
         gizmo.addEventListener("change", () => v.requestRender());
         gizmo.addEventListener("dragging-changed", (e) => {
             room.drag = !!e.value;
@@ -104,7 +104,7 @@ export const RoomMixin = {
      *  True when it was the room's. */
     roomKey(k) {
         const room = this._room;
-        if (room && k === "f") { this._roomFrame(this._last, room.id && room.gizmo.object ? room.proxy : null); return true; }
+        if (room && k === "f") { this._roomFrame(room.built, room.id && room.gizmo.object ? room.proxy : null); return true; }
         const mode = k === "w" ? "translate" : k === "e" ? "rotate" : k === "r" ? "scale" : null;
         if (!room || !mode) return false;
         if (mode === "scale" && room.id && !(ROOM_MOVABLE[(room.api.paramsOf(room.id) || {}).type] || []).includes("scale")) return true;
@@ -124,6 +124,9 @@ export const RoomMixin = {
         if (room.gizmo.dispose) room.gizmo.dispose();
         v.scene.remove(room.helper); v.scene.remove(room.proxy);
         this._roomClear(room);
+        for (const t of room.tex.values()) t.tex.dispose();
+        room.tex.clear();
+        this._roomScene = undefined;
         v.scene.remove(room.group);
         if (v.controls) v.controls.enabled = true;
         if (Object.prototype.hasOwnProperty.call(v, "paneThroughId")) delete v.paneThroughId;
@@ -143,15 +146,30 @@ export const RoomMixin = {
         }
     },
 
-    /** The room again from what the last Render3D drew and the editor's selection (after every draw). */
+    /** The scene the room shows: {objs, cam} of the room's Render3D at the frame on show, worked out by the editor
+     *  from the comp itself (renderNode's `sceneOnly`), so it follows every edit whatever renderer the node uses -
+     *  the built-in one never reaches this engine, and a frame rendered ahead must not replace it. */
+    roomShow(scene) {
+        this._roomScene = scene && scene.objs ? { objs: scene.objs, cam: scene.cam || null } : null;
+        this.roomSync();
+    },
+
+    /** The room again from its scene (roomShow; before the first one, what the last Render3D drew) and the
+     *  editor's selection (after every draw). */
     roomSync() {
         const room = this._room;
         if (!room || !this.view) return;
         const v = this.view, { THREE } = v.libs;
-        const last = this._last;
+        const last = this._roomScene !== undefined ? this._roomScene : this._last;
         if (last && room.built !== last) {
             room.built = last;
             this._roomClear(room);
+            // The room's pictures are its own: the engine lets go of every texture a render of its own did not use,
+            // and the room's scene is worked out apart from the picture's render (other picture objects).
+            const engineTex = this._tex;
+            this._tex = room.tex;
+            for (const t of room.tex.values()) t.used = false;
+            try {
             for (const ob of last.objs) {
                 if (ob.kind === "mesh") {
                     const map = ob.proj ? null : ob.tex ? this._texture(THREE, ob.tex) : null;
@@ -171,6 +189,10 @@ export const RoomMixin = {
                     g.scale.set(1, 1, 1);
                     room.group.add(g);
                 }
+            }
+            } finally {
+                this._tex = engineTex;
+                for (const [img, t] of [...room.tex]) if (!t.used) { t.tex.dispose(); room.tex.delete(img); }
             }
             if (last.cam) room.group.add(this._roomFrustum(THREE, last.cam));
             if (!room.framed) { room.framed = true; this._roomFrame(last); }
@@ -253,7 +275,13 @@ export const RoomMixin = {
     roomInfo() {
         const room = this._room;
         if (!room) return null;
-        return { objects: room.group.children.length, gizmo: room.id, mode: room.gizmo.mode,
+        const { THREE } = this.view.libs;
+        const centres = room.group.children.filter((o) => o.isMesh && o.geometry).map((o) => {
+            o.geometry.computeBoundingBox();
+            const c = o.geometry.boundingBox.getCenter(new THREE.Vector3()).applyMatrix4(o.matrixWorld);
+            return [c.x, c.y, c.z].map((x) => Math.round(x * 1000) / 1000);
+        });
+        return { objects: room.group.children.length, gizmo: room.id, mode: room.gizmo.mode, centres,
             camera: room.group.children.some((o) => o.name === "comp3d-room-camera"), shown: this.box.style.visibility === "visible" };
     },
 };
