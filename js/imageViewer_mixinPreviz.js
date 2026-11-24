@@ -1143,6 +1143,8 @@ export const PrevizMixin = {
         if (this._mmHide) this._mmHide();
         // And the scene's animation layers.
         if (this._previzHideLayers) this._previzHideLayers();
+        // And the Render panel.
+        if (this._r3Hide) this._r3Hide();
         // The curves describe the same scene, so they go with it.
         if (this._previzHideCurves) this._previzHideCurves();
         if (this._previzHideClips) this._previzHideClips();
@@ -1689,6 +1691,7 @@ export const PrevizMixin = {
             this.setPanelDocked("params", true);
             if (this._plRestore) this._plRestore();
             if (this._mmRestore) this._mmRestore();
+            if (this._r3Restore) this._r3Restore();
         }
         // Before the early return below: the timeline's fields and the keying
         // buttons belong to the tab, and a previz panel put away by hand must
@@ -1702,6 +1705,8 @@ export const PrevizMixin = {
         if (this._plMaybeCheck) this._plMaybeCheck();
         // So is Anim Layers (imageViewer_animLayersPanel.js).
         if (this._alRender) this._alRender();
+        // And the Render panels (imageViewer_previzRenderPanel.js).
+        if (this._r3Refresh) this._r3Refresh();
         // Every further Outliner in front draws its own view of the same scene, whether or not the first is up.
         if (this._dockInstancesOf) {
             for (const { inst } of this._dockInstancesOf("previz")) inst.refresh();

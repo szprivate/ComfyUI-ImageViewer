@@ -58,7 +58,7 @@ const dockIsInstance = (id) => id.indexOf("@") >= 0;
 // register when their panel first initialises): the entry is kept regardless, and the element made once the
 // maker is there. The Edit, Paint, Motion and Comp panels (except the Node Graph) are NOT here: one editor
 // DOM is seated into them; nor is agentChat, which mounts the page's one chat host.
-const MULTI_KINDS = new Set(["history", "browser", "params", "previz", "layers3d", "picker", "mmGuide", "mmPlate",
+const MULTI_KINDS = new Set(["history", "browser", "params", "previz", "layers3d", "picker", "mmGuide", "mmPlate", "render3d",
     "animLayers", "curves", "dopeSheet", "clips", "rotoCurves", "paramCurves", "compGraph"]);
 
 // The dockable panels, and the room each one needs to stay usable.
@@ -79,6 +79,9 @@ const DOCK_PANELS = {
     // The matchmove guide (step by step) and the plate it tracks on (imageViewer_previzMatchmove.js).
     mmGuide: { prop: "mmGuidePanel", label: "Matchmove", minW: 260, minH: 200, defaultRail: "right", size: 2 },
     mmPlate: { prop: "mmPlatePanel", label: "Plate", minW: 260, minH: 160, defaultRail: "bottom", size: 2, tabWith: "curves" },
+    // The Render panel: the render settings, one frame's passes and an AI workflow over them
+    // (imageViewer_previzRenderPanel.js; the Render dialog was merged into it, Sebastian 2026-11-24).
+    render3d: { prop: "render3dPanel", label: "Render", minW: 260, minH: 220, defaultRail: "right", size: 2 },
     // The scene's animation layers (imageViewer_animLayersPanel.js).
     animLayers: { prop: "animLayersPanel", label: "Anim Layers", minW: 240, minH: 120, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for
@@ -978,6 +981,8 @@ export const DockMixin = {
             if (this._mmPanelShown) this._mmPanelShown(id);
         } else if (id === "animLayers") {
             if (this._alRender) this._alRender();
+        } else if (id === "render3d") {
+            if (this._r3Refresh) this._r3Refresh();
         } else if (id === "agentChat") {
             if (this._agentPanelMount) this._agentPanelMount();
         } else if (id === "previz") {

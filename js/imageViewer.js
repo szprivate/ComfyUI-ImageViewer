@@ -63,6 +63,7 @@ import { PrevizModelingMixin } from "./imageViewer_previzModeling.js";
 import { AnimLayersMixin } from "./imageViewer_animLayersPanel.js";
 import { PrevizHotkeysMixin } from "./imageViewer_previzHotkeys.js";
 import { PrevizRenderMixin } from "./imageViewer_previzRender.js";
+import { PrevizRenderPanelMixin } from "./imageViewer_previzRenderPanel.js";
 import { PrevizShotMixin } from "./imageViewer_previzShot.js";
 import { PrevizAtlasMixin } from "./imageViewer_previzAtlas.js";
 import { AtlasCreateMixin } from "./imageViewer_atlasCreate.js";
@@ -874,7 +875,9 @@ class ViewerPanel extends HTMLElement {
                                        ['picker', 'pickerPanel', 'picker-panel'],
                                        // The matchmove guide and its plate (imageViewer_previzMatchmove.js).
                                        ['mmGuide', 'mmGuidePanel', 'mm-guide-panel'],
-                                       ['mmPlate', 'mmPlatePanel', 'mm-plate-panel']]) {
+                                       ['mmPlate', 'mmPlatePanel', 'mm-plate-panel'],
+                                       // The Render panel (imageViewer_previzRenderPanel.js).
+                                       ['render3d', 'render3dPanel', 'render3d-panel']]) {
             let lp = sr.getElementById(`${id}-panel`);
             if (!lp && this.channelsPanel && this.channelsPanel.parentNode) {
                 lp = this.channelsPanel.ownerDocument.createElement('div');
@@ -1693,6 +1696,7 @@ Object.assign(
     AnimLayersMixin,
     PrevizHotkeysMixin,
     PrevizRenderMixin,
+    PrevizRenderPanelMixin,
     PrevizShotMixin,
     PrevizAtlasMixin,
     AtlasCreateMixin,
