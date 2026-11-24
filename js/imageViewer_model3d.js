@@ -2180,6 +2180,45 @@ export class Model3DView {
      * the item's `ortho`, the height follows the picture's shape - no overscan,
      * a render is exactly the shot.
      */
+    /**
+     * A region render (beginRender's `region`: [x0, y0, x1, y1], shares of the whole picture, y down): the
+     * width x height asked for is the REGION's, so the camera keeps the whole picture's aspect and its
+     * projection is narrowed onto the box (a window in clip space), as a renderer's crop window does.
+     */
+    _renderRegion() {
+        const g = this._rendering && this._rendering.opts && this._rendering.opts.region;
+        if (!Array.isArray(g) || g.length !== 4 || !g.every(Number.isFinite)) return null;
+        const [x0, y0, x1, y1] = g;
+        return x1 - x0 > 1e-4 && y1 - y0 > 1e-4 ? g : null;
+    }
+
+    /** The whole picture's size for a render of `w` x `h` (the region's size during a region render). */
+    _renderFull(w, h) {
+        const g = this._renderRegion();
+        return g ? [w / (g[2] - g[0]), h / (g[3] - g[1])] : [w, h];
+    }
+
+    _renderAspect(w, h) {
+        const [W, H] = this._renderFull(w, h);
+        return W / H;
+    }
+
+    /** Narrow `cam`'s projection onto the region (after the lens is set; no-op without one). */
+    _renderRegionApply(cam) {
+        const g = this._renderRegion();
+        if (!g) return;
+        const [x0, y0, x1, y1] = g;
+        const l = x0 * 2 - 1, rr = x1 * 2 - 1, t = 1 - y0 * 2, b = 1 - y1 * 2;
+        const sx = 2 / (rr - l), tx = -(rr + l) / (rr - l), sy = 2 / (t - b), ty = -(t + b) / (t - b);
+        const e = cam.projectionMatrix.elements;
+        for (let j = 0; j < 4; j++) {
+            const w = e[j * 4 + 3];
+            e[j * 4] = sx * e[j * 4] + tx * w;
+            e[j * 4 + 1] = sy * e[j * 4 + 1] + ty * w;
+        }
+        cam.projectionMatrixInverse.copy(cam.projectionMatrix).invert();
+    }
+
     _renderOrtho(cam, item, W, H) {
         const ortho = Number(evaluateIn(this.scene3d, item, this.sceneFrame).ortho) || 4;
         const halfW = ortho / 2, halfH = halfW * (H / W);
@@ -2992,12 +3031,13 @@ export class Model3DView {
         const W = Math.round(width * aa), H = Math.round(height * aa);
         this.renderer.setPixelRatio(1);
         this.renderer.setSize(W, H, false);
-        cam.aspect = width / height;
+        cam.aspect = this._renderAspect(width, height);
         // A scene camera renders its gate: its own lens or width, not the
         // overscanned one the viewport shows around it.
-        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, W, H);
+        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, ...this._renderFull(W, H));
         else if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
         if (r.item && !cam.isOrthographicCamera) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
+        this._renderRegionApply(cam);
         // Rendered as the viewport draws it: bloom and tone mapping included.
         this._worldResize(W, H);
         this._worldRender(cam);
@@ -3032,10 +3072,11 @@ export class Model3DView {
         this._renderHideOverlays();
         const cam = r.cam;
         const W = Math.max(1, Math.round(width)), H = Math.max(1, Math.round(height));
-        cam.aspect = W / H;
-        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, W, H);
+        cam.aspect = this._renderAspect(W, H);
+        if (r.item && cam.isOrthographicCamera) this._renderOrtho(cam, r.item, ...this._renderFull(W, H));
         else if (r.item) cam.fov = evaluateIn(this.scene3d, r.item, this.sceneFrame).fov || 35;
         if (r.item && !cam.isOrthographicCamera) this._lensProject(cam, r.item); else cam.updateProjectionMatrix();
+        this._renderRegionApply(cam);
 
         // A world shown as points is measured by its meshes.
         const atlasBack = this._atlasDepthBegin();

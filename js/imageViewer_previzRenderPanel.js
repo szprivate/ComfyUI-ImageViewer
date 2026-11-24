@@ -11,6 +11,14 @@
 // shown too. Each Render panel keeps a workflow of its own, on the scene (`scene.renderAi[panel id]` = {custom,
 // values, last}), so it travels with the scene and two panels can show two looks of one frame.
 //
+// The bar (Sebastian 2026-11-24, second round): Render (the passes, then the workflow when AI is on), AI, IPR (the
+// passes drawn again whenever the scene, the camera or the frame changes - at a preview size, the workflow not
+// run), Region (a box drawn on the picture: only it is rendered - the camera's projection narrowed onto it, so
+// the path tracer traces only the box - and only it goes through the workflow, the answer pasted back with a
+// soft edge), the passes as one menu, Wipe. The prompt is a field under the picture, kept per panel on the
+// scene (`renderAi[id].prompt`), and goes into the workflow's prompt (its "Positive prompt" node) whichever
+// workflow is on; the agent reads and writes it (render_panel_* actions, imageViewer_previzAgentRender.js).
+//
 // The server fills the workflow in (POST /imageviewer/render3d_ai, render3d_ai.py), the page queues it as Paint's
 // Generate does (_paintQueue, with the sign-in) and waits for its outputs (_cpAiWaitNodes). One `this` with the panel.
 import { api } from "../../scripts/api.js";
@@ -57,6 +65,15 @@ const STYLE = `
 textarea.r3-param { min-height: 48px; resize: vertical; font: inherit; font-size: 12px; }
 .r3-ask { border: 1px solid #ff6600; border-radius: 4px; padding: 6px 8px; margin: 6px 0; white-space: pre-wrap; font-size: 12px; }
 .r3-form .rd-label { flex-basis: 72px; }
+select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444; border-radius: 4px; font-size: 11px; min-height: 22px; padding: 0 4px; }
+.r3-prompt { display: flex; gap: 6px; align-items: flex-start; padding: 4px 6px; border-top: 1px solid #333; flex: none; }
+.r3-prompt textarea { flex: 1 1 auto; min-width: 0; min-height: 34px; max-height: 120px; resize: vertical; font: inherit; font-size: 12px;
+    background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; }
+.r3-prompt textarea:disabled { opacity: 0.5; }
+.r3-prompt .r3-label { flex: none; padding-top: 4px; }
+.r3-stage .r3-region { position: absolute; border: 1px dashed #ff6600; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); pointer-events: none; display: none; }
+.r3-stage.region-on { cursor: crosshair; }
+.r3-stage.region-on .r3-region.has { display: block; }
 `;
 
 const el = (doc, tag, cls, text) => {
@@ -67,14 +84,18 @@ const el = (doc, tag, cls, text) => {
 };
 
 /** Depth (planar, 0 = nothing) as a near = white picture, scaled over the 1st..99th percentile of what is there. */
-export function depthToGrey(depth) {
+export function depthToGrey(depth, range = null) {
     const { w, h, data } = depth;
-    const vals = [];
-    const step = Math.max(1, Math.floor(data.length / 50000));
-    for (let i = 0; i < data.length; i += step) if (data[i] > 0) vals.push(data[i]);
-    vals.sort((a, b) => a - b);
-    const lo = vals.length ? vals[Math.floor(vals.length * 0.01)] : 0;
-    const hi = vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.99))] : 1;
+    let lo, hi;
+    if (range && Number.isFinite(range.lo) && Number.isFinite(range.hi)) ({ lo, hi } = range);      // a region: the frame's scale
+    else {
+        const vals = [];
+        const step = Math.max(1, Math.floor(data.length / 50000));
+        for (let i = 0; i < data.length; i += step) if (data[i] > 0) vals.push(data[i]);
+        vals.sort((a, b) => a - b);
+        lo = vals.length ? vals[Math.floor(vals.length * 0.01)] : 0;
+        hi = vals.length ? vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.99))] : 1;
+    }
     const span = Math.max(1e-9, hi - lo);
     const px = new Uint8ClampedArray(w * h * 4);
     for (let i = 0; i < w * h; i++) {
@@ -83,7 +104,7 @@ export function depthToGrey(depth) {
         px[i * 4] = px[i * 4 + 1] = px[i * 4 + 2] = g;
         px[i * 4 + 3] = 255;
     }
-    return { w, h, px };
+    return { w, h, px, range: { lo, hi } };
 }
 
 function pixelsToUrl(doc, { w, h, px }) {
@@ -124,15 +145,110 @@ async function post(route, body) {
     return data;
 }
 
+/** A region box [x0, y0, x1, y1] (shares of the picture, y down), or null. */
+export function cleanBox(b) {
+    if (!Array.isArray(b) || b.length !== 4) return null;
+    const v = b.map(Number);
+    if (!v.every(Number.isFinite)) return null;
+    const c = (x) => Math.min(1, Math.max(0, x));
+    const x0 = c(Math.min(v[0], v[2])), x1 = c(Math.max(v[0], v[2])), y0 = c(Math.min(v[1], v[3])), y1 = c(Math.max(v[1], v[3]));
+    return x1 - x0 >= 0.01 && y1 - y0 >= 0.01 ? [x0, y0, x1, y1] : null;
+}
+
+/** A box in whole pixels of a w x h picture: {x, y, w, h}. */
+export function boxPixels(box, w, h) {
+    const x = Math.floor(box[0] * w), y = Math.floor(box[1] * h);
+    return { x, y, w: Math.max(1, Math.ceil(box[2] * w) - x), h: Math.max(1, Math.ceil(box[3] * h) - y) };
+}
+
+/** The workflow's prompt parameter (what the panel's prompt field fills), or null. */
+export function promptParam(custom) {
+    return ((custom && custom.params) || []).find((p) => p.kind === "prompt") || null;
+}
+
+/** The values a run sends: the ones typed, with the panel's prompt in the workflow's prompt. */
+export function runValues(keep, custom) {
+    const out = { ...((keep && keep.values) || {}) };
+    const p = promptParam(custom);
+    const text = keep && typeof keep.prompt === "string" ? keep.prompt.trim() : "";
+    if (p && text) out[p.id] = text;
+    return out;
+}
+
+const loadImg = (doc, url) => new Promise((resolve, reject) => {
+    const img = new (doc.defaultView || window).Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("a picture could not be read"));
+    img.src = url;
+});
+
+/** `url` cropped to pixel box `r` (a PNG data URL). */
+async function cropUrl(doc, url, r) {
+    const img = await loadImg(doc, url);
+    const c = doc.createElement("canvas");
+    c.width = r.w; c.height = r.h;
+    c.getContext("2d").drawImage(img, r.x, r.y, r.w, r.h, 0, 0, r.w, r.h);
+    return c.toDataURL("image/png");
+}
+
+/** A region run's `under` chain, at most 8 deep (the oldest dropped). */
+function trimChain(last, n = 0) {
+    if (!last) return null;
+    const out = { ...last };
+    out.under = n >= 7 ? null : trimChain(last.under, n + 1);
+    if (!out.under) delete out.under;
+    return out;
+}
+
+/** The soft edge of a region's paste: 3 % of its shorter side, 2 to 24 pixels. */
+export const featherOf = (r) => Math.max(2, Math.min(24, Math.round(Math.min(r.w, r.h) * 0.03)));
+
+/**
+ * `part` pasted into `base` at pixel box `r` (scaled to it), its edge faded over `feather` pixels (0 = hard),
+ * as a PNG data URL of `size` ({w, h}: the render's; the base is scaled to it - a workflow's answer need not be
+ * the render's size), else of the base's own size.
+ */
+async function pasteUrl(doc, base, part, r, feather = 0, size = null) {
+    const [a, b] = await Promise.all([loadImg(doc, base), loadImg(doc, part)]);
+    const c = doc.createElement("canvas");
+    c.width = size ? size.w : a.naturalWidth; c.height = size ? size.h : a.naturalHeight;
+    const ctx = c.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(a, 0, 0, c.width, c.height);
+    const t = doc.createElement("canvas");
+    t.width = r.w; t.height = r.h;
+    const tc = t.getContext("2d");
+    tc.imageSmoothingQuality = "high";
+    tc.drawImage(b, 0, 0, r.w, r.h);
+    const fe = Math.min(feather, Math.floor(r.w / 2), Math.floor(r.h / 2));
+    if (fe > 0) {
+        const d = tc.getImageData(0, 0, r.w, r.h), p = d.data;
+        for (let y = 0; y < r.h; y++) {
+            // A side on the picture's own edge is not faded: nothing is beyond it.
+            const ey = Math.min(r.y > 0 ? y + 0.5 : Infinity, r.y + r.h < c.height ? r.h - y - 0.5 : Infinity);
+            for (let x = 0; x < r.w; x++) {
+                const e = Math.min(ey, r.x > 0 ? x + 0.5 : Infinity, r.x + r.w < c.width ? r.w - x - 0.5 : Infinity);
+                if (e < fe) { const k = (y * r.w + x) * 4 + 3; p[k] = Math.round(p[k] * Math.max(0, e / fe)); }
+            }
+        }
+        tc.putImageData(d, 0, 0);
+    }
+    ctx.drawImage(t, r.x, r.y);
+    return c.toDataURL("image/png");
+}
+
 /**
  * One Render panel in `host`. `st` is its state ({} for an instance; the first panel's lives on the viewer as
  * `_r3St`); `saved` what an instance kept ({pass, wipe, wipeX, folds}).
  */
 export function createRenderPanelInstance(v, host, st, saved, id) {
     Object.assign(st, { id, pass: "beauty", wipe: false, wipeX: 0.5, passes: null, frame: null, camera: null,
-                        ai: null, busy: null, error: "", folds: { ai: true, settings: false } }, saved ? {
+                        ai: null, busy: null, error: "", folds: { ai: true, settings: false },
+                        aiOn: true, ipr: false, region: { on: false, box: null } }, saved ? {
         pass: saved.pass || "beauty", wipe: !!saved.wipe, wipeX: Number.isFinite(saved.wipeX) ? saved.wipeX : 0.5,
-        folds: { ai: true, settings: false, ...(saved.folds || {}) } } : {});
+        folds: { ai: true, settings: false, ...(saved.folds || {}) }, aiOn: saved.aiOn !== false, ipr: !!saved.ipr,
+        region: { on: !!(saved.region && saved.region.on), box: cleanBox(saved.region && saved.region.box) } } : {});
     const doc = () => host.ownerDocument;
     let ui = null;
 
@@ -153,14 +269,30 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const root = el(d, "div", "r3-panel");
         const bar = el(d, "div", "r3-bar");
         const render = el(d, "button", "r3-btn primary r3-render", "Render");
-        render.title = "Render this frame through the render camera into the panel (beauty, depth, normals, mask)";
-        render.onclick = () => (v._previzRendering && st.busy && st.busy.kind === "render" ? (v._previzRenderStop = true) : v.previzRenderStill(st));
-        const passes = el(d, "div", "r3-passes");
+        render.title = "Render this frame through the render camera (beauty, depth, normals, mask), then run the workflow when AI is on";
+        render.onclick = () => {
+            if (st.run) return v._r3Stop(st);
+            if (v._previzRendering && st.busy && st.busy.kind === "render") { v._previzRenderStop = true; return; }
+            v.previzRenderPanelRender(st);
+        };
+        const aiBtn = el(d, "button", "r3-btn r3-ai-btn", "AI");
+        aiBtn.title = "Render runs the panel's workflow on the passes (off: the passes only)";
+        aiBtn.onclick = () => { st.aiOn = !st.aiOn; draw(); };
+        const iprBtn = el(d, "button", "r3-btn r3-ipr-btn", "IPR");
+        iprBtn.title = "Interactive preview: the passes are drawn again whenever the scene, the camera or the frame changes (a preview size; the workflow is not run)";
+        iprBtn.onclick = () => v.previzRenderPanelIpr(st, !st.ipr);
+        const regionBtn = el(d, "button", "r3-btn r3-region-btn", "Region");
+        regionBtn.title = "Region render: drag a box on the picture; only it is rendered and only it goes through the workflow (double-click: the whole frame)";
+        regionBtn.onclick = () => { st.region.on = !st.region.on; draw(); };
+        const passes = el(d, "select", "r3-pass-select");
+        passes.title = "The pass shown";
+        passes.addEventListener("change", () => { st.pass = passes.value; st.wipe = false; draw(); });
+        passes.addEventListener("keydown", (e) => e.stopPropagation());
         const wipe = el(d, "button", "r3-btn r3-wipe-btn", "Wipe");
         wipe.title = "Compare the AI result with the beauty: drag the line";
         wipe.onclick = () => { st.wipe = !st.wipe; if (st.wipe && st.ai) st.pass = "ai"; draw(); };
         const info = el(d, "span", "r3-info");
-        bar.append(render, el(d, "span", "r3-sep"), passes, wipe, info);
+        bar.append(render, aiBtn, iprBtn, regionBtn, el(d, "span", "r3-sep"), passes, wipe, info);
 
         const stage = el(d, "div", "r3-stage");
         stage.tabIndex = -1;
@@ -171,7 +303,29 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const tagR = el(d, "span", "r3-tag", "Beauty"); tagR.style.right = "6px";
         const empty = el(d, "div", "r3-empty", "Press Render to draw this frame through the render camera.");
         const busy = el(d, "div", "r3-busy");
-        stage.append(imgA, imgB, line, tagL, tagR, empty, busy);
+        const regionEl = el(d, "div", "r3-region");
+        stage.append(imgA, imgB, line, regionEl, tagL, tagR, empty, busy);
+        // Where the picture lies in the stage (object-fit: contain), in stage pixels.
+        const picRect = () => {
+            const r = stage.getBoundingClientRect();
+            const sz = st.size || { w: 16, h: 9 };
+            const k = Math.min(r.width / sz.w, r.height / sz.h);
+            const w = sz.w * k, h = sz.h * k;
+            return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h, stage: r };
+        };
+        const toShare = (e) => {
+            const p = picRect();
+            return [Math.min(1, Math.max(0, (e.clientX - p.left) / (p.width || 1))), Math.min(1, Math.max(0, (e.clientY - p.top) / (p.height || 1)))];
+        };
+        const drawRegion = (e0) => {
+            const a = toShare(e0);
+            const move = (e) => { const b = toShare(e); st.region.box = cleanBox([a[0], a[1], b[0], b[1]]); placeRegion(); };
+            const up = () => { stage.removeEventListener("pointermove", move); stage.removeEventListener("pointerup", up); v._r3Saved && v._r3Saved(st); };
+            stage.setPointerCapture && stage.setPointerCapture(e0.pointerId);
+            stage.addEventListener("pointermove", move);
+            stage.addEventListener("pointerup", up);
+        };
+        stage.addEventListener("dblclick", () => { if (st.region.on) { st.region.box = null; placeRegion(); } });
         const moveWipe = (e) => {
             const r = stage.getBoundingClientRect();
             if (!r.width) return;
@@ -179,7 +333,9 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             placeWipe();
         };
         stage.addEventListener("pointerdown", (e) => {
-            if (!st.wipe || e.button !== 0) return;
+            if (e.button !== 0) return;
+            if (st.region.on && e.target !== line) { e.preventDefault(); drawRegion(e); return; }
+            if (!st.wipe) return;
             e.preventDefault();
             moveWipe(e);
             const up = () => { stage.removeEventListener("pointermove", moveWipe); stage.removeEventListener("pointerup", up); };
@@ -201,10 +357,27 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         };
         const aiFold = fold("ai", "AI workflow");
         const setFold = fold("settings", "Render settings");
-        root.append(bar, stage, scroll);
+        // The prompt: the panel's own, whichever workflow is on (it fills the workflow's prompt).
+        const promptRow = el(d, "div", "r3-prompt");
+        const prompt = el(d, "textarea", "r3-prompt-in");
+        prompt.rows = 2;
+        prompt.addEventListener("keydown", (e) => {
+            e.stopPropagation();
+            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); prompt.blur(); v.previzRenderPanelRender(st); }
+        });
+        prompt.addEventListener("input", () => {
+            const kk = keep();
+            if (!kk) return;
+            kk.prompt = prompt.value;
+            clearTimeout(ui.promptTimer);
+            ui.promptTimer = setTimeout(persist, 400);
+        });
+        prompt.addEventListener("change", persist);
+        promptRow.append(el(d, "span", "r3-label", "Prompt"), prompt);
+        root.append(bar, stage, promptRow, scroll);
         host.append(style, root);
-        ui = { root, bar, render, passes, wipe, info, stage, imgA, imgB, line, tagL, tagR, empty, busy, aiFold, setFold,
-               form: null, formScene: null, aiSig: null };
+        ui = { root, bar, render, aiBtn, iprBtn, regionBtn, passes, wipe, info, stage, imgA, imgB, line, regionEl, tagL, tagR, empty, busy,
+               aiFold, setFold, prompt, promptRow, picRect, form: null, formScene: null, aiSig: null };
         buildForm();
         buildAi();
         draw();
@@ -270,7 +443,9 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             body.append(Object.assign(el(d, "div", "r3-hint r3-takes"),
                 { textContent: `Takes: ${takes.length ? takes.join(", ") : "nothing (it runs on its own)"} · gives: ${(c.outputs || []).map((o) => o.name).join(", ")}` }));
             const vals = k.values || {};
+            const pp = promptParam(c);
             for (const p of c.params || []) {
+                if (p === pp) continue;            // the prompt field under the picture is this one
                 const r = el(d, "div", "r3-row");
                 r.append(el(d, "span", "r3-label", p.name));
                 let inp;
@@ -311,8 +486,8 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             body.append(a);
         }
         const go = el(d, "div", "r3-row");
-        const run = el(d, "button", "r3-btn primary r3-run", st.run ? "Stop" : "Run");
-        run.title = "Render this frame (when it is not rendered yet) and run the workflow on it";
+        const run = el(d, "button", "r3-btn r3-run", st.run ? "Stop" : "Run again");
+        run.title = "Run the workflow again on this render (a new seed; the frame is rendered first when it is not yet)";
         run.disabled = !c && !st.run;
         run.onclick = () => (st.run ? v._r3Stop(st) : v.previzRenderAi(st));
         go.append(el(d, "span", "r3-label", ""), run);
@@ -337,6 +512,20 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         return st.passes && st.passes[pass + "Show"] || (st.passes && st.passes[pass]);
     }
 
+    function placeRegion() {
+        if (!ui) return;
+        const b = st.region.box;
+        ui.regionEl.classList.toggle("has", !!b);
+        ui.stage.classList.toggle("region-on", !!st.region.on);
+        if (!b) return;
+        const p = ui.picRect(), s0 = p.stage;
+        Object.assign(ui.regionEl.style, {
+            left: `${p.left - s0.left + b[0] * p.width}px`, top: `${p.top - s0.top + b[1] * p.height}px`,
+            width: `${(b[2] - b[0]) * p.width}px`, height: `${(b[3] - b[1]) * p.height}px`,
+        });
+        ui.regionEl.style.display = st.region.on ? "" : "none";
+    }
+
     function placeWipe() {
         if (!ui) return;
         const pct = `${(st.wipeX * 100).toFixed(2)}%`;
@@ -352,21 +541,32 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const list = passList();
         if (!list.some(([k]) => k === st.pass)) st.pass = "beauty";
         if (!st.ai) st.wipe = false;
-        const sig = JSON.stringify(list.map(([k]) => k)) + st.pass;
+        const sig = JSON.stringify(list.map(([k]) => k));
         if (ui.passSig !== sig) {
             ui.passSig = sig;
             ui.passes.textContent = "";
             for (const [k, label] of list) {
-                const b = el(d, "button", "r3-btn r3-pass" + (k === st.pass && !st.wipe ? " on" : ""), label);
-                b.dataset.pass = k;
-                b.onclick = () => { st.pass = k; st.wipe = false; draw(); };
-                ui.passes.append(b);
+                const o = el(d, "option", "", label);
+                o.value = k;
+                ui.passes.append(o);
             }
         }
-        for (const b of ui.passes.children) {
-            b.classList.toggle("on", b.dataset.pass === st.pass && !st.wipe);
-            b.disabled = b.dataset.pass.startsWith("ai") ? !urlOf(b.dataset.pass) : !st.passes;
-        }
+        for (const o of ui.passes.options) o.disabled = o.value.startsWith("ai") ? !urlOf(o.value) : !st.passes;
+        if (ui.passes.value !== st.pass) ui.passes.value = st.pass;
+        ui.passes.disabled = !st.passes && !st.ai;
+        const c = mine().custom;
+        ui.aiBtn.classList.toggle("on", !!(st.aiOn && c));
+        ui.aiBtn.disabled = !c;
+        ui.aiBtn.title = c ? `Render runs ${c.name || "the workflow"} on the passes (off: the passes only)` : "Choose a workflow (AI workflow below) to run it on the render";
+        ui.iprBtn.classList.toggle("on", !!st.ipr);
+        ui.regionBtn.classList.toggle("on", !!st.region.on);
+        const pp = promptParam(c);
+        const want = mine().prompt || "";
+        if (ui.prompt.ownerDocument.activeElement !== ui.prompt && ui.prompt.value !== want) ui.prompt.value = want;
+        ui.prompt.disabled = !!(c && !pp);
+        ui.prompt.placeholder = !c ? "Describe the scene: what everything is made of, where, the light. Used by the workflow you choose."
+            : pp ? `Describe the scene (empty: the workflow's own - ${String(pp.def || "").slice(0, 90)}${String(pp.def || "").length > 90 ? "…" : ""})`
+            : "This workflow takes no prompt";
         ui.wipe.disabled = !st.ai || !st.passes;
         ui.wipe.classList.toggle("on", st.wipe);
         ui.wipe.style.display = st.ai ? "" : "none";
@@ -380,17 +580,19 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             setSrc(ui.imgB, null);
         }
         placeWipe();
+        placeRegion();
         ui.empty.style.display = urlOf(st.wipe ? "beauty" : st.pass) ? "none" : "";
         const b = st.busy;
         ui.busy.classList.toggle("on", !!b);
         ui.busy.textContent = b ? b.text : "";
-        ui.render.textContent = b && b.kind === "render" ? "Stop" : "Render";
-        ui.render.disabled = !!(st.run && !(b && b.kind === "render")) || !!(v._previzRendering && !(b && b.kind === "render"));
+        const going = !!(st.run || (b && b.kind === "render" && !st.iprBusy));
+        ui.render.textContent = going ? "Stop" : st.region.on && st.region.box ? "Render region" : "Render";
+        ui.render.disabled = !going && !!v._previzRendering;
         // What the picture is, and whether the playhead has moved on since.
         const f = Math.round(v.currentFrame || 0);
         const stale = st.frame !== null && st.frame !== f;
         ui.info.classList.toggle("stale", stale);
-        ui.info.textContent = st.frame === null ? "" : `${st.size ? `${st.size.w}×${st.size.h} · ` : ""}frame ${st.frame}${stale ? ` (now ${f})` : ""}`;
+        ui.info.textContent = st.frame === null ? "" : `${st.size ? `${st.size.w}×${st.size.h} · ` : ""}frame ${st.frame}${st.passes && st.passes.preview ? " · preview" : ""}${stale ? ` (now ${f})` : ""}`;
         ui.info.title = stale ? "The playhead has moved since this render: press Render again" : "";
     }
 
@@ -405,10 +607,14 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     // The last result this panel had, from the scene (its pictures are files in ComfyUI's output).
     function restoreLast() {
         const last = mine().last;
-        if (!st.ai && last && last.main) {
-            st.ai = { url: viewUrl(last.main), more: {}, frame: last.frame };
-            for (const [n, ref] of Object.entries(last.more || {})) st.ai.more[n] = viewUrl(ref);
-        }
+        if (st.ai || !last || !last.main) return;
+        const more = {};
+        for (const [n, ref] of Object.entries(last.more || {})) more[n] = viewUrl(ref);
+        if (!last.region) { st.ai = { url: viewUrl(last.main), more, frame: last.frame }; return; }
+        // A region run: pasted over the runs before it (one over the beauty needs that render: not shown then).
+        v._r3Compose(doc(), last).then((url) => {
+            if (url && !st.ai && mine().last === last) { st.ai = { url, more, frame: last.frame }; draw(); }
+        }).catch(() => {});
     }
     restoreLast();
 
@@ -419,13 +625,15 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     st.panel = () => ui;
     st.rebuildAi = () => { if (ui) { ui.aiSig = null; buildAi(); } };
     build();
+    if (st.ipr) { st.ipr = false; v.previzRenderPanelIpr(st, true); }
     return {
         el: host,
         refresh,
         build,
         wake: () => refresh(),
-        save: () => ({ pass: st.pass, wipe: st.wipe, wipeX: st.wipeX, folds: { ...st.folds } }),
-        dispose: () => { if (st.run) v._r3Stop(st); },
+        save: () => ({ pass: st.pass, wipe: st.wipe, wipeX: st.wipeX, folds: { ...st.folds }, aiOn: st.aiOn, ipr: st.ipr,
+                       region: { on: st.region.on, box: st.region.box } }),
+        dispose: () => { if (st.run) v._r3Stop(st); v.previzRenderPanelIpr(st, false, { keep: true }); },
         st,
     };
 }
@@ -518,55 +726,97 @@ export const PrevizRenderPanelMixin = {
 
     // ── one frame, four passes ───────────────────────────────────────────────
 
+    /** Render (the bar's button, Ctrl+Enter in the prompt, the agent): the passes, then the workflow when AI is on. */
+    async previzRenderPanelRender(st, { ai = null } = {}) {
+        const c = st.mine && st.mine().custom;
+        if ((ai === null ? st.aiOn : ai) && c) return this.previzRenderAi(st, { fresh: true });
+        const ok = await this.previzRenderStill(st);
+        return { ok, frame: st.frame, region: ok && st.lastRegion ? st.lastRegion : null };
+    },
+
     /**
      * Render the current frame through the render camera into panel `st`: beauty (raster or path traced, as the
      * settings say), depth, normals and mask. Answers whether it drew.
+     * `preview` (IPR): at a size that fits the panel, the path tracer at a few samples, the region left out.
+     * With the panel's region on (and a full render of this frame, camera and size there to paste into) only the
+     * box is rendered - the camera's projection narrowed onto it - and pasted into the passes there.
      */
-    async previzRenderStill(st) {
+    async previzRenderStill(st, { preview = false } = {}) {
         const scene = this.previzScene();
         const view = this._modelView && this._modelView();
         if (!scene || !view || this._previzRendering) return false;
         const s = S.renderSettings(scene);
         const camera = this._renderCameraId(s, scene);
-        const { w, h } = this._renderSize(s, scene);
+        let { w, h } = this._renderSize(s, scene);
         const f = Math.round(this.currentFrame || 0);
+        if (preview) {
+            const ui = st.panel && st.panel();
+            const sr = ui && ui.stage.getBoundingClientRect();
+            const dpr = (this._viewerWindow ? this._viewerWindow() : window).devicePixelRatio || 1;
+            const fit = sr && sr.width ? Math.min(1, (sr.width * dpr) / w, (sr.height * dpr) / h) : 0.5;
+            const k = Math.max(Math.min(1, 320 / Math.max(w, h)), Math.min(fit, 960 / Math.max(w, h)));
+            w = Math.max(2, Math.round(w * k)); h = Math.max(2, Math.round(h * k));
+        }
         const traced = s.renderer === "pathtraced";
         const doc = this.container.ownerDocument;
+        const box = !preview && st.region && st.region.on ? cleanBox(st.region.box) : null;
+        const base = st.passes;
+        const region = box && base && !base.preview && st.frame === f && st.camera === camera && st.size
+            && st.size.w === w && st.size.h === h && st.depthRange ? boxPixels(box, w, h) : null;
+        // The box in whole pixels, as the projection narrows onto it.
+        const rbox = region ? [region.x / w, region.y / h, (region.x + region.w) / w, (region.y + region.h) / h] : null;
+        const RW = region ? region.w : w, RH = region ? region.h : h;
         this._previzRendering = true;
         this._previzRenderStop = false;
-        st.busy = { kind: "render", text: `Rendering frame ${f}…` };
-        st.error = "";
+        st.iprBusy = preview;
+        st.busy = { kind: "render", text: preview ? `Preview of frame ${f}…` : region ? `Rendering the region of frame ${f}…` : `Rendering frame ${f}…` };
+        if (!preview) st.error = "";
         st.draw && st.draw();
         const out = {};
         let ok = false;
         try {
             const begin = (o) => {
-                if (!view.beginRender({ camera, grid: s.grid, helpers: s.helpers, ...o }))
+                if (!view.beginRender({ camera, grid: s.grid, helpers: s.helpers, region: rbox, ...o }))
                     throw new Error("the 3D view is not ready");
             };
-            begin({ shading: traced ? "original" : s.shading, background: s.background, color: s.color, aa: traced ? 1 : s.aa });
+            begin({ shading: traced ? "original" : s.shading, background: s.background, color: s.color, aa: traced ? 1 : preview ? 1 : s.aa });
             if (view.prepareVideoPlanes) { view.applyFrame(f); await view.prepareVideoPlanes(f); }
             out.beauty = traced
-                ? await view.renderFramePathTraced(f, w, h, {
-                    samples: s.samples, bounces: s.bounces, shouldStop: () => this._previzRenderStop,
-                    onSample: (n, want) => { st.busy.text = `Path tracing frame ${f}: sample ${n} of ${want}`; st.draw && st.draw(); },
+                ? await view.renderFramePathTraced(f, RW, RH, {
+                    samples: preview ? Math.min(s.samples || 16, 16) : s.samples, bounces: s.bounces, shouldStop: () => this._previzRenderStop,
+                    onSample: (n, want) => { st.busy.text = `Path tracing frame ${f}${region ? " (region)" : ""}: sample ${n} of ${want}`; st.draw && st.draw(); },
                 })
-                : view.renderFrame(f, w, h);
+                : view.renderFrame(f, RW, RH);
             if (this._previzRenderStop) throw Object.assign(new Error("stopped"), { stopped: true });
             if (!out.beauty) throw new Error(traced ? "the path tracer produced no image" : "the renderer produced no image");
-            const depth = view.renderDepth ? view.renderDepth(w, h) : null;
+            const depth = view.renderDepth ? view.renderDepth(RW, RH) : null;
             view.endRender();
-            out.depth = depth ? pixelsToUrl(doc, depthToGrey(depth)) : null;
+            let range = null;
+            if (depth) {
+                const g = depthToGrey(depth, region ? st.depthRange : null);
+                range = g.range;
+                out.depth = pixelsToUrl(doc, g);
+            }
             // The normals: the camera's space, a flat blue where nothing is (what a normal map has there).
-            begin({ shading: "normal", background: "color", color: "#8080ff", aa: s.aa, grid: false, helpers: false });
-            out.normals = view.renderFrame(f, w, h);
+            begin({ shading: "normal", background: "color", color: "#8080ff", aa: preview ? 1 : s.aa, grid: false, helpers: false });
+            out.normals = view.renderFrame(f, RW, RH);
             view.endRender();
             // The mask: what covers the frame, from a transparent render's alpha.
-            begin({ shading: "clay", background: "transparent", aa: s.aa, grid: false, helpers: false });
-            const cover = view.renderFrame(f, w, h);
+            begin({ shading: "clay", background: "transparent", aa: preview ? 1 : s.aa, grid: false, helpers: false });
+            const cover = view.renderFrame(f, RW, RH);
             view.endRender();
             out.mask = cover ? await alphaToGrey(doc, cover) : null;
             if (!out.depth) out.depth = out.mask;      // no float targets: at least where something is
+            if (region) {
+                for (const k of ["beauty", "depth", "normals", "mask"]) {
+                    if (out[k] && base[k]) out[k] = await pasteUrl(doc, base[k], out[k], region, 0);
+                }
+                st.lastRegion = box;
+            } else {
+                st.lastRegion = null;
+                if (!preview) st.depthRange = range;
+            }
+            if (preview) out.preview = true;
             st.passes = out;
             st.frame = f;
             st.camera = camera;
@@ -583,10 +833,75 @@ export const PrevizRenderPanelMixin = {
             this._previzRendering = false;
             this._previzRenderStop = false;
             st.busy = null;
+            st.iprBusy = false;
             if (st.rebuildAi) st.rebuildAi();
             st.draw && st.draw();
         }
         return ok;
+    },
+
+    /** What an IPR redraw follows: the frame, the render settings and camera, the meshes, lights and the view. */
+    _r3IprSig(st) {
+        const scene = this.previzScene();
+        const view = this._modelView && this._modelView();
+        if (!scene || !view) return null;
+        const s = S.renderSettings(scene);
+        const camId = this._renderCameraId(s, scene);
+        const parts = [Math.round(this.currentFrame || 0), JSON.stringify(s), camId];
+        if (camId) parts.push(JSON.stringify(S.itemById(scene, camId)));
+        else if (view.camera) parts.push(view.camera.matrixWorld.elements.map((x) => x.toFixed(4)).join(","));
+        try {
+            if (view._ptSceneSig && view._ptContent) parts.push(view._ptSceneSig(view._ptContent(null)));
+            if (view._ptLightSig) parts.push(view._ptLightSig());
+        } catch (_e) { /* a view without the tracer's helpers: the scene's own numbers */ }
+        return parts.join("|");
+    },
+
+    /**
+     * IPR on panel `st`: a preview of the passes whenever what it renders changed (checked 4 times a second,
+     * drawn after it has held still for a moment). The workflow is not run; Render still renders in full.
+     */
+    previzRenderPanelIpr(st, on, { keep = false } = {}) {
+        if (st.iprTimer) { (st.iprWin || window).clearInterval(st.iprTimer); st.iprTimer = null; }
+        if (!keep) st.ipr = !!on;
+        if (on && !keep) {
+            const win = this._viewerWindow ? this._viewerWindow() : window;
+            st.iprWin = win;
+            st.iprSeen = null;
+            st.iprDone = null;
+            st.iprTimer = win.setInterval(() => {
+                const ui = st.panel && st.panel();
+                if (!ui || !ui.root.isConnected) { this.previzRenderPanelIpr(st, false, { keep: true }); return; }
+                if (!this.isPrevizTab || !this.isPrevizTab() || this._previzRendering || st.run || !ui.root.offsetParent) return;
+                const sig = this._r3IprSig(st);
+                if (sig === null) return;
+                if (sig !== st.iprSeen) { st.iprSeen = sig; return; }       // still moving: wait until it holds
+                if (sig === st.iprDone) return;
+                st.iprDone = sig;
+                this.previzRenderStill(st, { preview: true }).catch(() => {});
+            }, 250);
+        }
+        st.draw && st.draw();
+        if (this._r3Saved) this._r3Saved(st);
+    },
+
+    /** The panel's look (pass, wipe, AI, IPR, region) kept with the dock layout. */
+    _r3Saved() {
+        if (this.queuePersistViewerState) this.queuePersistViewerState();
+    },
+
+    /** A region run's picture: its result pasted over what was there before (`last.under`, as far as it goes). */
+    async _r3Compose(doc, last, depth = 0) {
+        if (!last || !last.main) return null;
+        const url = viewUrl(last.main);
+        if (!last.region) return url;
+        if (!last.under || depth > 8) return null;
+        const under = await this._r3Compose(doc, last.under, depth + 1);
+        if (!under) return null;
+        const img = await loadImg(doc, under);
+        const size = last.size && last.size.w > 0 ? last.size : { w: img.naturalWidth, h: img.naturalHeight };
+        const r = boxPixels(last.region, size.w, size.h);
+        return pasteUrl(doc, under, url, r, featherOf(r), size);
     },
 
     // ── the workflow ─────────────────────────────────────────────────────────
@@ -726,16 +1041,21 @@ export const PrevizRenderPanelMixin = {
      * Run panel `st`'s workflow on the frame: rendered first when the panel has no render of this frame, then
      * filled in by the server, queued, and its outputs shown (the first as "AI", the others beside it).
      */
-    async previzRenderAi(st) {
+    async previzRenderAi(st, { fresh = false } = {}) {
         const k = st.mine();
         const c = k.custom;
         if (!c) { st.error = "Choose a workflow first."; if (st.rebuildAi) st.rebuildAi(); return null; }
         if (st.run) return null;
         const f = Math.round(this.currentFrame || 0);
         const sc = this.previzScene();
-        if (!st.passes || st.frame !== f || st.camera !== this._renderCameraId(S.renderSettings(sc), sc)) {
-            if (!(await this.previzRenderStill(st))) return null;
+        if (fresh || !st.passes || st.passes.preview || st.frame !== f || st.camera !== this._renderCameraId(S.renderSettings(sc), sc)) {
+            if (!(await this.previzRenderStill(st))) return { ok: false, error: st.error || "the render did not draw" };
         }
+        // A region: only the box goes through the workflow, and its answer is pasted back over the frame.
+        const box = st.region && st.region.on ? cleanBox(st.region.box) : null;
+        const doc = this.container.ownerDocument;
+        const rpx = box && st.size ? boxPixels(box, st.size.w, st.size.h) : null;
+        const sameFrame = st.ai && st.ai.frame === st.frame && st.ai.size && st.size && st.ai.size.w === st.size.w && st.ai.size.h === st.size.h;
         const run = st.run = { stopped: false, stop: null };
         st.error = "";
         if (st.rebuildAi) st.rebuildAi();
@@ -746,7 +1066,12 @@ export const PrevizRenderPanelMixin = {
             let prep;
             for (let tries = 0; ; tries++) {
                 try {
-                    prep = await post("/imageviewer/render3d_ai", { custom: c, values: k.values || {}, passes: st.passes, frame: st.frame });
+                    let passes = st.passes;
+                    if (rpx) {
+                        passes = {};
+                        for (const p of ["beauty", "depth", "normals", "mask"]) if (st.passes[p]) passes[p] = await cropUrl(doc, st.passes[p], rpx);
+                    }
+                    prep = await post("/imageviewer/render3d_ai", { custom: c, values: runValues(k, c), passes, frame: st.frame });
                     break;
                 } catch (e) {
                     const miss = e.data && e.data.missing;
@@ -786,11 +1111,23 @@ export const PrevizRenderPanelMixin = {
                 delete ai.more[first]; delete last.more[first];
             }
             if (last.main && !shown(last.main)) st.error = `${last.main.filename}: the browser cannot show this file type here`;
+            ai.size = st.size ? { ...st.size } : null;
+            if (rpx) {
+                // Over the last AI picture of this frame, else over the beauty; the other outputs are the box's own.
+                const under = sameFrame ? st.ai.url : st.passes.beauty;
+                ai.url = await pasteUrl(doc, under, ai.url, rpx, featherOf(rpx), st.size);
+                last.region = box;
+                last.size = { ...st.size };
+                const prev = st.mine().last;
+                last.under = sameFrame && prev && prev.frame === st.frame ? trimChain(prev) : null;
+                if (!last.under) last.base = "beauty";
+            }
             st.ai = ai;
             st.pass = "ai";
             const kk = st.keep();
             if (kk) { kk.last = last; st.persist(); }
-            answer = { ok: true, frame: st.frame, outputs: Object.keys(images).length, uses: prep.uses };
+            answer = { ok: true, frame: st.frame, outputs: Object.keys(images).length, uses: prep.uses, region: box,
+                       prompt: (runValues(k, c)[(promptParam(c) || {}).id]) ?? null, main: last.main };
         } catch (e) {
             if (run.stopped || e.stopped || String(e.message) === "stopped") { st.error = "Stopped."; answer = { ok: false, stopped: true }; }
             else {

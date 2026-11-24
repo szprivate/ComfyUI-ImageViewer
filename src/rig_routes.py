@@ -524,7 +524,8 @@ AGENT_ACTIONS = ("rig", "remove_rig", "autorig", "motion", "inbetween", "clean_f
                  "matchmove_track_set", "matchmove_solve", "matchmove_object_add", "matchmove_object_track",
                  "matchmove_object_solve", "matchmove_build", "matchmove_orient", "matchmove_geometry", "matchmove_save",
                  "matchmove_ground", "matchmove_ai_mask", "matchmove_measure", "matchmove_phone_export", "matchmove_frame", "matchmove_pin",
-                 "mesh_add", "mesh_convert", "mesh_info", "mesh_edit", "mesh_set", "mesh_apply_subdiv", "mesh_boolean")
+                 "mesh_add", "mesh_convert", "mesh_info", "mesh_edit", "mesh_set", "mesh_apply_subdiv", "mesh_boolean",
+                 "render_panel_info", "render_panel_set", "render_panel_render")
 VIDEO_EXTS = {".mp4", ".mov", ".m4v", ".mkv", ".webm", ".avi"}
 PICTURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 SOUND_EXTS = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"} | VIDEO_EXTS

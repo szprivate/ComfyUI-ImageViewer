@@ -43,6 +43,8 @@ export const SCENE_AGENT_ACTIONS = new Set([
     "matchmove_measure", "matchmove_phone_export", "matchmove_frame", "matchmove_pin",
     // Modeling's (imageViewer_previzAgentMesh.js, MESH_AGENT_ACTIONS).
     "mesh_add", "mesh_convert", "mesh_info", "mesh_edit", "mesh_set", "mesh_apply_subdiv", "mesh_boolean",
+    // The Render panel's (imageViewer_previzAgentRender.js, RENDER_PANEL_AGENT_ACTIONS).
+    "render_panel_info", "render_panel_set", "render_panel_render",
 ]);
 
 const CLIP_FIELDS = { start: "start", length: "length", in: "in", out: "out", speed: "speed", loop: "loop", weight: "weight",
