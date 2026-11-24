@@ -10,8 +10,11 @@ bepic_templates' colour transform node starts on: "Output - sRGB" of an OCIO v1
 ACES config (which carries the tone curve), the sRGB display with its default
 view on a v2 config. Picking that same sRGB as the input is "leave it alone".
 
-The colourspaces are the ones of the OpenColorIO config the rest of the pipeline
-uses: `$OCIO` when it is set, else the config built into PyOpenColorIO. Without
+The colourspaces are the ones of the OpenColorIO config picked in Settings ->
+ComfyUI Image Viewer -> Comp (a .ocio file or one of PyOpenColorIO's built-in
+configs, kept per OS user in ~/.comfyui_image_viewer/ocio_config.txt), else the
+one the rest of the pipeline uses: `$OCIO` when it is set, else the config built
+into PyOpenColorIO. Without
 PyOpenColorIO there are still two — sRGB and Linear — done in numpy, so a
 scene-linear EXR is never stuck looking black.
 """
@@ -53,16 +56,127 @@ def _find(names, *required, exclude=()):
     return None
 
 
+CONFIG_FILE_NAME = "ocio_config.txt"
+# PyOpenColorIO's own configs, offered by name in the settings (OCIO 2.2+).
+BUILTIN_CONFIGS = (
+    ("ocio://default", "Built-in default (CG config, ACEScg working space)"),
+    ("ocio://cg-config-latest", "Built-in CG config (ACES), latest"),
+    ("ocio://studio-config-latest", "Built-in studio config (ACES, cameras and logs), latest"),
+)
+_config_error = ""       # why the chosen config could not be read, for the settings page
+
+
+def config_file():
+    """Where the chosen config is kept: per OS user, beside the viewer's other files."""
+    try:
+        from .legacy_names import user_dir
+    except ImportError:  # pragma: no cover - run outside the package
+        from legacy_names import user_dir
+    return os.path.join(user_dir(), CONFIG_FILE_NAME)
+
+
+def chosen_config():
+    """The config picked in the settings ("" = none: $OCIO, else the built-in one)."""
+    try:
+        with open(config_file(), encoding="utf-8") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+
+def _read_config(choice):
+    if choice.startswith("ocio://"):
+        return ocio.Config.CreateFromBuiltinConfig(choice)
+    return ocio.Config.CreateFromFile(choice)
+
+
+def check_config(choice):
+    """The cleaned choice, or ValueError saying why it cannot be used. An empty one clears it."""
+    choice = str(choice or "").strip().strip('"')
+    if not choice:
+        return ""
+    if len(choice) > 1000:
+        raise ValueError("That path is too long.")
+    if choice.startswith("ocio://"):
+        if ocio is None:
+            raise ValueError("OpenColorIO is not installed on the ComfyUI machine.")
+    else:
+        choice = os.path.abspath(os.path.expandvars(os.path.expanduser(choice)))
+        if os.path.splitext(choice)[1].lower() != ".ocio":
+            raise ValueError("An OCIO config is a .ocio file.")
+        if not os.path.isfile(choice):
+            raise ValueError(f"There is no file at {choice}.")
+        if ocio is None:
+            raise ValueError("OpenColorIO is not installed on the ComfyUI machine.")
+    try:
+        _read_config(choice).validate()
+    except Exception as e:  # noqa: BLE001 - OCIO's own words
+        raise ValueError(f"OpenColorIO could not read it: {e}") from None
+    return choice
+
+
+def set_config(choice):
+    """Keep the chosen config (checked first) and start using it at once; "" goes back to $OCIO / built-in."""
+    choice = check_config(choice)
+    path = config_file()
+    if choice:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(choice + "\n")
+    elif os.path.exists(path):
+        os.remove(path)
+    reset()
+    return choice
+
+
+def reset():
+    """Forget the loaded config and everything made from it (the next call reads it again)."""
+    global _state
+    with _lock:
+        _state = None
+        _processors.clear()
+    try:
+        from . import comp_ocio
+        comp_ocio.reset()
+    except ImportError:  # pragma: no cover
+        pass
+
+
+def config_tag():
+    """A short name of the config in use, for caches of converted pictures (the same name in two configs differs)."""
+    import hashlib
+    st = _load()
+    return hashlib.sha1(st.get("source_path", st["source"]).encode("utf-8", "replace")).hexdigest()[:6]
+
+
+def config_state():
+    """What the settings page shows: the choice, where the config in use came from, and any trouble."""
+    st = _load()
+    return {"chosen": chosen_config(), "source": st["source"], "path": st.get("source_path", ""),
+            "error": _config_error, "available": st["config"] is not None, "ocio": ocio is not None,
+            "env": os.environ.get("OCIO", ""), "file": config_file(), "colorspaces": len(st["names"]),
+            "builtin": [{"value": v, "label": label} for v, label in BUILTIN_CONFIGS]}
+
+
 def _open_config():
-    """(config, where it came from). `$OCIO` first — it is what every other
-    application of the pipeline reads — then PyOpenColorIO's own."""
+    """(config, where it came from, its path). The settings' choice first, then `$OCIO`
+    — it is what every other application of the pipeline reads — then PyOpenColorIO's own."""
+    global _config_error
+    _config_error = ""
+    choice = chosen_config()
+    if choice:
+        try:
+            return _read_config(choice), "settings", choice
+        except Exception as e:  # noqa: BLE001
+            _config_error = f"{choice} could not be read ({e}); using {'$OCIO' if os.environ.get('OCIO') else 'the built-in config'}"
+            print(f"[ImageViewer] the OCIO config chosen in the settings: {_config_error}")
     if os.environ.get("OCIO"):
         try:
-            return ocio.Config.CreateFromEnv(), "$OCIO"
+            return ocio.Config.CreateFromEnv(), "$OCIO", os.environ["OCIO"]
         except Exception as e:
             print(f"[ImageViewer] the OCIO config in $OCIO could not be read ({e}); "
                   "using PyOpenColorIO's built-in one")
-    return ocio.Config.CreateFromBuiltinConfig("ocio://default"), "built-in"
+    return ocio.Config.CreateFromBuiltinConfig("ocio://default"), "built-in", "ocio://default"
 
 
 def _srgb_view(cfg):
@@ -92,7 +206,7 @@ def _load():
                  "families": {}, "target": BUILTIN_SRGB, "view": None, "linear": BUILTIN_LINEAR}
         if ocio is not None:
             try:
-                cfg, source = _open_config()
+                cfg, source, source_path = _open_config()
                 names = list(cfg.getColorSpaceNames())
                 target = (_find(names, "output", "srgb")
                           or _find(names, "srgb", "display")
@@ -115,7 +229,7 @@ def _load():
                             families[name] = ""
                     state = {"config": cfg, "source": source, "names": names,
                              "families": families, "target": target,
-                             "view": _srgb_view(cfg), "linear": linear}
+                             "view": _srgb_view(cfg), "linear": linear, "source_path": source_path}
                 else:
                     print("[ImageViewer] the OCIO config has no sRGB colourspace; "
                           "the viewer offers sRGB and Linear only")

@@ -2247,6 +2247,9 @@ export function renderNode(comp, id, frame, ctx) {
     };
     const render3d = (n, f, d1) => {
         const objs = sceneOf(n.inputs[0], f, d1), cam = cameraOf(n.inputs[1], f, W, H, true), ns = paramAt(n, "samples", f);
+        // The 3D room (imageViewer_comp3dRoom.js) asks only for the scene: what is in it and the camera, whichever
+        // renderer the node uses - nothing is drawn (the built-in renderer never reached the room, so it stood still).
+        if (ctx.sceneOnly && ctx.sceneOnly.id === n.id) { ctx.sceneOnly.got = { objs, cam }; return X(blank(W, H), {}); }
         // The 3D space's renderer when the page has one ready (ctx.engine3d); Comp's own otherwise, which draws
         // cards, shapes and points only (unlit) - a SceneFile and lights need the 3D space.
         const eng = ctx.engine3d && paramAt(n, "renderer", f) !== "built-in" && ctx.engine3d.ready ? ctx.engine3d : null;

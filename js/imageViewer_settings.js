@@ -31,6 +31,7 @@ export const PREF = {
     page:           P + "Settings.Page",
     folders:        P + "Folders.Allowed",
     paintWorkflows: P + "Paint.Workflows",
+    ocioConfig:     P + "Comp.OcioConfig",
     browserStart:   P + "Browser.StartFolder",
     browserFold:    P + "Browser.FoldSequences",
     browserKinds:   P + "Browser.Kinds",
@@ -193,6 +194,17 @@ function defs() {
                      "Kept on the ComfyUI machine in ~/.comfyui_image_viewer/paint_workflows/, not in your settings.",
             type: () => renderPaintWorkflowEditor(),
             defaultValue: "", sortOrder: 900,
+        },
+        // ── Comp ──
+        {
+            id: PREF.ocioConfig, category: sec("Comp", "OcioConfig"),
+            name: "OCIO config",
+            wideHelp: "The OpenColorIO config Comp and the viewer's colour menus use: a .ocio file on the ComfyUI " +
+                      "machine, or one of OpenColorIO's built-in configs. Empty: $OCIO when it is set, else the built-in default.",
+            tooltip: "The OpenColorIO config Comp and the viewer's colour menus use: a .ocio file on the ComfyUI machine, " +
+                     "or one of OpenColorIO's built-in configs. Kept on the ComfyUI machine in ~/.comfyui_image_viewer/ocio_config.txt.",
+            type: () => renderOcioConfigEditor(),
+            defaultValue: "", sortOrder: 850,
         },
         // ── File browser ──
         {
@@ -457,6 +469,7 @@ function defs() {
 const CUSTOM_ROWS = () => ({
     [PREF.folders]: renderFolderEditor,
     [PREF.paintWorkflows]: renderPaintWorkflowEditor,
+    [PREF.ocioConfig]: renderOcioConfigEditor,
     [PREF.colourReset]: renderColourReset,
 });
 
@@ -491,7 +504,7 @@ export function viewerSettings(getPanel) {
     for (const d of list) {
         DEFAULTS[d.id] = d.defaultValue;
         if (d.id === PREF.page || d.id === PREF.folders || d.id === PREF.colourReset ||
-            d.id === PREF.paintWorkflows) continue;   // not settings: the page, a list on the server, a button
+            d.id === PREF.paintWorkflows || d.id === PREF.ocioConfig) continue;   // not settings: the page, a list on the server, a button
         // Every change is also written to the per-user file (see below).
         const own = d.onChange;
         d.onChange = (value, old) => {
@@ -553,7 +566,8 @@ async function loadUserSettings() {
 
     const seed = {};
     for (const id of Object.keys(DEFAULTS)) {
-        if (id === PREF.page || id === PREF.folders || id === PREF.paintWorkflows || id === PREF.colourReset) continue;
+        if (id === PREF.page || id === PREF.folders || id === PREF.paintWorkflows || id === PREF.colourReset ||
+            id === PREF.ocioConfig) continue;
         const here = pref(id);
         if (id in stored) {
             // The user's file wins over what this ComfyUI user directory holds.
@@ -818,6 +832,8 @@ const CSS = `
 .imageviewer-roots button:disabled { opacity:.4; cursor:default; }
 .imageviewer-roots button.imageviewer-roots-x { padding:1px 7px; }
 .imageviewer-roots-add { display:flex; gap:6px; }
+.imageviewer-roots-add select { flex:1; min-width:0; background:#161a20; color:inherit; outline:none;
+    border:1px solid #2c313b; border-radius:7px; padding:6px 9px; font-size:12px; }
 .imageviewer-roots-add input { flex:1; min-width:0; background:#161a20; color:inherit; outline:none;
     border:1px solid #2c313b; border-radius:7px; padding:6px 9px;
     font-family:ui-monospace, Consolas, monospace; font-size:12px; }
@@ -998,6 +1014,67 @@ function folderPicker(start, onPick) {
     use.onclick = () => { if (current && current.path) onPick(current.path); };
     go(start || "");
     return box;
+}
+
+// ── The OCIO config ──────────────────────────────────────────────────────────
+//
+// Like the folder editor: the choice belongs to the ComfyUI machine (color_io.py keeps it in
+// ~/.comfyui_image_viewer/ocio_config.txt), read with GET /imageviewer/ocio_config and changed with a POST
+// there, which checks the config can be read before it is used. A change reaches Comp and the viewer's
+// colour menu at once (`ocioConfigChanged` on the panel).
+function renderOcioConfigEditor() {
+    const root = h("div", { className: "imageviewer-roots" }, h("style", { textContent: CSS }));
+    const body = h("div", { className: "imageviewer-roots-note" }, "Reading the OCIO config…");
+    const err = h("div", { className: "imageviewer-roots-err" });
+    root.append(body, err);
+    let state = null;
+    const save = async (config) => {
+        err.textContent = "";
+        try {
+            state = await rootsCall("/imageviewer/ocio_config", { config });
+            draw();
+            const panel = _getPanel();
+            if (panel && panel.ocioConfigChanged) panel.ocioConfigChanged();
+        } catch (e) { err.textContent = e.message || String(e); }
+    };
+    function draw() {
+        body.replaceChildren();
+        body.className = "";
+        const builtin = state.builtin || [];
+        const isBuiltin = builtin.some((b) => b.value === state.chosen);
+        const pick = h("select", { disabled: !state.editable || !state.ocio, title: "OpenColorIO's own configs" },
+            h("option", { value: "" }, state.env ? "$OCIO (" + state.env + ")" : "Built-in default (nothing chosen)"),
+            builtin.map((b) => h("option", { value: b.value }, b.label)),
+            h("option", { value: "\u0001" }, "A .ocio file…"));
+        pick.value = isBuiltin ? state.chosen : state.chosen ? "\u0001" : "";
+        const input = h("input", { type: "text", placeholder: "Path of a .ocio file on the ComfyUI machine, e.g. W:\\pipeline\\ocio\\config.ocio",
+                                   value: isBuiltin ? "" : state.chosen || "", disabled: !state.editable || !state.ocio, spellcheck: false });
+        const fileRow = h("div", { className: "imageviewer-roots-add" }, input,
+            h("button", { disabled: !state.editable || !state.ocio, onclick: () => { const v = input.value.trim(); if (v) save(v); } }, "Use"));
+        const showFile = () => { fileRow.style.display = pick.value === "\u0001" ? "" : "none"; };
+        pick.addEventListener("change", () => { showFile(); if (pick.value !== "\u0001") save(pick.value); else input.focus(); });
+        input.addEventListener("keydown", (e) => {
+            e.stopPropagation();                 // keep ComfyUI's hotkeys out of the field
+            if (e.key === "Enter") { e.preventDefault(); const v = input.value.trim(); if (v) save(v); }
+        });
+        showFile();
+        const inUse = state.available
+            ? `In use: ${state.source === "settings" ? "the config chosen here" : state.source === "$OCIO" ? "$OCIO" : "the built-in default"}` +
+              ` (${state.path}), ${state.colorspaces} colourspaces.`
+            : "OpenColorIO is not installed on the ComfyUI machine: only sRGB and Linear are offered.";
+        body.append(
+            h("div", { className: "imageviewer-roots-add" }, pick),
+            fileRow,
+            h("div", { className: "imageviewer-roots-note" }, inUse),
+            state.error ? h("div", { className: "imageviewer-roots-err" }, state.error) : null,
+            h("div", { className: "imageviewer-roots-note" }, state.editable
+                ? `Kept on the ComfyUI machine in ${state.file}. Takes effect at once; no restart.`
+                : state.reason),
+        );
+    }
+    rootsCall("/imageviewer/ocio_config").then((s) => { state = s; draw(); })
+        .catch((e) => { body.textContent = ""; err.textContent = e.message || String(e); });
+    return root;
 }
 
 function refreshPanelBrowser() {

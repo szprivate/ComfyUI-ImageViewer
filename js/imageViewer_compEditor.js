@@ -47,7 +47,8 @@ const BAR_ICONS = {
     box: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
     columns: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 3v18"/>',
     scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M12 7v10"/>',
-    fit: '<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>',
+    // Fit the picture: a picture between corner marks (the panel's own maximise sits above it, so not its arrows).
+    fit: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><rect x="7" y="8" width="10" height="8" rx="1"/><path d="m7 14 3-3 2.5 2.5 1.5-1.5 3 3"/>',
     undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"/>',
     redo: '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"/>',
     region: '<path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M21 19a2 2 0 0 1-2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h1"/><path d="M14 3h1"/><path d="M14 21h1"/><path d="M3 9v1"/><path d="M21 9v1"/><path d="M3 14v1"/><path d="M21 14v1"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
@@ -128,7 +129,7 @@ const CSS = `
 .cp-bar .cp-dd.on{color:#ff6600;background-color:#ff660018}
 .cp-bar .cp-proxy{min-width:0}
 .cp-bar .cp-chan{max-width:16em}
-.cp-bar .cp-display{max-width:14em}
+.cp-bar .cp-display{max-width:16em}
 .cp-bar .cp-views{max-width:9.5em;text-overflow:ellipsis}
 .cp-bar .cp-mini-caret{font-size:9px;color:#8a8a92;margin-left:-1px}
 .cp-bar .mg-sep{width:1px;height:18px;background:#ffffff1a;margin:0 3px}
@@ -379,7 +380,12 @@ export function createCompEditor(host, opts = {}) {
     const luts = new Map(), lutAsk = new Map();
     const LUT_RETRY_MS = 15000;
     const lutOf = (spec) => { const e = luts.get(C.OC.ocioKey(spec)); return (e && e.lut) || null; };
-    const displaySpec = () => { if (!st.display) return null; const [display, view] = st.display.split("\u0001"); return { src: "", display, view }; };
+    // st.display: "" plain sRGB, "<display>\u0001<view>", or "\u0002<colourspace>" (the working space into it, shown as is).
+    const displaySpec = () => {
+        if (!st.display) return null;
+        if (st.display[0] === "\u0002") return { src: "", dst: st.display.slice(1) };
+        const [display, view] = st.display.split("\u0001"); return { src: "", display, view };
+    };
     async function needLuts(specs) {
         if (!o.ocioLut) return;
         await Promise.all(specs.map((spec) => {
@@ -796,10 +802,37 @@ export function createCompEditor(host, opts = {}) {
     }
     /** What the picture on show has, for the channel menu (each draw). */
     function fillLook(chans) { lastChans = chans; paintLook(); }
+    /** The display menu: plain sRGB; each display's views (ACES output transforms among them), grouped by
+     *  display; then the config's colourspaces - the picture taken from the working space into one (ACEScg,
+     *  ACES2065-1, ACEScct ...) and shown as its values are. */
+    function fillDisplay(sel) {
+        const info = st.ocio, short = (d) => String(d).replace(/\s*-\s*Display$/i, "");
+        sel.append(new Option("sRGB (plain)", ""));
+        for (const d of info.displays) {
+            const g = el(doc, "optgroup");
+            g.label = d.name;
+            for (const v of d.views) g.append(new Option(`${short(d.name)} · ${v}`, `${d.name}\u0001${v}`));
+            sel.append(g);
+        }
+        const names = (info.colorspaces || []).map((c) => c.name);
+        if (names.length) {
+            const g = el(doc, "optgroup");
+            g.label = "Colourspace (values as they are)";
+            const aces = names.filter((n) => /aces/i.test(n)), rest = names.filter((n) => !/aces/i.test(n));
+            for (const n of aces.concat(rest)) g.append(new Option(n, `\u0002${n}`));
+            sel.append(g);
+        }
+        const known = [...sel.options].some((x) => x.value === st.display);
+        sel.value = known ? st.display : "";
+        const shown = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : "";
+        sel.title = `How the picture is shown${shown ? ` (now: ${shown})` : ""}: plain sRGB, a display and view of the OCIO config, `
+            + `or the picture in one of its colourspaces. Config: ${info.source}${info.path ? ` (${info.path})` : ""}; working space ${info.working}`;
+    }
+    let lastDirty = null;
     function renderBar() {
         bar.replaceChildren();
-        const t = el(doc, "span", "mg-title", (st.path ? st.path.split(/[\\/]/).pop() : "comp") + (st.dirty ? " •" : ""));
-        t.title = st.path || "";
+        // The comp's name is the viewer tab's; changes not saved are a * there (o.onDirty).
+        if (o.onDirty && lastDirty !== !!st.dirty) { lastDirty = !!st.dirty; o.onDirty(lastDirty); }
         const proxy = el(doc, "select", "mg-btn cp-proxy");
         for (const [v, label] of [["auto", "Proxy auto"], ["1", "Full res"], ["0.5", "Proxy 1/2"], ["0.25", "Proxy 1/4"]]) proxy.append(new Option(label, v));
         proxy.value = st.proxy;
@@ -814,13 +847,10 @@ export function createCompEditor(host, opts = {}) {
             ? "Region render on: only the box is worked (Alt+W). Drag its edges, corners or the centre mark; a click here: the whole picture again"
             : "Region render: work only a box of the picture, for a quicker look at a part of it (Alt+W)", () => setRegion(!st.region.on), "cp-region" + (st.region.on ? " on" : ""));
         let disp = null;
-        if (st.ocio && st.ocio.available && st.ocio.displays.length) {
+        if (st.ocio && st.ocio.available && (st.ocio.displays.length || st.ocio.colorspaces.length)) {
             disp = el(doc, "select", "mg-btn cp-display");
-            disp.append(new Option("sRGB (plain)", ""));
-            for (const d of st.ocio.displays) for (const v of d.views) disp.append(new Option(`${d.name} · ${v}`, `${d.name}\u0001${v}`));
-            disp.value = st.display;
-            disp.title = `How the picture is shown: plain sRGB, or a display and view of the OCIO config (${st.ocio.source}; working space ${st.ocio.working})`;
-            disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); };
+            fillDisplay(disp);
+            disp.onchange = () => { st.display = disp.value; if (o.onDisplay) o.onDisplay(st.display); queueRender(); renderBar(); };
         }
         // What the picture is looked at in: one menu, the layers and the channels in them.
         chanBtn = btn("", "What the picture is looked at in: rgba, or a layer of extra channels, and one channel of "
@@ -889,12 +919,10 @@ export function createCompEditor(host, opts = {}) {
             ib("open", "Open… (Ctrl+O) a comp", () => o.open && o.open(), "cp-open"),
             ib("save", "Save (Ctrl+S) - the menu: Save as, Render, Export to Nuke", (b) => popMenu(b, fileItems()), "cp-save" + (st.dirty ? " dirty" : "")),
             el(doc, "span", "mg-sep"),
-            t,
-            el(doc, "span", "mg-sep"),
             tb("undo", "", "Undo (Ctrl+Z)", undo, "cp-undo"), tb("redo", "", "Redo (Ctrl+Shift+Z)", redo, "cp-redo"),
             // Everything that only changes how the picture is LOOKED AT, together on the right by Fit.
             el(doc, "span", "mg-spacer"),
-            proxy, gpuBtn, regionBtn, el(doc, "span", "mg-sep"), ...(disp ? [disp] : []), chanBtn, el(doc, "span", "mg-sep"), exp, el(doc, "span", "mg-sep"), eyes,
+            proxy, gpuBtn, regionBtn, el(doc, "span", "mg-sep"), chanBtn, el(doc, "span", "mg-sep"), exp, ...(disp ? [disp] : []), el(doc, "span", "mg-sep"), eyes,
             vtBtn,
             ...(has3d() && o.room3d ? [tb("box", "3D", st.room ? "Back to the picture (the 2D view)" : "The 3D room: look around the scene a Render3D draws, and move the selected Card, Shape, Light or Camera with the gizmo (W move, E turn, R scale; Alt + drag tumbles, F frames)", () => setRoom(!st.room), "cp-3d cp-wide" + (st.room ? " on" : "")),
                 tb("columns", "", st.roomSplit ? "The 3D room over the picture" : "The 3D room beside the picture (side by side)", () => setRoomSplit(!st.roomSplit), "cp-3dsplit" + (st.roomSplit ? " on" : ""))] : []),
@@ -986,6 +1014,7 @@ export function createCompEditor(host, opts = {}) {
             }
             if (phase === "end") { st.dirty = true; refresh(["bar", "props"]); }
             queueRender();
+            roomAfterDraw();
         },
     };
     async function render3dFrame(id, f, view, w, h, { raster = false } = {}) {
@@ -1033,20 +1062,37 @@ export function createCompEditor(host, opts = {}) {
             }
             roomLastKey = "";
             queueRender();
+            roomAfterDraw();
         } else if (!on && st.room) { st.room = false; if (o.room3dClose) o.room3dClose(); views.classList.remove("split"); renderBar(); queueRender(); }
     }
-    /** After a draw: the room's scene again when the Render3D or the frame changed (drawn small: only its objects count). */
+    /** After a draw (and each gizmo step): the room's scene again when the Render3D, the frame or anything upstream
+     *  changed - only the scene is worked out (renderNode's `sceneOnly`), nothing drawn, whichever renderer it uses. */
+    let roomGen = 0;
     async function roomAfterDraw() {
         if (!st.room) return;
         const t = roomTarget();
         const key = t ? `${t}@${st.frame}@${eyeNow()}@${C.upstreamHash(st.comp, t)}` : "";
         if (t && key !== roomLastKey) {
             roomLastKey = key;
-            const F = C.formatAt(st.comp, t), k = Math.min(1, 256 / Math.max(F.width, F.height));
-            const w = Math.max(1, Math.round(F.width * k)), h = Math.max(1, Math.round(F.height * k));
-            try { await render3dFrame(t, st.frame, eyeNow(), w, h, { raster: true }); } catch (_) { /* the room keeps what it had */ }
+            const gen = ++roomGen;
+            try {
+                const scene = await roomScene(t, st.frame, eyeNow());
+                // A newer edit asked again meanwhile: its answer is the one shown.
+                if (gen === roomGen && st.room && scene) { const e = o.engine3d && o.engine3d(); if (e && e.roomShow) e.roomShow(scene); }
+            } catch (_) { roomLastKey = ""; /* the room keeps what it had; asked again next time */ }
         }
         if (o.room3dSync) o.room3dSync();
+    }
+    /** What Render3D `id` sees at frame f: {objs, cam} (its scene and camera, the comp's own numbers), or null. */
+    async function roomScene(id, f, view) {
+        const n = G.flatNode(st.comp, id);
+        if (!n || n.type !== "render3d") return null;
+        const pics = new Map(), F = C.formatAt(st.comp, id), scale = Math.min(1, 256 / Math.max(F.width, F.height));
+        const c = JSON.parse(JSON.stringify(st.comp));
+        await loadNeeds(C.sourceNeeds(c, id, f, view), pics, scale);
+        const only = { id, got: null };
+        C.renderNode(c, id, f, Object.assign(sourcesCtx(pics), { scale, view, sceneOnly: only, noTrace: true }));
+        return only.got;
     }
     function queueRender() {
         if (renderQueued) return;
@@ -1172,7 +1218,7 @@ export function createCompEditor(host, opts = {}) {
         const chan = look === "rgba" ? "" : ` · ${look}`;
         const ev = st.ev && st.channel !== "a" ? ` · ${st.ev > 0 ? "+" : ""}${st.ev.toFixed(1)} EV` : "";
         const lutFail = ds && !dl && luts.get(C.OC.ocioKey(ds));
-        const shown = ds ? (dl ? ` · ${ds.display} / ${ds.view}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
+        const shown = ds ? (dl ? ` · ${ds.dst ? ds.dst : `${ds.display} / ${ds.view}`}` : lutFail ? ` · OCIO display failed (${lutFail.why}): plain sRGB` : " · OCIO display loading…") : "";
         const cmp = imgB ? ` · ${viewTools.state.compare} with ${(node(bId) && (node(bId).name || bId)) || bId}` : "";
         const rng = viewTools.state.range ? ` · ${marked ? `${marked} px out of 0–1` : "nothing out of 0–1"}` : "";
         info.textContent = `Viewing ${v ? v.name || v.id : "nothing"}${size}${cmp}${chan}${ev}${shown}${rng} · ${scale === 1 ? "full" : "1/" + Math.round(1 / scale)}${lastProxy > 1 ? " while moving" : ""} · ${lastMs} ms${lastHow === "cpu" ? (gpuWhy && gpuWanted() ? ` · CPU (GPU off: ${gpuWhy})` : "") : ` · ${lastHow}`}${st.region.on ? (lastHow === "cpu" ? " · region (the CPU works the whole picture)" : " · region") : ""}${traceNote()}`;
@@ -4286,6 +4332,11 @@ export function createCompEditor(host, opts = {}) {
         /** Render ahead now (the tests; normally after a pause). Resolves with the frames made. */
         renderAhead: () => { if (ahead) { clearTimeout(ahead.t); ahead.stop = true; } const job = { stop: false, gen: renderGen, t: 0 }; ahead = job; return aheadRun(job); },
         setDisplay: (v) => { st.display = v || ""; renderBar(); queueRender(); },
+        /** The OCIO config changed (Settings): its lists asked again, every baked transform forgotten. */
+        reloadOcio: () => {
+            luts.clear(); lutAsk.clear();
+            if (o.ocioInfo) o.ocioInfo().then((info) => { st.ocio = info; if (st.comp) { renderBar(); renderProps(); queueRender(); } }).catch(() => {});
+        },
         /** How the picture is looked at: {ev, channel} (either may be left out) - only what is shown. */
         setViewing: (v) => { if (!v) return; let changed = false;
             if (v.ev !== undefined) { const ev = Math.max(-6, Math.min(6, Number(v.ev) || 0)); changed = changed || ev !== st.ev; st.ev = ev; }

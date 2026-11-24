@@ -211,12 +211,20 @@ ROOM = """async () => {
   room.gizmo.dispatchEvent({ type: 'dragging-changed', value: false });
   await sleep(300);
   const moved = { translate: card.translate, rotate: card.rotate };
+  const infoMoved = rec.engine.roomInfo();
   const canvasW = rec.engine.view.canvas.clientWidth;
   await ed.setRoom(false);
   const info2 = rec.engine.roomInfo();
-  return { ready: true, starter, info1, free, keyR, moved, canvasW, closed: info2 === null, hidden: rec.engine.box.style.visibility,
+  return { ready: true, starter, info1, infoMoved, free, keyR, moved, canvasW, closed: info2 === null, hidden: rec.engine.box.style.visibility,
     hist: ed.state.hist.past.length - hist0, warn: P.shadowRoot.querySelectorAll('.cp-wbadge').length };
 }"""
+
+
+# The same with the Render3D on Comp's built-in renderer, which never draws through the 3D space's engine
+# (Sebastian 2026-11-24: the gizmo moved but the Card stayed where it was).
+ROOM_BUILTIN = ROOM.replace("const rn = ed.addNode('render3d', {});",
+                            "const rn = ed.addNode('render3d', {}); rn.renderer = 'built-in';")
+assert ROOM_BUILTIN != ROOM
 
 
 # Side by side: the room beside the picture, Alt + left tumbling about the Card under the pointer, F framing it.
@@ -527,6 +535,28 @@ class Comp3DEngineTests(unittest.TestCase):
         self.assertTrue(st["closed"])
         self.assertEqual(st["hidden"], "hidden")
         self.assertEqual(st["warn"], 0)
+        self.assertEqual(errors, [])
+
+    def test_the_room_follows_a_moved_card_with_the_built_in_renderer(self):
+        pg = self.browser.new_page(viewport={"width": 1400, "height": 900})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        try:
+            pg.goto(f"http://127.0.0.1:{self.port}/tabs.html")
+            pg.wait_for_function("() => window.__panel && window.__panel.container", timeout=20000)
+            st = pg.evaluate(ROOM_BUILTIN)
+        finally:
+            pg.close()
+        self.assertNotIn("error", st, st)
+        if not st["ready"]:
+            self.skipTest("no float render targets")
+        self.assertGreaterEqual(st["info1"]["objects"], 2, "the room shows the scene of a built-in Render3D too")
+        before, after = st["info1"]["centres"], st["infoMoved"]["centres"]
+        self.assertTrue(before and after)
+        self.assertNotEqual(before, after, "the Card is drawn where the gizmo put it")
+        self.assertAlmostEqual(after[0][0], 0.5, places=2)
+        self.assertAlmostEqual(after[0][1], 0.25, places=2)
+        self.assertAlmostEqual(after[0][2], -1, places=2)
         self.assertEqual(errors, [])
 
     def test_the_room_beside_the_picture_tumbles_about_what_is_under_the_pointer(self):
