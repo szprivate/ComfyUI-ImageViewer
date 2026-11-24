@@ -1555,7 +1555,9 @@ export const VIEW_CHANNELS = [["rgb", "RGB"], ["r", "Red"], ["g", "Green"], ["b"
  * values 0..1 (an OCIO display / view) when given, else the sRGB curve. The alpha ("a") is shown as it is, grey:
  * no exposure and no display transform - it is a matte, not a picture. Over black (premultiplied as it stands).
  */
-export function viewEncode(img, out, { gain = 1, channel = "rgb", color = null } = {}) {
+// color: an OCIO transform of the colours; with curve, it ends in LINEAR Rec.709 and the sRGB curve is put on
+// here (exact), else it ends in display values.
+export function viewEncode(img, out, { gain = 1, channel = "rgb", color = null, curve = false } = {}) {
     const d = img.data, n = img.w * img.h * 4;
     const lut = new Uint8ClampedArray(4096);
     for (let i = 0; i < 4096; i++) lut[i] = Math.round(linearToSrgb(i / 4095) * 255);
@@ -1568,7 +1570,8 @@ export function viewEncode(img, out, { gain = 1, channel = "rgb", color = null }
         let r, g, b;
         if (one >= 0) r = g = b = d[i + one] * gain;
         else { r = d[i] * gain; g = d[i + 1] * gain; b = d[i + 2] * gain; }
-        if (color) { const c = color(r, g, b); out[i] = qd(c[0]); out[i + 1] = qd(c[1]); out[i + 2] = qd(c[2]); }
+        if (color && curve) { const c = color(r, g, b); out[i] = q(c[0]); out[i + 1] = q(c[1]); out[i + 2] = q(c[2]); }
+        else if (color) { const c = color(r, g, b); out[i] = qd(c[0]); out[i + 1] = qd(c[1]); out[i + 2] = qd(c[2]); }
         else { out[i] = q(r); out[i + 1] = q(g); out[i + 2] = q(b); }
     }
     return out;

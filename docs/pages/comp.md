@@ -294,7 +294,7 @@ The **Views** menu in the bar turns a comp into a stereo pair (left, right) or a
 
 ## Colour
 
-The working space is the scene-linear role of the OCIO config. The colour menu in the bar (right of the exposure) says what the image's values are: the plain sRGB curve, or one of the config's colourspaces (the working space first, then ACEScg, ACES2065-1, ACEScct …). The output is always sRGB: the config's sRGB display with its default view (on an ACES config that is the ACES SDR output transform), as the viewer's own colour menu does.
+The working space is the scene-linear role of the OCIO config. The colour menu in the bar (right of the exposure) says what the image's values are: the plain sRGB curve, or one of the config's colourspaces (the working space first, then ACEScg, ACES2065-1, ACEScct …). The output is always plain sRGB: the sRGB encoding only, with no tone mapping, so a picture taken from sRGB into ACEScg by an OCIOColorSpace node and looked at as ACEScg here looks as it started. The preview converts into linear Rec.709 (exact for a linear colourspace) and puts the sRGB curve on after. For a view with an output transform, use an OCIODisplay node.
 
 The config is picked in **Settings → ComfyUI Image Viewer → Comp → OCIO config**: a `.ocio` file on the ComfyUI machine or one of OpenColorIO's built-in configs (the default CG config, the studio config). With nothing picked, `$OCIO` is used when it is set, else the built-in default. The choice is kept on the ComfyUI machine (`~/.comfyui_image_viewer/ocio_config.txt`), is checked before it is used, and applies at once to Comp and to the viewer's input colourspace menu.
 

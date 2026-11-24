@@ -890,3 +890,13 @@ test("a chain drag carries every node upstream (Ctrl) or downstream (Shift) of t
     assert.equal(C.chainOf(c, [lone.id], "up").size, 0);
     assert.ok(!C.chainOf(c, [m.id], "up").has(m.id), "the pressed node is not in its own chain");
 });
+
+test("viewEncode puts the sRGB curve on a transform that ends in linear Rec.709", () => {
+    const img = { w: 1, h: 1, data: new Float32Array([0.18, 0.5, 0.04, 1]) };
+    const same = (r, g, b) => [r, g, b];
+    const plain = Array.from(C.viewEncode(img, new Uint8ClampedArray(4))).slice(0, 3);
+    const curved = Array.from(C.viewEncode(img, new Uint8ClampedArray(4), { color: same, curve: true })).slice(0, 3);
+    const straight = Array.from(C.viewEncode(img, new Uint8ClampedArray(4), { color: same })).slice(0, 3);
+    assert.deepEqual(curved, plain, "linear 709 through the curve = the plain sRGB view");
+    assert.deepEqual(straight, [46, 128, 10], "without curve the transform's values are display values");
+});
