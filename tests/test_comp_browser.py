@@ -1310,6 +1310,54 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(names[0].endswith(".1001.jpg") and names[1].endswith(".1002.jpg"), names)
         self.assertEqual(self.errors, [])
 
+    def test_a_roto_shapes_feather_and_blur_soften_its_edge_also_without_a_canvas_filter(self):
+        # Sebastian 2026-11-24: "Comp Roto: feather and blur have no effect" (Safari: its canvas has no ctx.filter).
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); e.select([]);
+            const r = e.addNode('roto'); c.nodes.find((n) => n.type === 'output').inputs = [r.id];
+            e.setRoto(r.id, {{ version: 1, global: {{ invert: false, blur: 0, dilate: 0, feather: 0 }}, layers: [{{ id: 'L1', name: 'Shape1',
+                visible: true, closed: true, feather: 0, blur: 0, dilate: 0, opacity: 1, mode: 'union',
+                points: [{{ x: 0.3, y: 0.3 }}, {{ x: 0.7, y: 0.3 }}, {{ x: 0.7, y: 0.7 }}, {{ x: 0.3, y: 0.7 }}] }}] }});
+            e.select([r.id]); }}""")
+        pg.wait_for_function("() => !!__panel.compPropsPanel.querySelector('.cp-roto-slot .imageviewer-tool-panel')", timeout=10000)
+        pg.locator(".cp-roto-slot .imageviewer-layer-row").first.click()    # the shape picked, as by hand
+        pg.wait_for_timeout(500)
+        edge = lambda: self.pixel(pg, 0.71, 0.5)[0]       # just outside the right edge
+        inner = lambda: self.pixel(pg, 0.69, 0.5)[0]      # just inside it
+        self.assertLess(edge(), 20)
+        self.assertGreater(inner(), 235)
+
+        def slide(label, v):
+            for step in (v / 4, v / 2, v):    # a drag: several inputs, the comp re-reading the shapes between them
+                pg.evaluate("""([label, v]) => { const rows = [...__panel._rotoShapeControls.querySelectorAll('.row')]
+                    .filter((r) => (r.querySelector('label') || {}).textContent === label);
+                    const rng = rows[0].querySelector('input[type=range]'); rng.value = v; rng.oninput(); }""", [label, step])
+                pg.wait_for_timeout(250)
+            pg.wait_for_timeout(500)
+
+        for label in ("Feather", "Blur"):
+            for off in (False, True):
+                if off:   # as Safari: the canvas takes no filter, the Gaussian is worked out in numbers
+                    pg.evaluate("""async () => { const R = await import('/extensions/viewer/imageViewer_roto.js'); R.canvasBlursOff(true);
+                        __panel._cpMattes && __panel._cpMattes.clear(); }""")
+                slide(label, 40)
+                e, i = edge(), inner()
+                self.assertGreater(e, 25, f"{label} (filter off: {off}) softens outside the edge: {e}")
+                self.assertLess(i, 245, f"{label} (filter off: {off}) softens inside the edge: {i}")
+                slide(label, 0)
+                self.assertLess(edge(), 20)
+                if off:
+                    pg.evaluate("async () => (await import('/extensions/viewer/imageViewer_roto.js')).canvasBlursOff(false)")
+        # The two ways of blurring agree.
+        same = pg.evaluate("""async () => { const R = await import('/extensions/viewer/imageViewer_roto.js');
+            const roto = { version: 1, global: { blur: 12 }, layers: [{ visible: true, closed: true, points:
+                [{ x: 0.3, y: 0.3 }, { x: 0.7, y: 0.3 }, { x: 0.7, y: 0.7 }, { x: 0.3, y: 0.7 }] }] };
+            const a = R.rotoMatte(roto, 0, 200, 100, 200, 100, document); R.canvasBlursOff(true);
+            const b = R.rotoMatte(roto, 0, 200, 100, 200, 100, document); R.canvasBlursOff(false);
+            let d = 0; for (let i = 0; i < a.length; i++) d = Math.max(d, Math.abs(a[i] - b[i])); return d; }""")
+        self.assertLess(same, 0.06, same)
+
     def test_a_roto_shape_drawn_with_the_viewers_roto_tool_and_the_new_nodes_rendered_by_the_server(self):
         pg = self.page()
         path = self.new_comp(pg)
