@@ -768,6 +768,25 @@ export function consumers(comp, id) {
     return out;
 }
 
+/**
+ * The nodes a chain drag carries along (Ctrl + drag: everything feeding ``ids``; Shift + drag: everything they
+ * feed), found through the wires of this level, ``ids`` themselves left out. "up" walks the inputs, "down" the
+ * readers. Returns a Set of ids.
+ */
+export function chainOf(comp, ids, way) {
+    const seen = new Set(ids), out = new Set(), stack = [...ids];
+    const next = way === "up"
+        ? (id) => { const n = nodeById(comp, id); return n ? (n.inputs || []).filter(Boolean) : []; }
+        : (id) => consumers(comp, id).map((c) => c.node.id);
+    while (stack.length) {
+        for (const m of next(stack.pop())) {
+            if (seen.has(m) || !nodeById(comp, m)) continue;
+            seen.add(m); out.add(m); stack.push(m);
+        }
+    }
+    return out;
+}
+
 /** Does `from` reach `to` going up the inputs (is `to` upstream of `from`, or the same)? */
 export function reaches(comp, from, to) {
     const seen = new Set();

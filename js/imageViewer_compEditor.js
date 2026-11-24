@@ -1919,19 +1919,22 @@ export function createCompEditor(host, opts = {}) {
     }
     function dragNodes(e, id, { dup = false } = {}) {
         e.preventDefault(); graph.setPointerCapture(e.pointerId);
-        if (!dup && (e.shiftKey || e.ctrlKey)) {
-            // (A gesture before this one left its handlers: a marquee's let-go once emptied the selection here.)
-            graph.onpointermove = null; graph.onpointerup = null;
-            st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id];
-            syncBatches();
-            refresh(["graph", "props", "layers"]);
-            return;
+        // (A gesture before this one left its handlers: a marquee's let-go once emptied the selection here.)
+        graph.onpointermove = null; graph.onpointerup = null;
+        // Ctrl (Cmd) + drag carries every node upstream of the pressed one along, Shift + drag every node downstream
+        // (chainOf). A click with Shift or Ctrl and no drag still adds the node to the selection or takes it out.
+        const chain = dup ? null : (e.ctrlKey || e.metaKey) ? "up" : e.shiftKey ? "down" : null;
+        const toggles = !dup && (e.shiftKey || e.ctrlKey);
+        if (!chain) {
+            if (!st.sel.includes(id)) select([id]);
+            else { st.sel = [...st.sel.filter((x) => x !== id), id]; refresh(["props", "layers"]); }
         }
-        if (!st.sel.includes(id)) select([id]);
-        else { st.sel = [...st.sel.filter((x) => x !== id), id]; refresh(["props", "layers"]); }
         const [sx, sy] = gxy(e);
+        // What moves: the selection (with a chain drag the pressed node, and the selection when it is in it).
         // A backdrop carries what lies on it (and a backdrop on it what lies on that).
-        const moving = new Set(st.sel.filter((sid) => node(sid)));
+        const base = !chain ? st.sel : st.sel.includes(id) ? st.sel : [id];
+        const moving = new Set(base.filter((sid) => node(sid)));
+        if (chain) for (const x of C.chainOf(gc(), [...moving].filter((sid) => !G.GRAPH_ONLY.has(node(sid).type)), chain)) moving.add(x);
         for (const sid of [...moving]) if (node(sid).type === "backdrop") for (const x of C.backdropHolds(gc(), sid)) moving.add(x);
         let start = new Map([...moving].map((sid) => [sid, [node(sid).x, node(sid).y]]));
         let moved = false;
@@ -1953,9 +1956,10 @@ export function createCompEditor(host, opts = {}) {
                     dupMade = true;
                 }
             }
-            // Snapping: the pressed node lands on the grid and the others keep their places to it. Shift: freely.
+            // Snapping: the pressed node lands on the grid and the others keep their places to it. Shift: freely
+            // (pressed after the drag began: a Shift held at the press is the downstream drag, which snaps).
             let dx = x - sx, dy = y - sy;
-            if (st.grid.snap && !ev.shiftKey) { dx = C.snapTo(px0 + dx) - px0; dy = C.snapTo(py0 + dy) - py0; }
+            if (st.grid.snap && !(ev.shiftKey && chain !== "down")) { dx = C.snapTo(px0 + dx) - px0; dy = C.snapTo(py0 + dy) - py0; }
             for (const [sid, [x0, y0]] of start) { const n = node(sid); if (n) { n.x = Math.round(x0 + dx); n.y = Math.round(y0 + dy); } }
             // One free node over a wire: the wire lights up, and letting go puts the node into it (Nuke's way).
             const me = start.size === 1 ? node(id) : null;
@@ -1968,6 +1972,11 @@ export function createCompEditor(host, opts = {}) {
         graph.onpointerup = () => {
             graph.onpointermove = null;
             st.wireHot = null;
+            if (!moved && chain) {
+                if (toggles) { st.sel = st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id]; syncBatches(); refresh(["graph", "props", "layers"]); }
+                else select([id]);   // Cmd + click: a plain click
+                return;
+            }
             if (moved && hotWire && C.spliceNode(gc(), id, hotWire)) { st.dirty = true; refresh(); return; }
             if (dupMade) { st.dirty = true; refresh(); if (o.onSelect) o.onSelect(primary()); return; }
             if (moved) { st.dirty = true; renderBar(); renderGraph(); }
@@ -2045,10 +2054,10 @@ export function createCompEditor(host, opts = {}) {
     /** A held + drag: the selected nodes in one row (a drag across) or one column (a drag down), in the order they
      *  were picked, gliding there; the axis follows the drag and can change while it lasts. One undo step. */
     const LAYOUT_MS = 180;
-    function layoutDrag(e) {
-        e.preventDefault(); e.stopPropagation(); graph.setPointerCapture(e.pointerId);
+    function layoutDrag(e, host = graph, gx = gxy) {
+        e.preventDefault(); e.stopPropagation(); host.setPointerCapture(e.pointerId);
         syncBatches();
-        const [sx, sy] = gxy(e);
+        const [sx, sy] = gx(e);
         const items = st.sel.map(node).filter(Boolean).map((n) => ({ id: n.id, x: n.x, y: n.y, batch: st.batch.get(n.id) }));
         const before = cloneV(st.comp);
         let axis = null, tween = null, moved = false;
@@ -2059,8 +2068,8 @@ export function createCompEditor(host, opts = {}) {
             renderGraph();
             if (t < 1) win().requestAnimationFrame(step); else tween = null;
         };
-        graph.onpointermove = (ev) => {
-            const [x, y] = gxy(ev);
+        host.onpointermove = (ev) => {
+            const [x, y] = gx(ev);
             const a = C.layoutAxis(x - sx, y - sy);
             if (!a || a === axis) return;
             axis = a; moved = true;
@@ -2069,8 +2078,8 @@ export function createCompEditor(host, opts = {}) {
             tween = { t0: performance.now(), items: items.map((it) => { const n = node(it.id); return { id: it.id, fx: n.x, fy: n.y, tx: to.get(it.id).x, ty: to.get(it.id).y }; }) };
             if (going) win().requestAnimationFrame(step);
         };
-        graph.onpointerup = () => {
-            graph.onpointermove = null;
+        host.onpointerup = () => {
+            host.onpointermove = null;
             if (!moved) return;
             if (tween) { tween.t0 = -1e9; step(); }
             st.hist.push(before);
@@ -2078,24 +2087,24 @@ export function createCompEditor(host, opts = {}) {
         };
     }
     /** Y held + drag: a red stroke; every wire it crosses is cut when let go. One undo step. */
-    function cutDrag(e) {
-        e.preventDefault(); e.stopPropagation(); graph.setPointerCapture(e.pointerId);
-        let prev = gxy(e);
+    function cutDrag(e, host = graph, gx = gxy, wiresEl = wires) {
+        e.preventDefault(); e.stopPropagation(); host.setPointerCapture(e.pointerId);
+        let prev = gx(e);
         const pts = [prev], cut = new Map();
         const line = svgEl(doc, "polyline", { class: "cp-cutline", fill: "none" });
-        wires.append(line);
+        wiresEl.append(line);
         const draw_ = () => {
             line.setAttribute("points", pts.map((p) => p.join(",")).join(" "));
-            for (const p of wires.querySelectorAll("path[data-wire]")) p.classList.toggle("cp-wire-cut", cut.has(p.dataset.wire));
+            for (const p of wiresEl.querySelectorAll("path[data-wire]")) p.classList.toggle("cp-wire-cut", cut.has(p.dataset.wire));
         };
-        graph.onpointermove = (ev) => {
-            const q = gxy(ev);
+        host.onpointermove = (ev) => {
+            const q = gx(ev);
             for (const w of C.wiresCrossed(gc(), prev, q)) cut.set(`${w.src}>${w.dst}:${w.port}`, w);
             pts.push(q); prev = q;
             draw_();
         };
-        graph.onpointerup = () => {
-            graph.onpointermove = null;
+        host.onpointerup = () => {
+            host.onpointermove = null;
             line.remove();
             if (cut.size) mutate(() => { C.cutWires(gc(), [...cut.values()]); });
             else renderGraph();
@@ -2181,7 +2190,8 @@ export function createCompEditor(host, opts = {}) {
             st.sel = [n.id];
         });
     }
-    graph.addEventListener("contextmenu", (e) => graphContextMenu(e, gxy, graph));
+    // A Mac turns Ctrl + click into a right-click: Ctrl + left drag on a node is the upstream drag there, no menu.
+    graph.addEventListener("contextmenu", (e) => { if (e.button === 0 && e.ctrlKey) { e.preventDefault(); return; } graphContextMenu(e, gxy, graph); });
     /** The graph's right-click menu, for this graph or another view of it (its own gxy and element). */
     function graphContextMenu(e, gx, host) {
         e.preventDefault();
@@ -4391,6 +4401,11 @@ export function createCompEditor(host, opts = {}) {
             grid(patch) { setGrid(patch); },
             gridState: () => st.grid,
             align(anchorEl) { return popMenu(anchorEl, alignItems()); },
+            /** A or Y held over another view; the gestures they start there (its element, its gxy, its wires). */
+            hold(key, code) { hold(key, code); },
+            held: () => st.held,
+            layoutDrag(e, hostEl, gx) { if (st.sel.filter((id) => node(id)).length >= 2) { layoutDrag(e, hostEl, gx); return true; } return false; },
+            cutDrag(e, hostEl, gx, wiresEl) { cutDrag(e, hostEl, gx, wiresEl); return true; },
             remove() { removeSel(); },
             disable() { toggleDisable(); },
         },

@@ -830,3 +830,18 @@ test("Shuffle: two inputs routed through a grid, constants, and an older node re
     // ... and once upgraded it stays as it is.
     assert.deepEqual(C.normalizeComp(comp).comp.nodes.find((n) => n.id === "S").inputs, ["K", null, "M"]);
 });
+
+test("a chain drag carries every node upstream (Ctrl) or downstream (Shift) of the pressed one", () => {
+    const c = C.newComp({ width: 64, height: 32, fps: 24, frames: 1 });
+    const bg = c.nodes.find((n) => n.type === "constant"), out = c.nodes.find((n) => n.type === "output");
+    const r = C.addNode(c, read(c, "a.png"));
+    const b = C.addNode(c, C.makeNode(c, "blur", { inputs: [r.id] }));
+    const m = C.addNode(c, C.makeNode(c, "merge", { inputs: [bg.id, b.id] }));
+    out.inputs[0] = m.id;
+    const lone = C.addNode(c, C.makeNode(c, "blur"));
+    assert.deepEqual([...C.chainOf(c, [m.id], "up")].sort(), [bg.id, b.id, r.id].sort());
+    assert.deepEqual([...C.chainOf(c, [b.id], "down")].sort(), [m.id, out.id].sort());
+    assert.deepEqual([...C.chainOf(c, [r.id], "down")].sort(), [b.id, m.id, out.id].sort());
+    assert.equal(C.chainOf(c, [lone.id], "up").size, 0);
+    assert.ok(!C.chainOf(c, [m.id], "up").has(m.id), "the pressed node is not in its own chain");
+});
