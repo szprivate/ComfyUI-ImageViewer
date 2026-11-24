@@ -1,0 +1,60 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/beauty.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:beauty"
+  }
+ },
+ "2": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/depth.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:depth"
+  }
+ },
+ "3": {
+  "class_type": "OpenAIGPTImageNodeV2",
+  "inputs": {
+   "prompt": "Turn image 1, a rough 3D layout, into a photorealistic photograph. Keep the camera, the framing and every object's shape and place exactly as in image 1; image 2 is its depth (near = white). Realistic materials, natural light.",
+   "model": "gpt-image-2.5-flare",
+   "model.size": "auto",
+   "model.custom_width": 1024,
+   "model.custom_height": 1024,
+   "model.background": "auto",
+   "model.quality": "high",
+   "model.images.image_1": [
+    "1",
+    0
+   ],
+   "model.images.image_2": [
+    "2",
+    0
+   ],
+   "n": 1,
+   "seed": 0
+  },
+  "_meta": {
+   "title": "Positive prompt"
+  }
+ },
+ "4": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "3",
+    0
+   ],
+   "filename_prefix": "render3d/gpt25"
+  },
+  "_meta": {
+   "title": "comp:out"
+  }
+ }
+}

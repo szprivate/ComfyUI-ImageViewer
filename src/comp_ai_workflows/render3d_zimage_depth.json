@@ -1,0 +1,183 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/depth.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:depth"
+  }
+ },
+ "2": {
+  "class_type": "ImageScaleToMaxDimension",
+  "inputs": {
+   "image": [
+    "1",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "largest_size": 1536
+  }
+ },
+ "3": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_4b.safetensors",
+   "type": "lumina2",
+   "device": "default"
+  }
+ },
+ "4": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "z_image_turbo_bf16.safetensors",
+   "weight_dtype": "default"
+  }
+ },
+ "5": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "ae.safetensors"
+  }
+ },
+ "6": {
+  "class_type": "ModelPatchLoader",
+  "inputs": {
+   "name": "Z-Image-Turbo-Fun-Controlnet-Union.safetensors"
+  }
+ },
+ "7": {
+  "class_type": "QwenImageDiffsynthControlnet",
+  "inputs": {
+   "model": [
+    "4",
+    0
+   ],
+   "model_patch": [
+    "6",
+    0
+   ],
+   "vae": [
+    "5",
+    0
+   ],
+   "image": [
+    "2",
+    0
+   ],
+   "strength": 0.9
+  },
+  "_meta": {
+   "title": "comp:layout strength"
+  }
+ },
+ "8": {
+  "class_type": "ModelSamplingAuraFlow",
+  "inputs": {
+   "model": [
+    "7",
+    0
+   ],
+   "shift": 3
+  }
+ },
+ "9": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "3",
+    0
+   ],
+   "text": "Realistic photo of the scene, natural light, real materials, sharp detail, shot on a full-frame camera"
+  },
+  "_meta": {
+   "title": "Positive prompt"
+  }
+ },
+ "10": {
+  "class_type": "ConditioningZeroOut",
+  "inputs": {
+   "conditioning": [
+    "9",
+    0
+   ]
+  }
+ },
+ "11": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "2",
+    0
+   ]
+  }
+ },
+ "12": {
+  "class_type": "EmptySD3LatentImage",
+  "inputs": {
+   "width": [
+    "11",
+    0
+   ],
+   "height": [
+    "11",
+    1
+   ],
+   "batch_size": 1
+  }
+ },
+ "13": {
+  "class_type": "KSampler",
+  "inputs": {
+   "model": [
+    "8",
+    0
+   ],
+   "positive": [
+    "9",
+    0
+   ],
+   "negative": [
+    "10",
+    0
+   ],
+   "latent_image": [
+    "12",
+    0
+   ],
+   "seed": 0,
+   "steps": 8,
+   "cfg": 1,
+   "sampler_name": "res_multistep",
+   "scheduler": "simple",
+   "denoise": 1
+  }
+ },
+ "14": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "13",
+    0
+   ],
+   "vae": [
+    "5",
+    0
+   ]
+  }
+ },
+ "15": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "14",
+    0
+   ],
+   "filename_prefix": "render3d/zimage"
+  },
+  "_meta": {
+   "title": "comp:out"
+  }
+ }
+}

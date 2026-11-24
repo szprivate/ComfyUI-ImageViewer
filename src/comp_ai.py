@@ -72,6 +72,8 @@ def action_of(kind, prompt):
         return ("fill", words) if words else ("remove", "")
     if kind == "upscale":
         return "upscale", ""
+    if kind == "render3d":         # the 3D space's Render panel: a layout rendered realistically
+        return "render", ""
     raise AiError(f"not an AI node: {kind!r}")
 
 

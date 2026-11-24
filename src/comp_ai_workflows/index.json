@@ -60,6 +60,14 @@
     "magnific_precise",
     "recraft_crisp"
    ]
+  },
+  "render3d": {
+   "action": "render",
+   "workflows": [
+    "comp_r3_zimage_depth",
+    "comp_r3_qwen2511",
+    "comp_r3_gpt25"
+   ]
   }
  },
  "entries": [
@@ -521,6 +529,137 @@
      "directory": "geometry_estimation"
     }
    ]
+  },
+  {
+   "id": "comp_r3_zimage_depth",
+   "label": "Realistic render: Z-Image Turbo + depth ControlNet (local, fast)",
+   "file": "render3d_zimage_depth.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 16,
+    "max": 1536
+   },
+   "from": "image_z_image_turbo_fun_union_controlnet (the depth pass in place of Canny)",
+   "nodes": [
+    "CLIPLoader",
+    "CLIPTextEncode",
+    "ConditioningZeroOut",
+    "EmptySD3LatentImage",
+    "GetImageSize",
+    "ImageScaleToMaxDimension",
+    "KSampler",
+    "LoadImage",
+    "ModelPatchLoader",
+    "ModelSamplingAuraFlow",
+    "QwenImageDiffsynthControlnet",
+    "SaveImage",
+    "UNETLoader",
+    "VAEDecode",
+    "VAELoader"
+   ],
+   "models": [
+    {
+     "name": "qwen_3_4b.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/text_encoders/qwen_3_4b.safetensors",
+     "directory": "text_encoders"
+    },
+    {
+     "name": "z_image_turbo_bf16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/diffusion_models/z_image_turbo_bf16.safetensors",
+     "directory": "diffusion_models"
+    },
+    {
+     "name": "ae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/z_image_turbo/resolve/main/split_files/vae/ae.safetensors",
+     "directory": "vae"
+    },
+    {
+     "name": "Z-Image-Turbo-Fun-Controlnet-Union.safetensors",
+     "url": "https://huggingface.co/alibaba-pai/Z-Image-Turbo-Fun-Controlnet-Union/resolve/main/Z-Image-Turbo-Fun-Controlnet-Union.safetensors",
+     "directory": "model_patches"
+    }
+   ]
+  },
+  {
+   "id": "comp_r3_qwen2511",
+   "label": "Realistic render: Qwen Image Edit 2511, beauty + depth (local, keeps the colours)",
+   "file": "render3d_qwen2511.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "image_qwen_image_edit_2511 (4-step Lightning LoRA on)",
+   "nodes": [
+    "CFGNorm",
+    "CLIPLoader",
+    "FluxKontextImageScale",
+    "FluxKontextMultiReferenceLatentMethod",
+    "KSampler",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "ModelSamplingAuraFlow",
+    "SaveImage",
+    "TextEncodeQwenImageEditPlus",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEEncode",
+    "VAELoader"
+   ],
+   "models": [
+    {
+     "name": "qwen_image_vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/resolve/main/split_files/vae/qwen_image_vae.safetensors",
+     "directory": "vae"
+    },
+    {
+     "name": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+     "url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+     "directory": "loras"
+    },
+    {
+     "name": "qwen_image_edit_2511_fp8mixed.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/Qwen-Image-Edit_ComfyUI/resolve/main/split_files/diffusion_models/qwen_image_edit_2511_fp8mixed.safetensors",
+     "directory": "diffusion_models"
+    },
+    {
+     "name": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/HunyuanVideo_1.5_repackaged/resolve/main/split_files/text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors",
+     "directory": "text_encoders"
+    }
+   ]
+  },
+  {
+   "id": "comp_r3_gpt25",
+   "label": "Realistic render: GPT Image 2.5 Flare, beauty + depth (API)",
+   "file": "render3d_gpt25.json",
+   "api": true,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 1536
+   },
+   "from": "api_openai_gpt_image_25_flare_image_edit (two reference pictures)",
+   "nodes": [
+    "LoadImage",
+    "OpenAIGPTImageNodeV2",
+    "SaveImage"
+   ],
+   "models": []
   }
  ]
 }

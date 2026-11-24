@@ -127,5 +127,47 @@ class RenderAiRoute(unittest.TestCase):
         self.run_c(go)
 
 
+@unittest.skipIf(web is None, "needs aiohttp")
+class RealisticRender(unittest.TestCase):
+    """The prepared "Realistic render" list: Z-Image Turbo with a depth ControlNet, Qwen Image Edit 2511, GPT Image 2.5."""
+
+    def test_the_three_are_listed_and_take_the_right_passes(self):
+        tmp = tempfile.mkdtemp()
+        _app, dirs, pkg = _load(tmp, [])
+        try:
+            A = importlib.import_module(pkg + ".comp_ai")
+            G = importlib.import_module(pkg + ".paint_generate")
+            W = importlib.import_module(pkg + ".comp_ai_workflow")
+            R = importlib.import_module(pkg + ".render3d_ai")
+            got = A.workflows_for("render3d")
+            self.assertEqual(got["action"], "render")
+            ids = [w["id"] for w in got["workflows"]]
+            self.assertEqual(ids, ["comp_r3_zimage_depth", "comp_r3_qwen2511", "comp_r3_gpt25"])
+            self.assertTrue(next(w for w in got["workflows"] if w["id"] == "comp_r3_gpt25")["api"])
+            want = {"comp_r3_zimage_depth": {"depth": "depth"},
+                    "comp_r3_qwen2511": {"beauty": "beauty", "depth": "depth"},
+                    "comp_r3_gpt25": {"beauty": "beauty", "depth": "depth"}}
+            passes = {"beauty": png(200), "depth": png(120), "normals": png(128), "mask": png(255)}
+            for wid, uses in want.items():
+                e, g = G._builtin(wid)
+                self.assertIsNotNone(g, wid)
+                custom = W.make_custom(g, e["label"])
+                prompt = [p for p in custom["params"] if p["id"] == "wf_prompt"]
+                self.assertTrue(prompt, (wid, [p["id"] for p in custom["params"]]))
+                k = prompt[0]["node"]
+                self.assertNotIn("neg", (g[k].get("_meta") or {}).get("title", "").lower(), wid)
+                res = R.prepare(custom, passes, dirs["input"], values={"wf_prompt": "a car in a canyon"})
+                self.assertEqual(res["uses"], uses, wid)
+                self.assertEqual(res["graph"][k]["inputs"][prompt[0]["input"]], "a car in a canyon", wid)
+                self.assertEqual(res["main"], "out", wid)
+            e, g = G._builtin("comp_r3_zimage_depth")
+            custom = W.make_custom(g, e["label"])
+            self.assertIn("wf_layout_strength", [p["id"] for p in custom["params"]])
+        finally:
+            for k in [k for k in sys.modules if k == pkg or k.startswith(pkg + ".")]:
+                sys.modules.pop(k, None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()

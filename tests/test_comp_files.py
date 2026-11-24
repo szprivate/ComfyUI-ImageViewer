@@ -207,7 +207,8 @@ class CompFiles(unittest.TestCase):
 
     def test_each_ai_node_lists_only_its_own_workflows(self):
         real = self.G.comp_table()["lists"]
-        self.assertEqual(sorted(real), ["depth", "inpaint", "matte", "normals", "upscale"])
+        self.assertEqual(sorted(real), ["depth", "inpaint", "matte", "normals", "render3d", "upscale"])   # render3d: the 3D Render panel's list
+        self.assertEqual(self.AI.workflows_for("render3d")["action"], "render")
         self.assertNotIn("relight", real)
         got = self.AI.workflows_for("depth")
         self.assertEqual([w["id"] for w in got["workflows"]], self.DEPTH_IDS)

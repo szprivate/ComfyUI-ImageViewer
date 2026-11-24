@@ -604,22 +604,34 @@ export const PrevizRenderPanelMixin = {
                 : [{ label: "No saved workflows", disabled: true }] },
             { label: "From a file…", run: () => this._r3Take(st, { how: "file" }) },
             "-",
-            { head: "Prepared" },
-            ...(prepared.length ? prepared.map((it) => ({
-                label: it.label + (it.missing && it.missing.some((m) => m.kind !== "node") ? " (download)" : ""),
-                title: it.missing && it.missing.length ? `Needs: ${it.missing.map((m) => m.what).join(", ")}` : "",
-                run: () => this._r3TakePrepared(st, it),
-            })) : [{ label: "None installed in this ComfyUI", disabled: true }]),
         ];
+        const row = (it) => ({
+            label: it.label + (it.api ? " (API)" : it.missing && it.missing.some((m) => m.kind !== "node") ? " (download)" : ""),
+            title: it.missing && it.missing.length ? `Needs: ${it.missing.map((m) => m.what).join(", ")}` : (it.about || ""),
+            run: () => this._r3TakePrepared(st, it),
+        });
+        const real = prepared.filter((it) => it.group === "render"), other = prepared.filter((it) => it.group !== "render");
+        entries.push({ head: "Realistic render" },
+            ...(real.length ? real.map(row) : [{ label: "None installed in this ComfyUI", disabled: true }]));
+        if (other.length) entries.push({ head: "Edit the picture" }, ...other.map(row));
         this._previzOpenMenu(entries, r.left, r.bottom + 2, anchor);
     },
 
-    /** The prepared workflows this ComfyUI has: Paint's built-ins that edit or upscale one picture. */
+    /** The prepared workflows this ComfyUI has: the realistic-render list, then Paint's built-ins that edit or upscale one picture. */
     async _r3Prepared() {
-        const res = await api.fetchApi("/imageviewer/paint/workflows");
-        if (!res.ok) return [];
-        const t = await res.json();
         const seen = new Set(), out = [];
+        // The realistic-render list first (the comp table's "render3d" list: depth ControlNet, image edit, API).
+        try {
+            const r = await api.fetchApi("/imageviewer/comp_ai_workflows", {
+                method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "render3d" }) });
+            if (r.ok) {
+                const t = await r.json();
+                for (const w of t.workflows || []) { seen.add(w.id); out.push({ ...w, action: "render", group: "render" }); }
+            }
+        } catch (_e) { /* the list is optional */ }
+        const res = await api.fetchApi("/imageviewer/paint/workflows");
+        if (!res.ok) return out;
+        const t = await res.json();
         for (const a of PREPARED_ACTIONS) {
             for (const w of (t.actions && t.actions[a] && t.actions[a].workflows) || []) {
                 if (seen.has(w.id)) continue;
