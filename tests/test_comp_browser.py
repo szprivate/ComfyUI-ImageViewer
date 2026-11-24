@@ -1089,6 +1089,37 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate("() => __panel.dockCloseInstance('compGraph@2')")
         self.assertEqual(self.errors, [])
 
+    def test_a_press_on_the_graph_bar_after_a_box_or_a_shift_click_keeps_the_selection(self):
+        # A gesture's let-go stayed on the graph and ran again for the next press anywhere in it: a press on the
+        # Align button after a box selection emptied the selection (an unmoved box selects nothing).
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        g = pg.evaluate_handle("() => __panel.compGraphPanel.querySelector('.cp-graph')")
+        def boxes():
+            return g.evaluate("(g) => [...g.querySelectorAll('.cp-node')].slice(0, 2).map((n) => { const r = n.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; })")
+        def press_align():
+            b = g.evaluate("(g) => { const r = g.querySelector('.cp-align-btn').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }")
+            pg.mouse.click(*b)
+        bx = boxes()
+        x0, y0 = min(b[0] for b in bx) - 12, min(b[1] for b in bx) - 12
+        x1, y1 = max(b[2] for b in bx) + 12, max(b[3] for b in bx) + 12
+        pg.mouse.move(x0, y0); pg.mouse.down(); pg.mouse.move(x1, y1, steps=6); pg.mouse.up()
+        self.assertEqual(len(pg.evaluate(f"() => {self.ED}.selection()")), 2)
+        press_align()
+        self.assertEqual(len(pg.evaluate(f"() => {self.ED}.selection()")), 2, "the box's let-go ran again")
+        items = g.evaluate("(g) => [...g.querySelectorAll('.cp-pop > div')].filter((d) => !d.classList.contains('off')).map((d) => d.textContent)")
+        self.assertIn("Align in a column", items)
+        pg.keyboard.press("Escape")
+        # A click and a Shift+click (the downstream drag's press, no move), then the button.
+        pg.evaluate(f"() => {self.ED}.select([])")
+        bx = boxes()
+        pg.mouse.click(bx[0][0] + 10, (bx[0][1] + bx[0][3]) / 2)
+        pg.keyboard.down("Shift"); pg.mouse.click(bx[1][0] + 10, (bx[1][1] + bx[1][3]) / 2); pg.keyboard.up("Shift")
+        self.assertEqual(len(pg.evaluate(f"() => {self.ED}.selection()")), 2)
+        press_align()
+        self.assertEqual(len(pg.evaluate(f"() => {self.ED}.selection()")), 2, "the Shift+click's let-go ran again")
+
     def test_the_layout_drag_and_the_wire_cut_work_in_a_second_node_graph_panel(self):
         pg = self.page()
         self.new_comp(pg)
