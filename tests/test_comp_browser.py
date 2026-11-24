@@ -1423,6 +1423,20 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(off, {"tool": "none", "home": True})
         self.assertEqual(self.errors, [])
 
+    def test_the_bars_menus_stay_above_the_roto_tools_drawing_layer(self):
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); e.select([]);
+            const r = e.addNode('roto'); c.nodes.find((n) => n.type === 'output').inputs = [r.id]; e.select([r.id]); }}""")
+        pg.wait_for_timeout(300)
+        pg.evaluate("() => { const b = __panel._toolDraw.getRootNode().querySelector('.cp-chan'); b && b.click(); }")
+        pg.wait_for_timeout(200)
+        z = pg.evaluate("""() => { const root = __panel._toolDraw.getRootNode();
+            const pop = root.querySelector('.cp-pop'); if (!pop) return null;
+            return [+getComputedStyle(pop).zIndex, +getComputedStyle(__panel._toolDraw).zIndex]; }""")
+        self.assertIsNotNone(z, "the channel menu opened")
+        self.assertGreater(z[0], z[1], "a bar menu paints above the roto draw layer")
+
     def test_roto_shows_tangents_while_drawing_and_has_a_b_spline_mode(self):
         pg = self.page()
         self.new_comp(pg)
