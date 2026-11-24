@@ -1689,7 +1689,8 @@ class CompBrowserTests(unittest.TestCase):
         pg.wait_for_function(f"() => {self.ED}.state.ocio && {self.ED}.state.ocio.available", timeout=10000)
         pg.evaluate(f"() => {{ {self.ED}.select(['Constant1']); {self.ED}.addNode('ocio_colorspace'); }}")
         P = "__panel.compPropsPanel"
-        opts = pg.evaluate(f"() => Array.from({P}.querySelectorAll('select')[0].options).map((o) => o.value)")
+        # The colourspace menu (the node's first selects are its channel rows now).
+        opts = pg.evaluate(f"() => (Array.from({P}.querySelectorAll('select')).map((s) => Array.from(s.options).map((o) => o.value)).find((v) => v.includes('ACEScg')) || [])")
         self.assertIn("ACEScct", opts)
         # A display and view of the config in the bar: the picture is drawn through its LUT.
         bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
