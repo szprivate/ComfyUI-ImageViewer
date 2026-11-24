@@ -227,6 +227,8 @@ export function createCompGpu(doc = document) {
             if (!n) return;
             // Extra channels, or a node writing into one channel or a layer: the CPU's.
             if (C.channelsAt(comp, nid).length || (!n.disable && n.write && n.write !== "rgba")) { ok = false; return; }
+            // A mask taken from a channel of the stream that is not r g b a: the CPU's.
+            if (!n.disable && n.mask_in && n.mask_in !== "none" && !["r", "g", "b", "a"].includes(n.mask_in)) { ok = false; return; }
             if (!n.disable && GPU_TYPES.has(n.type) && n.type !== "output") shaders++;
             for (const s of n.inputs) walk(s);
         };
@@ -357,11 +359,12 @@ export function createCompGpu(doc = document) {
         };
         const maskStage = (n, r) => {
             const mix = C.OWN_MIX.has(n.type) ? 1 : P(n, "mix");
-            const mi = n.inputs[C.maskIndex(n.type)];
-            if (!mi && mix === 1) return r;
+            const mi = n.inputs[C.maskIndex(n.type)], own = !mi && n.mask_in && n.mask_in !== "none" ? n.mask_in : null;
+            if (!mi && !own && mix === 1) return r;
             const s = n.inputs[0] ? ev(n.inputs[0]) : blankTex(r.w, r.h);
-            const M = mi ? ev(mi) : null;
-            const ch = { r: 0, g: 1, b: 2, a: 3 }[n.mask_channel || "a"] ?? 3;
+            // With nothing in the mask input, a channel of what comes in (mask_in: r g b a only here).
+            const M = mi ? ev(mi) : own ? s : null;
+            const ch = { r: 0, g: 1, b: 2, a: 3 }[(own || n.mask_channel) || "a"] ?? 3;
             return pass("mask", r.w, r.h, area(n), (u) => {
                 u.tex("S", s); u.i2("sS", s.w, s.h); u.i("sDy", dyOf(r.h, s)); u.tex("R", r); u.i2("rS", r.w, r.h);
                 u.tex("M", M || r); u.i2("mS", (M || r).w, (M || r).h); u.i("mDy", dyOf(r.h, M || r)); u.i("hasM", M ? 1 : 0);

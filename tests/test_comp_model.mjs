@@ -770,6 +770,28 @@ test("a MASKABLE node has a mask input last, a mix, and the mask holds it back",
     assert.deepEqual(Array.from(oi.data), [1, 1, 1, 1, 1, 1, 1, 1]);
 });
 
+test("with nothing in the mask input, a channel of what comes in is the mask (mask_in)", () => {
+    const comp = C.newComp({ width: 2, height: 1 });
+    const g = C.addNode(comp, C.makeNode(comp, "grade", { gain: 3 }));
+    assert.equal(g.mask_in, "none", "no mask by default");
+    const src = { w: 2, h: 1, data: Float32Array.from([0.2, 0.2, 0.2, 1, 0.1, 0.1, 0.1, 0]) };
+    const rd = C.addNode(comp, read(comp, "a.png"));
+    g.inputs = [rd.id, null];
+    const run = () => Array.from(C.renderNode(comp, g.id, 0, { scale: 1, source: () => src }).data).map((x) => Math.round(x * 1000) / 1000);
+    const all = run();
+    g.mask_in = "a";
+    const masked = run();
+    assert.deepEqual(masked.slice(0, 4), all.slice(0, 4), "graded where the alpha is 1");
+    assert.deepEqual(masked.slice(4), [0.1, 0.1, 0.1, 0], "left as it came where the alpha is 0");
+    g.mask_invert = "on";
+    assert.deepEqual(run().slice(0, 4), [0.2, 0.2, 0.2, 1]);
+    // A mask input wired in wins over mask_in.
+    g.mask_invert = "off";
+    const k = C.addNode(comp, C.makeNode(comp, "constant", { color: [0, 0, 0, 1] }));
+    g.inputs = [rd.id, k.id];
+    assert.deepEqual(run(), all);
+});
+
 test("bounding boxes: a small thing carries its box through transform, blur and merge, and the numbers stay", () => {
     const comp = C.newComp({ width: 40, height: 30 });
     const r = C.addNode(comp, read(comp, "a.png"));

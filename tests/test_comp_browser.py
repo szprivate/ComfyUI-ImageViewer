@@ -1748,6 +1748,27 @@ class CompBrowserTests(unittest.TestCase):
             bot = pg.evaluate(f"() => {BAR}.getBoundingClientRect().bottom")
             pg.screenshot(path=os.path.join(SHOTS, "comp-bar-ocio.png"), clip={"x": 0, "y": max(0, top - 4), "width": 1500, "height": bot - top + 8})
 
+    def test_the_mask_channel_can_come_from_the_stream(self):
+        pg = self.page()
+        self.new_comp(pg)
+        P = "__panel.compPropsPanel"
+        st = pg.evaluate(f"""() => {{ const e = {self.ED}; e.select(['Constant1']); const g = e.addNode('grade'); e.select([g.id]); e.refresh();
+            const labels = Array.from({P}.querySelectorAll('label')).map((l) => l.textContent);
+            const sel = Array.from({P}.querySelectorAll('select')).find((s) => s.options[0] && s.options[0].value === 'none');
+            return {{ id: g.id, labels, first: sel ? Array.from(sel.options).slice(0, 5).map((o) => o.value) : null }}; }}""")
+        self.assertEqual(st["labels"].count("mask channel"), 1, st)
+        self.assertNotIn("invert mask", st["labels"], "no invert while there is no mask")
+        self.assertEqual(st["first"], ["none", "r", "g", "b", "a"], st)
+        # Picking the stream's alpha brings the invert; wiring a mask in shows the mask input's channel instead.
+        st2 = pg.evaluate(f"""() => {{ const e = {self.ED}; const sel = Array.from({P}.querySelectorAll('select')).find((s) => s.options[0] && s.options[0].value === 'none');
+            sel.value = 'a'; sel.dispatchEvent(new Event('change'));
+            const after = Array.from({P}.querySelectorAll('label')).map((l) => l.textContent);
+            const g = e.comp().nodes.find((n) => n.id === '{st["id"]}');
+            return {{ mask_in: g.mask_in, after }}; }}""")
+        self.assertEqual(st2["mask_in"], "a")
+        self.assertIn("invert mask", st2["after"])
+        self.assertEqual(self.errors, [])
+
     def test_an_unsaved_comp_has_a_star_in_its_tab(self):
         pg = self.page()
         self.new_comp(pg)

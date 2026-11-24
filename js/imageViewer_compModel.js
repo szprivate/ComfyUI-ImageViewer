@@ -529,6 +529,9 @@ function maskable(t) {
     if (!d.params.mix) d.params.mix = { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true, help: "How much of the result: 0 is what comes in" };
     d.params.mask_channel = { kind: "chan", def: "a", from: "mask", label: "mask channel", help: "The mask input's channel that says where the node acts" };
     d.params.mask_invert = { kind: "enum", def: "off", choices: ["off", "on"], label: "invert mask" };
+    // With nothing in the mask input, the mask can be a channel of what comes in (a matte kept in the stream:
+    // its alpha, or a layer's channel such as mask.a). "none": the node acts everywhere.
+    d.params.mask_in = { kind: "chan", def: "none", from: "src", label: "mask channel", help: "With nothing in the mask input: the channel of what comes in that says where the node acts (none: everywhere)" };
 }
 /** The index of a MASKABLE node's mask input (-1 for the rest). */
 export function maskIndex(type) { return MASKABLE.has(type) ? NODE_TYPES[type].inputs.length - 1 : -1; }
@@ -2125,8 +2128,8 @@ export function renderNode(comp, id, frame, ctx) {
     // A MASKABLE node's result held back by its mix and its mask's channel (where it is 0 the input shows).
     const maskStage = (n, f, depth, img, ex) => {
         const mix = OWN_MIX.has(n.type) ? 1 : paramAt(n, "mix", f);
-        const mi = n.inputs[maskIndex(n.type)];
-        if (!mi && mix === 1) return [img, ex];
+        const mi = n.inputs[maskIndex(n.type)], own = !mi && n.mask_in && n.mask_in !== "none" ? n.mask_in : null;
+        if (!mi && !own && mix === 1) return [img, ex];
         const i0 = n.inputs[0];
         const s0 = i0 ? run(i0, f, depth + 1) : blank(img.w, img.h);
         const src = conform(s0, img.w, img.h), sex = i0 ? conformExtras(exOf(i0, f), s0.w, s0.h, img.w, img.h) : {};
@@ -2135,6 +2138,10 @@ export function renderNode(comp, id, frame, ctx) {
             const mp = run(mi, f, depth + 1);
             const plane = CH.channelOf(mp, exOf(mi, f), n.mask_channel || "a");
             m = plane ? conformPlane(plane, mp.w, mp.h, img.w, img.h) : new Float32Array(img.w * img.h);
+        } else if (own) {
+            // A channel of the node's own input (its alpha, or a layer's): the mask rides in the stream.
+            const plane = CH.channelOf(src, sex, own);
+            m = plane || new Float32Array(img.w * img.h);
         }
         const [mo, mex] = maskMix(src, sex, img, ex, m, mix, (n.mask_invert || "off") === "on");
         return [src.bb && img.bb ? O.withBox(mo, O.boxUnion(src.bb, img.bb)) : mo, mex];
