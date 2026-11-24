@@ -272,9 +272,10 @@ class PathTraceTests(unittest.TestCase):
     def test_the_render_dialog_offers_the_renderer(self):
         pg = self._page()
         try:
+            # The Render dialog is the Render panel's settings now (imageViewer_previzRenderPanel.js).
             pg.evaluate("() => window.__panel.previzRenderDialog()")
-            pg.wait_for_function("() => !!window.__panel._renderDlg")
-            box = "window.__panel._renderDlg.box"
+            pg.wait_for_function("() => !!(window.__panel.render3dPanel && window.__panel.render3dPanel.querySelector('.r3-fold-settings .rd-form'))")
+            box = "window.__panel.render3dPanel.querySelector('.r3-fold-settings .rd-form')"
             sel = f"[...{box}.querySelectorAll('select')].find((s) => [...s.options].some((o) => o.value === 'pathtraced'))"
             rows = f"""() => {{ const b = {box}; const vis = (n) => n && n.closest('.rd-row') ? n.closest('.rd-row').style.display !== 'none' : null;
                 const nums = [...b.querySelectorAll('input[type=number]')];

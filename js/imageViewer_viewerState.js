@@ -424,6 +424,23 @@ export function describeViewerState(s) {
         if (o.plate || o.file) out.matchmove = o;
     }
 
+    // The 3D space's Render panel (render_panel_* actions): its prompt, workflow and last result.
+    const rp = snap.renderPanel;
+    if (rp && typeof rp === "object") {
+        const o = { panel: String(rp.panel || "render3d"), prompt: String(rp.prompt || "") };
+        if (rp.workflow) {
+            o.workflow = { name: String(rp.workflow.name || ""), takes_prompt: !!rp.workflow.takes_prompt };
+            if (rp.workflow.id) o.workflow.id = String(rp.workflow.id);
+        } else o.workflow = null;
+        o.ai = !!rp.ai;
+        if (rp.ipr) o.ipr = true;
+        if (Array.isArray(rp.region)) o.region = rp.region.map(r3);
+        if (rp.rendered) o.rendered_frame = rp.rendered.frame;
+        if (rp.result && rp.result.file) o.result = { frame: rp.result.frame, filename: String(rp.result.file.filename || "") };
+        put(o, "busy", rp.busy || "");
+        out.render_panel = o;
+    }
+
     const an = snap.annotations;
     if (an && an.count > 0) {
         out.annotations = { count: an.count };

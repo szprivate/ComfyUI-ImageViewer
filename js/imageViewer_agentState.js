@@ -210,6 +210,13 @@ export const AgentStateMixin = {
      * else another 3D tab's that has a plate - what the agent's matchmove tool would work on. Before the
      * tab's .mm.json is read in (after a reload, with the guide shut) only its file is known.
      */
+    /** The 3D tab's first Render panel, as render_panel_info answers it (only when one is up). */
+    _agentRenderPanel() {
+        if (!this.isPrevizTab || !this.isPrevizTab() || !this._r3All) return null;
+        const inst = this._r3All()[0];
+        return inst && this._asaRenderPanelInfo ? this._asaRenderPanelInfo(inst) : null;
+    },
+
     _agentMatchmove() {
         const tabs = this._mmTabs || {};
         const key = this.activeTab;
@@ -299,6 +306,7 @@ export const AgentStateMixin = {
         snap.characters = safe(() => this._agentCharacters(), null);
         snap.scene3d = safe(() => this._agentScene3d(), null);
         snap.matchmove = safe(() => this._agentMatchmove(), null);
+        snap.renderPanel = safe(() => this._agentRenderPanel(), null);
         snap.annotations = this._agentAnnotCounts();
         return snap;
     },

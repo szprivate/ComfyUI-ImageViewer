@@ -43,7 +43,9 @@ OPEN = """async () => {
     settingsOpen: h.querySelector('.r3-fold-settings').open,
     shotBtn: (h.querySelector('.r3-fold-settings .rd-go') || {}).textContent || '',
     renderBtn: !!h.querySelector('.r3-render'),
-    passes: [...h.querySelectorAll('.r3-pass')].map((b) => b.dataset.pass),
+    passes: [...h.querySelectorAll('.r3-pass-select option')].map((b) => b.value),
+    bar: [...h.querySelectorAll('.r3-bar > button')].map((b) => b.textContent),
+    promptField: !!h.querySelector('.r3-prompt .r3-prompt-in'),
   };
 }"""
 
@@ -68,8 +70,9 @@ RENDER = """async () => {
   for (const k of ['beauty', 'depth', 'normals', 'mask']) out[k] = st.passes && st.passes[k] ? await read(st.passes[k]) : null;
   out.dbg = { pass: st.pass, src: (P.render3dPanel.querySelector(".r3-a").getAttribute("src")||"").slice(0,30), conn: P.render3dPanel.isConnected, n: P.render3dPanel.querySelectorAll(".r3-a").length };
   out.shown = P.render3dPanel.querySelector('.r3-a').getAttribute('src') === st.passes.beauty;
-  out.passBtns = [...P.render3dPanel.querySelectorAll('.r3-pass')].filter((b) => !b.disabled).map((b) => b.dataset.pass);
-  P.render3dPanel.querySelector('.r3-pass[data-pass="depth"]').click();
+  out.passBtns = [...P.render3dPanel.querySelectorAll('.r3-pass-select option')].filter((b) => !b.disabled).map((b) => b.value);
+  const sel = P.render3dPanel.querySelector('.r3-pass-select');
+  sel.value = 'depth'; sel.dispatchEvent(new Event('change'));
   out.depthShown = P.render3dPanel.querySelector('.r3-a').getAttribute('src') === st.passes.depth;
   return out;
 }"""
@@ -99,14 +102,16 @@ AI = """async () => {
     params: [{ id: 'wf_prompt', name: 'prompt', node: '5', input: 'text', kind: 'prompt', def: 'clay' }] });
   const h = P.render3dPanel;
   const takes = h.querySelector('.r3-takes').textContent;
-  const prompt = h.querySelector('[data-param="wf_prompt"]');
-  prompt.value = 'a red car'; prompt.dispatchEvent(new Event('change'));
+  const inFold = !!h.querySelector('[data-param="wf_prompt"]');
+  const prompt = h.querySelector('.r3-prompt-in');
+  const placeholder = prompt.placeholder;
+  prompt.value = 'a red car'; prompt.dispatchEvent(new Event('input')); prompt.dispatchEvent(new Event('change'));
   const ans = await P.previzRenderAi(st);
   window.__fetchApi = before;
   const s0 = sent[0] || {};
-  const out = { ans, takes, sentPasses: Object.keys(s0.passes || {}).sort(), sentValues: s0.values, sentFrame: s0.frame,
+  const out = { ans, takes, inFold, placeholder, sentPasses: Object.keys(s0.passes || {}).sort(), sentValues: s0.values, sentFrame: s0.frame,
                 pass: st.pass, aiUrl: st.ai && st.ai.url, more: Object.keys((st.ai && st.ai.more) || {}),
-                passBtns: [...h.querySelectorAll('.r3-pass')].map((b) => b.dataset.pass),
+                passBtns: [...h.querySelectorAll('.r3-pass-select option')].map((b) => b.value),
                 kept: JSON.parse(JSON.stringify(P.previzScene().renderAi || {})) };
   h.querySelector('.r3-wipe-btn').click();
   out.wipe = { on: h.querySelector('.r3-stage').classList.contains('wipe'), a: h.querySelector('.r3-a').getAttribute('src') === st.passes.beauty,
@@ -118,6 +123,102 @@ AI = """async () => {
   out.secondHasWorkflow = insts.length ? !!insts[0].inst.st.mine().custom : null;
   out.secondId = insts.length ? insts[0].id : null;
   return out;
+}"""
+
+
+REGION = """async () => {
+  const P = window.__panel;
+  const st = P._r3St;
+  const h = P.render3dPanel;
+  const view = P._modelView();
+  const read = (url) => new Promise((res) => {
+    const img = new Image();
+    img.onload = () => { const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const x = c.getContext('2d'); x.drawImage(img, 0, 0); res({ w: c.width, h: c.height, d: x.getImageData(0, 0, c.width, c.height).data }); };
+    img.onerror = () => res(null); img.src = url;
+  });
+  await P.previzRenderStill(st);
+  const before = await read(st.passes.mask);
+  // The box moves right; only the left half is rendered again.
+  const box = P.previzScene().items.find((it) => it.kind === 'box' || it.shape === 'box' || it.primitive === 'box') || P.previzScene().items[0];
+  box.position = [(box.position || [0, 0, 0])[0] + 0.6, ...(box.position || [0, 0, 0]).slice(1)];
+  await P.previzChanged();
+  h.querySelector('.r3-region-btn').click();
+  st.region.box = [0, 0, 0.5, 1];
+  st.draw();
+  const label = h.querySelector('.r3-render').textContent;
+  const sizes = [];
+  const rf = view.renderFrame.bind(view);
+  view.renderFrame = (f, w, hh) => { sizes.push([w, hh]); return rf(f, w, hh); };
+  const ok = await P.previzRenderStill(st);
+  view.renderFrame = rf;
+  const after = await read(st.passes.mask);
+  let leftChanged = 0, rightChanged = 0;
+  for (let y = 0; y < after.h; y++) for (let x = 0; x < after.w; x++) {
+    const i = (y * after.w + x) * 4;
+    if (Math.abs(after.d[i] - before.d[i]) > 20) { if (x < after.w / 2) leftChanged++; else rightChanged++; }
+  }
+  // The full frame now, to compare: the right half would have changed too.
+  st.region.on = false;
+  await P.previzRenderStill(st);
+  const full = await read(st.passes.mask);
+  let fullRight = 0;
+  for (let y = 0; y < full.h; y++) for (let x = full.w / 2; x < full.w; x++) { const i = (y * full.w + x) * 4; if (Math.abs(full.d[i] - before.d[i]) > 20) fullRight++; }
+  // A region through the workflow: the crop goes, the answer comes back pasted over the frame.
+  st.region = { on: true, box: [0.25, 0.25, 0.75, 0.75] };
+  st.ai = null;            // no AI picture of this frame yet: the answer goes over the beauty
+  const sent = [];
+  const fa = window.__fetchApi;
+  window.__fetchApi = async (path, opts) => {
+    if (String(path).startsWith('/imageviewer/render3d_ai')) {
+      sent.push(JSON.parse(opts.body));
+      return { ok: true, status: 200, json: async () => ({ run: 'r2', graph: {}, outputs: { '9': 'out' }, main: 'out', uses: {}, seed: 1 }) };
+    }
+    return fa(path, opts);
+  };
+  P._cpAiWaitNodes = async () => ({ '9': [{ filename: 'red.png', subfolder: 'render3d/ai/r2', type: 'output' }] });
+  const ans = await P.previzRenderPanelRender(st);
+  window.__fetchApi = fa;
+  const crop = sent[0] ? await read(sent[0].passes.beauty) : null;
+  const res = await read(st.ai.url);
+  const px = (im, x, y) => [...im.d.slice((y * im.w + x) * 4, (y * im.w + x) * 4 + 3)];
+  return { ok, label, sizes, leftChanged, rightChanged, fullRight, ans, sentN: sent.length, prompt: sent[0] && sent[0].values,
+           crop: crop && [crop.w, crop.h], res: res && [res.w, res.h], mid: res && px(res, 160, 90), corner: res && px(res, 5, 5),
+           last: JSON.parse(JSON.stringify(st.mine().last || {})) };
+}"""
+
+IPR = """async () => {
+  const P = window.__panel;
+  const st = P._r3St;
+  st.region.on = false;
+  const h = P.render3dPanel;
+  h.querySelector('.r3-ipr-btn').click();
+  const on = h.querySelector('.r3-ipr-btn').classList.contains('on');
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const t0 = Date.now();
+  while (!(st.passes && st.passes.preview) && Date.now() - t0 < 6000) await wait(100);
+  const first = st.passes && st.passes.preview ? st.passes.beauty : null;
+  const box = P.previzScene().items[0];
+  box.position = [0, 0.3, 0];
+  await P.previzChanged();
+  const t1 = Date.now();
+  while (st.passes && st.passes.beauty === first && Date.now() - t1 < 6000) await wait(100);
+  const redrawn = !!(st.passes && st.passes.preview && st.passes.beauty !== first);
+  const info = h.querySelector('.r3-info').textContent;
+  h.querySelector('.r3-ipr-btn').click();
+  return { on, first: !!first, redrawn, info, off: !st.ipr && !st.iprTimer };
+}"""
+
+AGENT = """async () => {
+  const P = window.__panel;
+  const set = await P.previzSceneAgent('render_panel_set', { prompt: 'a blue car in a red canyon', region: [0.1, 0.2, 0.6, 0.9], ai: false });
+  const info = await P.previzSceneAgent('render_panel_info', {});
+  const field = P.render3dPanel.querySelector('.r3-prompt-in').value;
+  const state = P.agentViewerState ? P.agentViewerState() : null;
+  const r = await P.previzSceneAgent('render_panel_render', { ai: false });
+  await P.previzSceneAgent('render_panel_set', { region: null });
+  return { set, info: { prompt: info.prompt, region: info.region, ai: info.ai, panels: info.panels, prepared: (info.prepared || []).length },
+           field, state: state && state.render_panel, render: { ok: r.ok, rendered: r.rendered } };
 }"""
 
 
@@ -180,13 +281,34 @@ class RenderPanelBrowserTests(unittest.TestCase):
                 pg.wait_for_timeout(300)
                 pg.screenshot(path=os.path.join(shots, "render-panel.png"))
             ai = pg.evaluate(AI)
+            red = os.path.join(ROOT, "tests", "harness", "_r3_red.png")
+            from PIL import Image
+            Image.new("RGB", (64, 64), (255, 0, 0)).save(red)
+            pg.route("**/view?*", lambda route: route.fulfill(path=red, content_type="image/png"))
+            region = pg.evaluate(REGION)
+            if shots:
+                pg.evaluate("() => { const P = window.__panel; P._r3St.region = { on: true, box: [0.25, 0.25, 0.75, 0.75] }; P._r3St.pass = 'ai'; P._r3St.draw(); }")
+                pg.wait_for_timeout(300)
+                pg.screenshot(path=os.path.join(shots, "render-panel-region.png"))
+            ipr = pg.evaluate(IPR)
+            agent = pg.evaluate(AGENT)
+            if shots:
+                pg.evaluate("() => { const P = window.__panel; P._r3St.region.on = false; P._r3St.pass = 'beauty'; P._r3St.draw(); }")
+                pg.wait_for_timeout(300)
+                h = pg.evaluate("() => { const r = window.__panel.render3dPanel.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; }")
+                pg.screenshot(path=os.path.join(shots, "render-panel-bar.png"),
+                              clip={"x": h[0], "y": h[1], "width": max(10, h[2]), "height": max(10, h[3])})
         finally:
+            if os.path.exists(os.path.join(ROOT, "tests", "harness", "_r3_red.png")):
+                os.remove(os.path.join(ROOT, "tests", "harness", "_r3_red.png"))
             pg.close()
         self.assertTrue(opened["docked"], "Render… opens the Render panel")
         self.assertFalse(opened["oldDialog"], "no dialog over the viewer any more")
         self.assertTrue(opened["form"] and opened["settingsOpen"], "the settings are in the panel, unfolded")
         self.assertEqual(opened["shotBtn"], "Render shot")
         self.assertTrue(opened["renderBtn"])
+        self.assertEqual(opened["bar"][:4], ["Render", "AI", "IPR", "Region"])
+        self.assertTrue(opened["promptField"], "the prompt is a field under the picture")
         self.assertEqual(opened["passes"], ["beauty", "depth", "normals", "mask"])
         self.assertTrue(r["ok"], r["error"])
         for k in ("beauty", "depth", "normals", "mask"):
@@ -202,18 +324,47 @@ class RenderPanelBrowserTests(unittest.TestCase):
         self.assertIn("depth", ai["takes"])
         self.assertEqual(ai["sentPasses"], ["beauty", "depth", "mask", "normals"])
         self.assertEqual(ai["sentValues"], {"wf_prompt": "a red car"})
+        self.assertFalse(ai["inFold"], "the prompt is not a second field in the workflow's settings")
+        self.assertIn("clay", ai["placeholder"], "the workflow's own prompt is named while the field is empty")
         self.assertEqual(ai["pass"], "ai")
         self.assertIn("ai_out.png", ai["aiUrl"])
         self.assertEqual(ai["more"], ["lines"])
         self.assertEqual(ai["passBtns"][-2:], ["ai", "ai:lines"])
         kept = ai["kept"]["render3d"]
         self.assertEqual(kept["custom"]["name"], "My look")
-        self.assertEqual(kept["values"], {"wf_prompt": "a red car"})
+        self.assertEqual(kept["prompt"], "a red car")
         self.assertEqual(kept["last"]["main"]["filename"], "ai_out.png")
         self.assertTrue(ai["wipe"]["on"] and ai["wipe"]["a"] and ai["wipe"]["b"])
         self.assertIn("inset", ai["wipe"]["clip"])
         self.assertTrue(ai["second"])
         self.assertFalse(ai["secondHasWorkflow"], "a second panel starts without the first one's workflow")
+        # Region render: only the box is rendered (at the box's size) and pasted into the frame.
+        self.assertTrue(region["ok"])
+        self.assertEqual(region["label"], "Render region")
+        self.assertIn([160, 180], region["sizes"], region["sizes"])
+        self.assertGreater(region["leftChanged"], 50, "the moved box shows in the region")
+        self.assertEqual(region["rightChanged"], 0, "outside the region the old render stays")
+        self.assertGreater(region["fullRight"], 50, "a whole render would have changed the right half too")
+        self.assertTrue(region["ans"] and region["ans"]["ok"], region["ans"])
+        self.assertEqual(region["crop"], [160, 90], "the workflow gets the region's crop")
+        self.assertEqual(region["res"], [320, 180], "its answer is pasted back into the whole frame")
+        self.assertEqual(region["mid"], [255, 0, 0])
+        self.assertNotEqual(region["corner"], [255, 0, 0], "outside the region the picture is what it was")
+        self.assertEqual(region["last"]["region"], [0.25, 0.25, 0.75, 0.75])
+        self.assertEqual(region["prompt"], {"wf_prompt": "a red car"})
+        # IPR: a preview whenever the scene changes.
+        self.assertTrue(ipr["on"] and ipr["first"] and ipr["redrawn"], ipr)
+        self.assertIn("preview", ipr["info"])
+        self.assertTrue(ipr["off"])
+        # The agent reads and writes the prompt, the region, AI, and renders.
+        self.assertEqual(agent["info"]["prompt"], "a blue car in a red canyon")
+        self.assertEqual(agent["field"], "a blue car in a red canyon")
+        self.assertEqual(agent["info"]["region"], [0.1, 0.2, 0.6, 0.9])
+        self.assertFalse(agent["info"]["ai"])
+        self.assertIn("render3d", agent["info"]["panels"])
+        self.assertTrue(agent["render"]["ok"])
+        if agent["state"] is not None:
+            self.assertEqual(agent["state"]["prompt"], "a blue car in a red canyon")
         self.assertEqual(errors, [])
 
 
