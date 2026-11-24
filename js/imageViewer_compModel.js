@@ -224,8 +224,8 @@ export const NODE_TYPES = {
         channels: { kind: "enum", def: "rgb", choices: K.CM_OUTPUTS },
         mix: { kind: "num", def: 1, min: 0, max: 1, key: true, step: 0.01 },
     } },
-    premult: { label: "Premult", cat: "Channel", inputs: ["src"], params: {} },
-    unpremult: { label: "Unpremult", cat: "Channel", inputs: ["src"], params: {} },
+    premult: { label: "Premult", cat: "Channel", inputs: ["src"], params: { by: { kind: "chan", def: "a", from: "src", label: "multiply by", help: "The channel the colour is multiplied by (divided by, in Unpremult): the picture's own alpha, or any other channel or layer, such as a matte written into its own layer. The alpha itself stays as it is" } } },
+    unpremult: { label: "Unpremult", cat: "Channel", inputs: ["src"], params: { by: { kind: "chan", def: "a", from: "src", label: "multiply by", help: "The channel the colour is multiplied by (divided by, in Unpremult): the picture's own alpha, or any other channel or layer, such as a matte written into its own layer. The alpha itself stays as it is" } } },
     retime: { label: "Retime", cat: "Time", inputs: ["src"], params: {
         speed: { kind: "num", def: 1, step: 0.05, help: "2 plays twice as fast, 0.5 half as fast, -1 backwards" },
         start: { kind: "int", def: 0, help: "The frame that stays where it is" },
@@ -2438,8 +2438,11 @@ export function renderNode(comp, id, frame, ctx) {
             const B = run(n.inputs[0], f, d1);
             return O.copyImage(B, conform(run(n.inputs[1], f, d1), B.w, B.h), pick);
         }
-        case "premult": return O.premultImage(run(n.inputs[0], f, d1));
-        case "unpremult": return O.unpremultImage(run(n.inputs[0], f, d1));
+        case "premult": case "unpremult": {
+            const s = run(n.inputs[0], f, d1), by = n.by || "a";
+            const plane = by === "a" ? null : (CH.channelOf(s, exOf(n.inputs[0], f), by) || new Float32Array(s.w * s.h));
+            return n.type === "premult" ? O.premultImage(s, plane) : O.unpremultImage(s, plane);
+        }
         case "retime": {
             const t = retimeFrame(n, f), s0 = n.inputs[0];
             const at = (g) => X(run(s0, g, d1), exOf(s0, g));

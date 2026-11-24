@@ -188,17 +188,17 @@ export function copyImage(Bimg, Aimg, pick) {
     return out;
 }
 
-export function premultImage(img) {
+export function premultImage(img, plane) {
     const out = blank(img.w, img.h), s = img.data, o = out.data;
-    for (let i = 0; i < img.w * img.h * 4; i += 4) { const a = s[i + 3]; o[i] = s[i] * a; o[i + 1] = s[i + 1] * a; o[i + 2] = s[i + 2] * a; o[i + 3] = a; }
+    for (let i = 0; i < img.w * img.h * 4; i += 4) { const a = s[i + 3], k = plane ? plane[i >> 2] : a; o[i] = s[i] * k; o[i + 1] = s[i + 1] * k; o[i + 2] = s[i + 2] * k; o[i + 3] = a; }
     return out;
 }
 
-export function unpremultImage(img) {
+export function unpremultImage(img, plane) {
     const out = blank(img.w, img.h), s = img.data, o = out.data;
     for (let i = 0; i < img.w * img.h * 4; i += 4) {
-        const a = s[i + 3];
-        if (a > 0) { o[i] = s[i] / a; o[i + 1] = s[i + 1] / a; o[i + 2] = s[i + 2] / a; }
+        const a = s[i + 3], k = plane ? plane[i >> 2] : a;
+        if (k > 0) { o[i] = s[i] / k; o[i + 1] = s[i + 1] / k; o[i + 2] = s[i + 2] / k; }
         else { o[i] = s[i]; o[i + 1] = s[i + 1]; o[i + 2] = s[i + 2]; }
         o[i + 3] = a;
     }

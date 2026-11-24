@@ -228,6 +228,7 @@ export function createCompGpu(doc = document) {
             // Extra channels, or a node writing into one channel or a layer: the CPU's.
             if (C.channelsAt(comp, nid).length || (!n.disable && n.write && n.write !== "rgba")) { ok = false; return; }
             // A mask taken from a channel of the stream that is not r g b a: the CPU's.
+            if (!n.disable && (n.type === "premult" || n.type === "unpremult") && n.by && n.by !== "a") { ok = false; return; }
             if (!n.disable && n.mask_in && n.mask_in !== "none" && !["r", "g", "b", "a"].includes(n.mask_in)) { ok = false; return; }
             if (!n.disable && GPU_TYPES.has(n.type) && n.type !== "output") shaders++;
             for (const s of n.inputs) walk(s);
