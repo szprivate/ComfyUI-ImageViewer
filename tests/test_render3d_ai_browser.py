@@ -38,10 +38,11 @@ OPEN = """async () => {
   const h = P.render3dPanel;
   return {
     docked: P.isPanelDocked('render3d'),
-    oldDialog: !!P.container.querySelector(':scope > .rd-shade .rd-go'),
-    form: !!h.querySelector('.r3-fold-settings .rd-form'),
-    settingsOpen: h.querySelector('.r3-fold-settings').open,
-    shotBtn: (h.querySelector('.r3-fold-settings .rd-go') || {}).textContent || '',
+    oldDialog: !!P.container.querySelector(':scope > .rd-shade:not(.r3-setwin) .rd-go'),
+    form: !!P.container.querySelector(':scope > .r3-setwin .rd-form'),
+    settingsOpen: !!P.container.querySelector(':scope > .r3-setwin'),
+    inPanel: !!h.querySelector('.r3-fold-settings'),
+    shotBtn: (P.container.querySelector('.r3-setwin .rd-go') || {}).textContent || '',
     renderBtn: !!h.querySelector('.r3-render'),
     passes: [...h.querySelectorAll('.r3-pass-select option')].map((b) => b.value),
     bar: [...h.querySelectorAll('.r3-bar > button')].map((b) => b.textContent),
@@ -52,7 +53,21 @@ OPEN = """async () => {
 RENDER = """async () => {
   const P = window.__panel;
   const st = P._r3St;
+  const vw = P._modelView();
+  const hist = [];
+  const fa0 = window.__fetchApi;
+  window.__fetchApi = async (path, opts) => {
+    if (String(path).startsWith('/imageviewer/save_annotation')) { hist.push('save'); return { ok: true, status: 200, json: async () => ({ path: '/o/render_beauty_v001.png' }) }; }
+    if (String(path).startsWith('/imageviewer/push')) { hist.push(JSON.parse(opts.body)); return { ok: true, status: 200, json: async () => ({ shown: true }) }; }
+    return fa0(path, opts);
+  };
+  let hiddenDuring = null;
+  const rf0 = vw.renderFrame.bind(vw);
+  vw.renderFrame = (f, w, hh) => { if (hiddenDuring === null) hiddenDuring = vw.canvas.style.visibility; return rf0(f, w, hh); };
   const ok = await P.previzRenderStill(st);
+  vw.renderFrame = rf0;
+  await new Promise((r) => setTimeout(r, 600));
+  window.__fetchApi = fa0;
   const read = (url) => new Promise((res) => {
     const img = new Image();
     img.onload = () => {
@@ -66,7 +81,7 @@ RENDER = """async () => {
     img.onerror = () => res(null);
     img.src = url;
   });
-  const out = { ok, frame: st.frame, error: st.error };
+  const out = { ok, frame: st.frame, error: st.error, hist, hiddenDuring, visibleAfter: vw.canvas.style.visibility };
   for (const k of ['beauty', 'depth', 'normals', 'mask']) out[k] = st.passes && st.passes[k] ? await read(st.passes[k]) : null;
   out.dbg = { pass: st.pass, src: (P.render3dPanel.querySelector(".r3-a").getAttribute("src")||"").slice(0,30), conn: P.render3dPanel.isConnected, n: P.render3dPanel.querySelectorAll(".r3-a").length };
   out.shown = P.render3dPanel.querySelector('.r3-a').getAttribute('src') === st.passes.beauty;
@@ -304,13 +319,18 @@ class RenderPanelBrowserTests(unittest.TestCase):
             pg.close()
         self.assertTrue(opened["docked"], "Render… opens the Render panel")
         self.assertFalse(opened["oldDialog"], "no dialog over the viewer any more")
-        self.assertTrue(opened["form"] and opened["settingsOpen"], "the settings are in the panel, unfolded")
+        self.assertTrue(opened["form"] and opened["settingsOpen"], "the settings are in a floating window")
+        self.assertFalse(opened["inPanel"], "no settings fold in the panel itself")
         self.assertEqual(opened["shotBtn"], "Render shot")
         self.assertTrue(opened["renderBtn"])
-        self.assertEqual(opened["bar"][:4], ["Render", "AI", "IPR", "Region"])
+        self.assertEqual(opened["bar"][:5], ["Render", "AI", "IPR", "Region", "Settings"])
         self.assertTrue(opened["promptField"], "the prompt is a field under the picture")
         self.assertEqual(opened["passes"], ["beauty", "depth", "normals", "mask"])
         self.assertTrue(r["ok"], r["error"])
+        self.assertEqual(r["hiddenDuring"], "hidden", "the viewport canvas is taken off screen while a render owns it")
+        self.assertEqual(r["visibleAfter"], "", "and is back afterwards")
+        self.assertEqual(r["hist"][0], "save", "the render is saved...")
+        self.assertEqual(r["hist"][1]["group"], "3D renders", "...and goes into the History")
         for k in ("beauty", "depth", "normals", "mask"):
             self.assertIsNotNone(r[k], k)
             self.assertEqual((r[k]["w"], r[k]["h"]), (320, 180), k)
