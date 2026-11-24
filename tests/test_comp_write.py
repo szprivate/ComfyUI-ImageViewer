@@ -187,7 +187,9 @@ class Footage(unittest.TestCase):
         self.seq([1, 2, 4])
         src = IO.Sources(os.path.join(self.tmp, "a.comp.json"))
         node = {"type": "read", "file": "plate.####.png", "offset": 0}
-        red = lambda img: round(float(M.to_straight(img)[0][0, 0, 0]) * 255)  # noqa: E731
+        # the file's numbers: the picture is in the working space, taken back to linear Rec.709 first
+        back = lambda img: np.dstack([IO._to_srgb_linear(img[..., :3]), img[..., 3:]])  # noqa: E731
+        red = lambda img: round(float(M.to_straight(back(img))[0][0, 0, 0]) * 255)  # noqa: E731
         self.assertIsNone(src(dict(node, missing="black"), 2))           # comp frame 2 = file 3: not there
         self.assertEqual(red(src(dict(node, missing="hold"), 2)), 2)
         with self.assertRaises(IO.MissingFrame):

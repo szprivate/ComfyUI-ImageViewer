@@ -171,7 +171,9 @@ class CompRoutes(unittest.TestCase):
             # packed across machines only: the test client is this machine
             self.assertEqual(r.headers["X-ImageViewer-Enc"], "none")
             px = np.frombuffer(body, "<f2").reshape(h, w, 4).astype(np.float32)
-            self.assertAlmostEqual(float(px[5, 5, 0]), 1.0, places=2)    # red, premultiplied
+            io = importlib.import_module(self.pkg + ".comp_io")
+            red = io._srgb_in(np.array([[[1.0, 0, 0, 1]]], np.float32))[0, 0]   # sRGB red in the working space
+            self.assertTrue(np.allclose(px[5, 5, :3], red[:3], atol=4e-3), (px[5, 5], red))
             self.assertAlmostEqual(float(px[5, 25, 3]), 0.0, places=3)   # the transparent half
         self.run_c(go)
 

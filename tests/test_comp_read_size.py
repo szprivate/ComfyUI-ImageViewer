@@ -46,7 +46,7 @@ class ReadOwnSize(unittest.TestCase):
         return {"comp": 1, "format": {"width": 64, "height": 36, "fps": 24, "frames": 4}, "nodes": nodes, "output": out}
 
     def test_a_read_without_a_size_is_its_file_size_in_a_render(self):
-        c = self.comp([{"id": "R", "type": "read", "inputs": [], "file": "small.png"},
+        c = self.comp([{"id": "R", "type": "read", "inputs": [], "file": "small.png", "colorspace": "linear"},
                        {"id": "G", "type": "grade", "inputs": ["R", None], "gain": 2},
                        {"id": "O", "type": "output", "inputs": ["G"]}], "O")
         img = M.render_node(c, "O", 0, IO.Sources(self.comp_path), 1.0)
@@ -59,7 +59,7 @@ class ReadOwnSize(unittest.TestCase):
 
     def test_merged_over_a_bigger_picture_it_lies_bottom_left_and_the_comp_size_is_only_a_default(self):
         c = self.comp([{"id": "C", "type": "constant", "inputs": [], "color": [0, 0, 1, 1]},
-                       {"id": "R", "type": "read", "inputs": [], "file": "small.png"},
+                       {"id": "R", "type": "read", "inputs": [], "file": "small.png", "colorspace": "linear"},
                        {"id": "M", "type": "merge", "inputs": ["C", "R", None]},
                        {"id": "O", "type": "output", "inputs": ["M"]}], "O")
         img = M.render_node(c, "O", 0, IO.Sources(self.comp_path), 1.0)
