@@ -23,7 +23,11 @@ The graph flows from top to bottom: inputs on the top edge of a node, the output
 | Connect / disconnect | Drag from an output to an input / drag an input away |
 | Insert into a connection | Drop a free node onto the wire |
 | Cut connections | Hold <kbd>Y</kbd> and drag across wires |
-| Arrange in a row or column | Hold <kbd>A</kbd> and drag |
+| Arrange in a row or column | Hold <kbd>A</kbd> and drag (in every Node Graph panel) |
+| Line up the selection | The align button in the graph's bar: left, right, top or bottom edges, a column or a row, spread out, onto the grid |
+| Move a node with everything above it | <kbd>Ctrl</kbd>+drag it (<kbd>Cmd</kbd> on a Mac): every node feeding it comes along |
+| Move a node with everything below it | <kbd>Shift</kbd>+drag it: every node it feeds comes along |
+| Add to / take from the selection | <kbd>Shift</kbd> or <kbd>Ctrl</kbd>+click a node (without dragging) |
 | View a node | <kbd>1</kbd>, or the eye on its right edge |
 | Disable / delete / frame all | <kbd>D</kbd> / <kbd>Del</kbd> / <kbd>F</kbd> |
 | Grid / snap | <kbd>G</kbd> / <kbd>S</kbd> |

@@ -1028,6 +1028,97 @@ class CompBrowserTests(unittest.TestCase):
         self.assertIsNone(pg.evaluate(f"() => {ED}.node('{a}').inputs[0]"))
         self.assertEqual(self.errors, [])
 
+    def _chain_comp(self, pg):
+        """Read -> Blur -> Merge(B: Constant1) -> Output1, laid out down the graph, and a loose Grade."""
+        ED = self.ED
+        return pg.evaluate(f"""() => {{ const e = {ED}; const c = e.comp();
+            e.select([]); const r = e.addNode('read'); const b = e.addNode('blur'); const m = e.addNode('merge'); const g = e.addNode('grade');
+            const n = (id) => e.node(id);
+            for (const x of e.comp().nodes) x.inputs = x.inputs.map(() => null);
+            n(b.id).inputs[0] = r.id; n(m.id).inputs[0] = 'Constant1'; n(m.id).inputs[1] = b.id; n('Output1').inputs[0] = m.id;
+            const at = {{ [r.id]: [200, 0], [b.id]: [200, 90], Constant1: [0, 90], [m.id]: [100, 180], Output1: [100, 270], [g.id]: [400, 270] }};
+            for (const [id, [x, y]] of Object.entries(at)) {{ n(id).x = x; n(id).y = y; }}
+            e.refresh(); e.select([]); e.frameAll(); return {{ read: r.id, blur: b.id, merge: m.id, grade: g.id }}; }}""")
+
+    def _drag_node(self, pg, root, nid, dx, dy, mods=()):
+        box = pg.evaluate(f"""() => {{ const d = {root}.querySelector('.cp-node[data-id="{nid}"]').getBoundingClientRect(); return [d.left + d.width / 2, d.top + d.height / 2]; }}""")
+        for m in mods: pg.keyboard.down(m)
+        pg.mouse.move(*box); pg.mouse.down(); pg.mouse.move(box[0] + dx, box[1] + dy, steps=6); pg.mouse.up()
+        for m in reversed(mods): pg.keyboard.up(m)
+
+    def test_ctrl_drag_carries_the_upstream_nodes_and_shift_drag_the_downstream_ones(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => { try { localStorage.setItem('imageviewer.comp.grid', JSON.stringify({ show: true, snap: false })); } catch (_) {} }")
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        pg.evaluate(f"() => {ED}.refresh()")
+        ids = self._chain_comp(pg)
+        pg.evaluate(f"() => {ED}.state.grid.snap = false")
+        where = lambda: pg.evaluate(f"() => Object.fromEntries({ED}.comp().nodes.map((n) => [n.id, [n.x, n.y]]))")
+        moved = lambda a, b: sorted(k for k in a if a[k] != b[k])
+        roots = ["__panel.compGraphPanel", "__panel._dockPanelEl('compGraph@2')"]
+        for i, root in enumerate(roots):
+            if i:   # the same in a second Node Graph panel
+                pg.evaluate("() => __panel.dockPanelUnder('compGraph', 'compGraph')"); pg.wait_for_timeout(400)
+                pg.evaluate(f"() => {ED}.select([])")
+            s = pg.evaluate(f"() => {ED}.state.graph.s") if not i else 1
+            before = where()
+            self._drag_node(pg, root, ids["merge"], 60, 30, ["Control"])
+            after = where()
+            self.assertEqual(moved(before, after), sorted([ids["merge"], ids["blur"], ids["read"], "Constant1"]), (root, after))
+            dx = after[ids["merge"]][0] - before[ids["merge"]][0]
+            self.assertTrue(all(after[k][0] - before[k][0] == dx for k in moved(before, after)), "all by the same amount")
+            self.assertEqual(pg.evaluate(f"() => {ED}.state.sel"), [], "a chain drag leaves the selection alone")
+            pg.evaluate(f"() => {ED}.undo()")
+            self.assertEqual(where(), before, "one undo step")
+            self._drag_node(pg, root, ids["blur"], -50, 40, ["Shift"])
+            after = where()
+            self.assertEqual(moved(before, after), sorted([ids["blur"], ids["merge"], "Output1"]), (root, after))
+            pg.evaluate(f"() => {ED}.undo()")
+            # A Ctrl / Shift click without a drag still picks: the selection grows, nothing moves.
+            pg.evaluate(f"() => {ED}.select(['{ids['grade']}'])")
+            pt = pg.evaluate(f"""() => {{ const d = {root}.querySelector('.cp-node[data-id="{ids['read']}"]').getBoundingClientRect(); return [d.left + 20, d.top + 10]; }}""")
+            pg.keyboard.down("Shift"); pg.mouse.click(*pt); pg.keyboard.up("Shift")
+            self.assertEqual(sorted(pg.evaluate(f"() => {ED}.state.sel")), sorted([ids["grade"], ids["read"]]))
+            self.assertEqual(where(), before)
+            # A plain drag still moves the selection only.
+            self._drag_node(pg, root, ids["read"], 30, 0)
+            self.assertEqual(moved(before, where()), sorted([ids["grade"], ids["read"]]))
+            pg.evaluate(f"() => {ED}.undo()")
+        pg.evaluate("() => __panel.dockCloseInstance('compGraph@2')")
+        self.assertEqual(self.errors, [])
+
+    def test_the_layout_drag_and_the_wire_cut_work_in_a_second_node_graph_panel(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        pg.evaluate("() => __panel.setPanelDocked('compGraph', true)")
+        ids = self._chain_comp(pg)
+        pg.evaluate("() => __panel.dockPanelUnder('compGraph', 'compGraph')"); pg.wait_for_timeout(400)
+        root = "__panel._dockPanelEl('compGraph@2')"
+        g = pg.evaluate_handle(f"() => {root}.querySelector('.cp-graph')")
+        pg.evaluate(f"() => {ED}.select(['{ids['read']}', 'Constant1', '{ids['grade']}'])")
+        box = g.evaluate("(g) => { const r = g.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; }")
+        pg.mouse.click(box[0] + box[2] - 8, box[1] + box[3] - 8)   # the focus into this graph (a click on nothing)
+        pg.evaluate(f"() => {ED}.select(['{ids['read']}', 'Constant1', '{ids['grade']}'])")
+        pg.keyboard.down("a")
+        pg.mouse.move(box[0] + 40, box[1] + box[3] - 20)
+        pg.mouse.down(); pg.mouse.move(box[0] + 240, box[1] + box[3] - 25, steps=6); pg.mouse.up()
+        pg.keyboard.up("a")
+        pg.wait_for_timeout(400)
+        pos = pg.evaluate(f"() => ['{ids['read']}', 'Constant1', '{ids['grade']}'].map((id) => [{ED}.node(id).x, {ED}.node(id).y])")
+        self.assertEqual(len({p[1] for p in pos}), 1, pos)
+        pg.evaluate(f"() => {ED}.undo()")
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('Constant1').x"), 0, "one undo step")
+        wire = g.evaluate(f"""(g) => {{ const r = g.querySelector('path[data-wire="{ids['read']}>{ids['blur']}:0"]').getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }}""")
+        pg.keyboard.down("y")
+        pg.mouse.move(wire[0] - 40, wire[1] - 4); pg.mouse.down(); pg.mouse.move(wire[0] + 40, wire[1] + 4, steps=8); pg.mouse.up()
+        pg.keyboard.up("y")
+        self.assertIsNone(pg.evaluate(f"() => {ED}.node('{ids['blur']}').inputs[0]"))
+        pg.evaluate("() => __panel.dockCloseInstance('compGraph@2')")
+        self.assertEqual(self.errors, [])
+
     def test_a_and_y_are_on_only_while_held(self):
         pg = self.page()
         self.new_comp(pg)

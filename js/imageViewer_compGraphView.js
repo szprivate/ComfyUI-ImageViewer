@@ -240,7 +240,13 @@ export function createCompGraphView(host, editor, saved) {
 
     graph.addEventListener("pointerdown", (e) => {
         if (e.button !== 0) return;
+        // A held: the layout gesture; Y held: the wire cut - the first graph's, drawn here. Read before the focus
+        // moves here (the first graph letting go of the focus lets go of a held key).
+        const held = editor.graphMenus.held();
+        graph.focus({ preventScroll: true });
         editor.graphMenus.close();
+        if (held === "y" && !e.altKey) { e.stopPropagation(); editor.graphMenus.cutDrag(e, graph, gxy, wires); return; }
+        if (held === "a" && !e.altKey && editor.graphMenus.layoutDrag(e, graph, gxy)) { e.stopPropagation(); return; }
         const eye = e.target.closest && e.target.closest(".cp-eye");
         if (eye) { e.stopPropagation(); editor.view(eye.dataset.eye); return; }
         const box = e.target.closest && e.target.closest(".cp-node, .cp-backdrop, .cp-sticky");
@@ -249,8 +255,15 @@ export function createCompGraphView(host, editor, saved) {
         let moved = false;
         if (box) {
             const id = box.dataset.id;
-            if (!st.sel.includes(id)) editor.select(e.ctrlKey || e.metaKey ? [...st.sel, id] : [id]);
+            // Ctrl (Cmd) + drag: the node and everything upstream of it; Shift + drag: everything downstream (as in
+            // the first graph). Shift or Ctrl + click without a drag adds the node to the selection or takes it out.
+            const chain = (e.ctrlKey || e.metaKey) ? "up" : e.shiftKey ? "down" : null;
+            const toggles = e.shiftKey || e.ctrlKey;
+            if (!chain && !st.sel.includes(id)) editor.select([id]);
             const ids = new Set(st.sel.includes(id) ? st.sel : [id]);
+            const lv = gc();
+            if (chain) for (const x of C.chainOf(lv, [...ids].filter((i) => { const n = node(i); return n && !G.GRAPH_ONLY.has(n.type); }), chain)) ids.add(x);
+            for (const i of [...ids]) { const n = node(i); if (n && n.type === "backdrop") for (const x of C.backdropHolds(lv, i)) ids.add(x); }
             drag = { ids, dx: 0, dy: 0 };
             try { graph.setPointerCapture(e.pointerId); } catch (_) { /* synthetic event */ }
             const move = (ev) => {
@@ -271,6 +284,9 @@ export function createCompGraphView(host, editor, saved) {
                         if (n) patches[id] = { x: Math.round(n.x + d.dx), y: Math.round(n.y + d.dy) };
                     }
                     editor.setNodes(patches);   // one undo step, and every view redraws
+                } else if (chain) {
+                    if (toggles) editor.select(st.sel.includes(id) ? st.sel.filter((x) => x !== id) : [...st.sel, id]);
+                    else editor.select([id]);
                 } else render();
             };
             graph.addEventListener("pointermove", move);
@@ -316,10 +332,15 @@ export function createCompGraphView(host, editor, saved) {
 
     graph.addEventListener("contextmenu", (e) => {
         e.preventDefault(); e.stopPropagation();
+        if (e.button === 0 && e.ctrlKey) return;   // a Mac's Ctrl + click: the upstream drag, no menu
         editor.graphMenus.context(e, gxy, graph);
     });
 
     graph.addEventListener("keydown", (e) => {
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT")) return;
+        const k = (e.key || "").toLowerCase();
+        if ((k === "a" || k === "y") && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); e.stopPropagation(); editor.graphMenus.hold(k, e.code); return; }
         if (e.key === "f" || e.key === "F") { e.preventDefault(); e.stopPropagation(); frameAll(); return; }
         if (e.key === "Tab") { e.preventDefault(); e.stopPropagation(); editor.graphMenus.add(graph); return; }
         if ((e.key === "Delete" || e.key === "Backspace") && !e.ctrlKey && !e.metaKey) { e.preventDefault(); e.stopPropagation(); editor.graphMenus.remove(); return; }
