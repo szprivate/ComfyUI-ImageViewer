@@ -464,6 +464,7 @@ export class Model3DView {
     // between windows: WebGL, rAF and ResizeObserver all belong to one document.
     _initRenderer() {
         const { THREE, OrbitControls } = this.libs;
+        if (this._frameCopy) { this._frameCopy.remove(); this._frameCopy = null; }
         const canvas = this.doc.createElement("canvas");
         canvas.className = "model-canvas";
         this.stage.insertBefore(canvas, this.stage.firstChild);
@@ -1005,6 +1006,9 @@ export class Model3DView {
     _tick() {
         this._raf = 0;
         if (!this.renderer) return;
+        // A render (the Render panel's, the dialog's) owns the canvas and its size until endRender: the viewport
+        // is not drawn into it meanwhile (it was: the path tracer's samples showed in the 3D pane, squeezed).
+        if (this._rendering) return;
         const dt = this.clock.getDelta();
         let again = false;
         // Clips are not played here: the timeline owns the clock and applyFrame
@@ -1043,7 +1047,38 @@ export class Model3DView {
         this._paneAxesDraw();
         if (this._msBox) this._msPlace();
         if (this._me) this._meTick();
+        if (this._keepFrame) this._frameKeep();
         if (again) this.requestRender();
+    }
+
+    /** The viewport as last drawn, copied (the drawing buffer is not kept) so a render can stand it in for the canvas. */
+    _frameKeep() {
+        const c = this.canvas;
+        if (!c || !c.width || !c.height) return;
+        if (!this._frameCopy) {
+            const cv = this.doc.createElement("canvas");
+            cv.className = "model-frame-copy";
+            Object.assign(cv.style, { position: "absolute", inset: "0", width: "100%", height: "100%", display: "none", pointerEvents: "none" });
+            c.parentNode && c.parentNode.insertBefore(cv, c.nextSibling);
+            this._frameCopy = cv;
+        }
+        const cv = this._frameCopy;
+        if (cv.width !== c.width || cv.height !== c.height) { cv.width = c.width; cv.height = c.height; }
+        try { cv.getContext("2d").drawImage(c, 0, 0); this._frameCopyOk = true; } catch (_e) { this._frameCopyOk = false; }
+    }
+
+    /** A render takes the canvas: the last viewport frame stays on screen in its place. */
+    _renderFreeze(on) {
+        const c = this.canvas;
+        if (!c) return;
+        if (on) {
+            const cv = this._frameCopy;
+            if (cv && this._frameCopyOk) cv.style.display = "";
+            c.style.visibility = "hidden";
+        } else {
+            c.style.visibility = "";
+            if (this._frameCopy) this._frameCopy.style.display = "none";
+        }
     }
 
     async ensure() {
@@ -2970,6 +3005,7 @@ export class Model3DView {
         if (opts.background === "transparent") this.renderer.setClearColor(r.clear, 0);
         else if (opts.background === "color" && opts.color) this.renderer.setClearColor(new THREE.Color(opts.color), 1);
         this._renderHideOverlays();
+        this._renderFreeze(true);
         return true;
     }
 
@@ -3148,6 +3184,7 @@ export class Model3DView {
         const r = this._rendering;
         if (!r) return;
         this._rendering = null;
+        this._renderFreeze(false);
         for (let i = r.restore.length - 1; i >= 0; i--) {
             const [obj, key, value] = r.restore[i];
             obj[key] = value;

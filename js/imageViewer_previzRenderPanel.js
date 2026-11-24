@@ -23,8 +23,9 @@
 // Generate does (_paintQueue, with the sign-in) and waits for its outputs (_cpAiWaitNodes). One `this` with the panel.
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
-import { notice } from "./imageViewer_exportUI.js";
+import { notice, canvasContext } from "./imageViewer_exportUI.js";
 import { asPrompt } from "./imageViewer_compAiWorkflow.js";
+import { floatDialog } from "./imageViewer_atlasDrops.js";
 import { showInstallLog } from "./imageViewer_installLog.js";
 
 export const RENDER_PASSES = [["beauty", "Beauty"], ["depth", "Depth"], ["normals", "Normals"], ["mask", "Mask"]];
@@ -263,6 +264,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     const persist = () => { if (v.previzPersist) v.previzPersist(); };
 
     function build() {
+        if (ui && ui.setWin) ui.setWin.shade.remove();
         host.querySelectorAll(":scope > .r3-panel, :scope > style[data-r3]").forEach((n) => n.remove());
         const d = doc();
         const style = el(d, "style"); style.dataset.r3 = "1"; style.textContent = STYLE;
@@ -292,7 +294,10 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         wipe.title = "Compare the AI result with the beauty: drag the line";
         wipe.onclick = () => { st.wipe = !st.wipe; if (st.wipe && st.ai) st.pass = "ai"; draw(); };
         const info = el(d, "span", "r3-info");
-        bar.append(render, aiBtn, iprBtn, regionBtn, el(d, "span", "r3-sep"), passes, wipe, info);
+        const setBtn = el(d, "button", "r3-btn r3-settings-btn", "Settings");
+        setBtn.title = "The render settings (camera, size, renderer, samples, output) in a floating window";
+        setBtn.onclick = () => settingsWin(!(ui.setWin && ui.setWin.shade.isConnected));
+        bar.append(render, aiBtn, iprBtn, regionBtn, setBtn, el(d, "span", "r3-sep"), passes, wipe, info);
 
         const stage = el(d, "div", "r3-stage");
         stage.tabIndex = -1;
@@ -356,7 +361,6 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             return { f, body, sum };
         };
         const aiFold = fold("ai", "AI workflow");
-        const setFold = fold("settings", "Render settings");
         // The prompt: the panel's own, whichever workflow is on (it fills the workflow's prompt).
         const promptRow = el(d, "div", "r3-prompt");
         const prompt = el(d, "textarea", "r3-prompt-in");
@@ -377,18 +381,43 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         root.append(bar, stage, promptRow, scroll);
         host.append(style, root);
         ui = { root, bar, render, aiBtn, iprBtn, regionBtn, passes, wipe, info, stage, imgA, imgB, line, regionEl, tagL, tagR, empty, busy,
-               aiFold, setFold, prompt, promptRow, picRect, form: null, formScene: null, aiSig: null };
+               aiFold, setBtn, setWin: null, prompt, promptRow, picRect, form: null, formScene: null, aiSig: null };
         buildForm();
         buildAi();
         draw();
         return ui;
     }
 
+    /** The render settings in a floating window (not modal: the panel and the viewer stay usable), one per panel. */
+    function settingsWin(open) {
+        if (!ui) return;
+        const w = ui.setWin;
+        if (!open) { if (w) { w.shade.remove(); } ui.setWin = null; ui.form = null; ui.formScene = null; draw(); return; }
+        if (w && w.shade.isConnected) return;
+        const d = doc();
+        const shade = el(d, "div", "rd-shade r3-setwin");
+        const box = el(d, "div", "rd-box");
+        const head = el(d, "div", "rd-head");
+        const x = el(d, "button", "rd-x", "✕");
+        x.title = "Close";
+        x.onclick = () => settingsWin(false);
+        head.append(el(d, "span", "rd-title", "Render settings"), x);
+        const body = el(d, "div", "r3-form-host");
+        box.append(head, body);
+        shade.append(box);
+        floatDialog(shade, box, head);
+        v.container.append(shade);
+        ui.setWin = { shade, box, body };
+        ui.formScene = null;
+        buildForm();
+        draw();
+    }
+
     function buildForm() {
         const sc = scene();
-        if (!ui || !sc || ui.formScene === sc) return;
-        ui.setFold.body.textContent = "";
-        ui.form = v._renderFormBuild(ui.setFold.body, { onChange: () => draw() });
+        if (!ui || !sc || !ui.setWin || ui.formScene === sc) return;
+        ui.setWin.body.textContent = "";
+        ui.form = v._renderFormBuild(ui.setWin.body, { onChange: () => draw() });
         ui.form.root.classList.add("r3-form");
         ui.formScene = sc;
     }
@@ -569,6 +598,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             : "This workflow takes no prompt";
         ui.wipe.disabled = !st.ai || !st.passes;
         ui.wipe.classList.toggle("on", st.wipe);
+        ui.setBtn.classList.toggle("on", !!(ui.setWin && ui.setWin.shade.isConnected));
         ui.wipe.style.display = st.ai ? "" : "none";
         ui.stage.classList.toggle("wipe", st.wipe);
         const setSrc = (img, url) => { if (url) { if (img.getAttribute("src") !== url) img.src = url; img.style.display = ""; } else { img.removeAttribute("src"); img.style.display = "none"; } };
@@ -623,6 +653,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     st.mine = mine;
     st.persist = persist;
     st.panel = () => ui;
+    st.settingsWin = settingsWin;
     st.rebuildAi = () => { if (ui) { ui.aiSig = null; buildAi(); } };
     build();
     if (st.ipr) { st.ipr = false; v.previzRenderPanelIpr(st, true); }
@@ -633,7 +664,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         wake: () => refresh(),
         save: () => ({ pass: st.pass, wipe: st.wipe, wipeX: st.wipeX, folds: { ...st.folds }, aiOn: st.aiOn, ipr: st.ipr,
                        region: { on: st.region.on, box: st.region.box } }),
-        dispose: () => { if (st.run) v._r3Stop(st); v.previzRenderPanelIpr(st, false, { keep: true }); },
+        dispose: () => { settingsWin(false); if (st.run) v._r3Stop(st); v.previzRenderPanelIpr(st, false, { keep: true }); },
         st,
     };
 }
@@ -692,12 +723,8 @@ export const PrevizRenderPanelMixin = {
         if (this.dockTabFront) this.dockTabFront("render3d");
         const inst = this._r3Primary();
         if (!inst) return null;
-        if (settings) {
-            inst.st.folds.settings = true;
-            const ui = inst.st.panel();
-            if (ui) { ui.setFold.f.open = true; ui.setFold.f.scrollIntoView && ui.setFold.f.scrollIntoView({ block: "nearest" }); }
-        }
         inst.refresh();
+        if (settings && inst.st.settingsWin) inst.st.settingsWin(true);
         return inst;
     },
 
@@ -745,6 +772,7 @@ export const PrevizRenderPanelMixin = {
         const scene = this.previzScene();
         const view = this._modelView && this._modelView();
         if (!scene || !view || this._previzRendering) return false;
+        view._keepFrame = true;       // the viewport's last frame stands in for the canvas while a render owns it
         const s = S.renderSettings(scene);
         const camera = this._renderCameraId(s, scene);
         let { w, h } = this._renderSize(s, scene);
@@ -817,6 +845,7 @@ export const PrevizRenderPanelMixin = {
                 if (!preview) st.depthRange = range;
             }
             if (preview) out.preview = true;
+            else this._r3History(st, "Beauty", out.beauty);
             st.passes = out;
             st.frame = f;
             st.camera = camera;
@@ -838,6 +867,36 @@ export const PrevizRenderPanelMixin = {
             st.draw && st.draw();
         }
         return ok;
+    },
+
+    /**
+     * A finished render into the History (Sebastian 2026-11-24: so the main viewer's wipe, compare and Contact Sheet
+     * work on it): saved by the export rule as the next version, then pushed as a group "3D renders", not switched to.
+     */
+    async _r3History(st, label, url) {
+        if (!url) return;
+        try {
+            const doc = this.container.ownerDocument;
+            let data = url;
+            if (!/^data:image\/(png|jpeg);/.test(url)) {
+                const img = await loadImg(doc, url);
+                const c = doc.createElement("canvas");
+                c.width = img.naturalWidth; c.height = img.naturalHeight;
+                c.getContext("2d").drawImage(img, 0, 0);
+                data = c.toDataURL("image/png");
+            }
+            const name = `${(this.previzRenderName && this.previzRenderName()) || "render"}_${label.toLowerCase()}`;
+            const res = await api.fetchApi("/imageviewer/save_annotation", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ dataurl: data, name, context: canvasContext() }),
+            });
+            const saved = await res.json().catch(() => ({}));
+            if (!res.ok || !saved.path) throw new Error(saved.error || `HTTP ${res.status}`);
+            await post("/imageviewer/push", { paths: [saved.path], tab_name: "3D renders", group: "3D renders",
+                                              label: `${label} · frame ${st.frame}`, focus: false });
+        } catch (e) {
+            console.warn("[ImageViewer] Render panel: the render did not reach the History", e);
+        }
     },
 
     /** What an IPR redraw follows: the frame, the render settings and camera, the meshes, lights and the view. */
@@ -1124,6 +1183,7 @@ export const PrevizRenderPanelMixin = {
             }
             st.ai = ai;
             st.pass = "ai";
+            this._r3History(st, "AI", ai.url);
             const kk = st.keep();
             if (kk) { kk.last = last; st.persist(); }
             answer = { ok: true, frame: st.frame, outputs: Object.keys(images).length, uses: prep.uses, region: box,
