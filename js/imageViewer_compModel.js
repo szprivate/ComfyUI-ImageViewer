@@ -55,6 +55,8 @@ export const COLORSPACES = ["auto", "srgb", "linear"];
  * A param: kind num | int | vec2 | color (linear RGBA) | enum | file | text; `key` = it can be animated.
  */
 export const REFORMAT_TYPES = ["to format", "scale"];
+/** A Read's alpha: auto (EXR / HDR as stored, the rest premultiplied as they load), premultiply, as stored. */
+export const READ_ALPHA = ["auto", "premultiply", "as stored"];
 export const MISSING_FRAMES = ["black", "hold", "error"];
 export const WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"];
 export const WRITE_CHANNELS = ["rgba", "rgb", "all"];
@@ -80,6 +82,7 @@ export const NODE_TYPES = {
         colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; or any colourspace of the OCIO config, converted to the working space" },
         fit: { kind: "enum", def: "fit", choices: FITS, help: "The Read gives the file at its own size; this is only how a file that is not the size it last had (changed on disk) is laid in" },
         missing: { kind: "enum", def: "black", choices: MISSING_FRAMES, help: "A frame of a sequence that is not on disk: black, the nearest frame there is (hold), or the render stops (error)" },
+        alpha: { kind: "enum", def: "auto", choices: READ_ALPHA, help: "How the file's colour relates to its alpha. premultiply: it holds straight colour (most PNG / JPEG / TIFF), multiplied by the alpha as it loads. as stored: the colour as the file holds it - an already premultiplied file (an EXR render), or straight colour kept for a Premult later. auto: EXR / HDR as stored, the rest premultiplied" },
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
         color: { kind: "color", def: [0, 0, 0, 1], key: true },

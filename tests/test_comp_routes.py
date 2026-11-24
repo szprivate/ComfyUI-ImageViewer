@@ -175,6 +175,41 @@ class CompRoutes(unittest.TestCase):
             self.assertAlmostEqual(float(px[5, 25, 3]), 0.0, places=3)   # the transparent half
         self.run_c(go)
 
+    def test_a_reads_alpha_premultiplies_or_keeps_the_colour_as_stored(self):
+        from PIL import Image
+        io = importlib.import_module(self.pkg + ".comp_io")
+        half = os.path.join(self.dirs["output"], "half.png")
+        a = np.zeros((4, 4, 4), np.uint8)
+        a[..., 0] = 255
+        a[..., 3] = 128
+        Image.fromarray(a, "RGBA").save(half)
+        src = io.Sources(os.path.join(self.dirs["output"], "p.comp.json"))
+        node = {"type": "read", "file": "half.png", "colorspace": "linear"}
+        auto = src(dict(node), 0)
+        pre = src(dict(node, alpha="premultiply"), 0)
+        kept = src(dict(node, alpha="as stored"), 0)
+        self.assertAlmostEqual(float(auto[0, 0, 0]), 128 / 255, places=3)    # a PNG: premultiplied as it loads
+        self.assertAlmostEqual(float(pre[0, 0, 0]), 128 / 255, places=3)
+        self.assertAlmostEqual(float(kept[0, 0, 0]), 1.0, places=4)          # the file's own colour
+        self.assertAlmostEqual(float(kept[0, 0, 3]), 128 / 255, places=4)
+        self.assertIs(src(dict(node, alpha="as stored"), 0), kept, "kept, not divided again")
+        # auto keeps an EXR / HDR as stored (a renderer writes it premultiplied already).
+        src.info = lambda n: (os.path.join(self.dirs["output"], "beauty.####.exr"), {"kind": "sequence"})
+        self.assertTrue(src._as_stored({"file": "beauty.####.exr"}, 0))
+        self.assertFalse(src._as_stored({"file": "beauty.####.exr", "alpha": "premultiply"}, 0))
+        # The page's pixels route passes it on.
+
+        async def go(c):
+            comp_path = os.path.join(self.dirs["output"], "p.comp.json")
+            out = []
+            for alpha in ("auto", "as stored"):
+                r = await c.get("/imageviewer/comp_pixels", params={"file": "half.png", "comp": comp_path, "max": 8, "cs": "linear", "alpha": alpha})
+                body = await r.read()
+                out.append(float(np.frombuffer(body, "<f2")[0]))
+            self.assertAlmostEqual(out[0], 128 / 255, places=2)
+            self.assertAlmostEqual(out[1], 1.0, places=2)
+        self.run_c(go)
+
     @unittest.skipIf(importlib.util.find_spec("PyOpenColorIO") is None, "needs PyOpenColorIO")
     def test_ocio_config_luts_reads_nodes_and_a_display_render(self):
         from PIL import Image

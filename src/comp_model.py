@@ -146,6 +146,8 @@ REFORMAT_RESIZE = ["none", "fit", "fill", "width", "height", "distort"]
 VIEW_ANAGLYPH = ["colour", "grey"]
 VIEW_LAYOUTS = ["side by side", "over under"]
 GHOST_SHAPES = ["disc", "polygon"]
+# A Read's alpha: auto (EXR / HDR as stored, the rest premultiplied as they load), premultiply, as stored.
+READ_ALPHA = ["auto", "premultiply", "as stored"]
 MISSING_FRAMES = ["black", "hold", "error"]
 WRITE_FORMATS = ["exr", "png", "tiff", "jpg", "mov", "mp4", "webm"]
 WRITE_CHANNELS = ["rgba", "rgb", "all"]
@@ -202,6 +204,7 @@ NODE_TYPES = {
         "colorspace": {"kind": "ocio_cs", "def": "auto", "choices": COLORSPACES},
         "fit": {"kind": "enum", "def": "fit", "choices": FITS},
         "missing": {"kind": "enum", "def": "black", "choices": MISSING_FRAMES},
+        "alpha": {"kind": "enum", "def": "auto", "choices": READ_ALPHA},
     }},
     "constant": {"inputs": [], "params": {
         "color": {"kind": "color", "def": [0, 0, 0, 1], "key": True},

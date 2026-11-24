@@ -1231,11 +1231,11 @@ export const CompPanelMixin = {
         const fmt = how.format || { width: 1920, height: 1080 };
         const most = Math.min(4096, Math.max(64, Math.ceil(Math.max(fmt.width, fmt.height) * (how.scale || 1) * 1.5)));
         const f = info.kind === "still" ? 0 : frame;
-        const key = [rec.path, node.file, node.local || "", node.colorspace || "auto", node.offset || 0, node.missing || "black", f, most].join("|");
+        const key = [rec.path, node.file, node.local || "", node.colorspace || "auto", node.offset || 0, node.missing || "black", node.alpha || "auto", f, most].join("|");
         const hit = st.cache.get(key);
         if (hit) { st.cache.delete(key); st.cache.set(key, hit); return hit; }
         const q = new URLSearchParams({ file: node.file, comp: rec.path, frame: String(frame), offset: String(node.offset || 0),
-            cs: node.colorspace || "auto", max: String(most), missing: node.missing || "black", local: node.local || "" });
+            cs: node.colorspace || "auto", max: String(most), missing: node.missing || "black", local: node.local || "", alpha: node.alpha || "auto" });
         const res = await api.fetchApi(`/imageviewer/comp_pixels?${q}`);
         if (!res.ok) return null;
         const w = Number(res.headers.get("X-Comp-W")), h = Number(res.headers.get("X-Comp-H"));
