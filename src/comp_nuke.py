@@ -141,6 +141,8 @@ def _bakeable(n):
             return f"{t}: its mask is not written into the Nuke script (the node is baked)"
         if t not in M.OWN_MIX and ((n.get("tracks") or {}).get("mix") or (n.get("mix") is not None and n.get("mix") != 1)):
             return f"{t}: its mix is not written into the Nuke script (the node is baked)"
+    if t == "read" and n.get("out_colorspace"):
+        return "read: its output colourspace is not written into the Nuke script (the Read is baked)"
     if t == "shuffle" and any(k not in _CH or not (v in ("0", "1") or (v[0] == "B" and v[2:] in _CH))
                               for k, v in M.shuffle_route(n).items()):
         return "shuffle: input A and extra channels are not written into the Nuke script (its rgba is baked)"

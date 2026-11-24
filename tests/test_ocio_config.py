@@ -185,6 +185,25 @@ class OcioConfig(unittest.TestCase):
         img = comp_io.Sources(None)(dict(node, colorspace="linear"), 0)
         self.assertLess(float(np.abs(img[..., :3] - src / 255).max()), 1e-3)
 
+    def test_a_reads_output_colourspace_hands_its_picture_on_in_that_space(self):
+        # Sebastian 2026-11-24: an input AND an output colourspace on the Read, so it is clear what it does.
+        import numpy as np
+        from PIL import Image
+        self.color_io.set_config("")
+        comp_io = importlib.import_module(self.pkg + ".comp_io")
+        M = sys.modules[self.comp_ocio.__name__.rsplit('.', 1)[0] + '.comp_model']
+        src = (np.random.RandomState(4).rand(6, 6, 3) * 255).round().astype(np.uint8)
+        png = os.path.join(self.tmp, "out_cs.png")
+        Image.fromarray(src).save(png)
+        comp = {"comp": 1, "format": {"width": 6, "height": 6, "fps": 24, "frames": 1},
+                "nodes": [{"id": "Read1", "type": "read", "inputs": [], "file": png, "colorspace": "auto",
+                           "out_colorspace": "sRGB Encoded Rec.709 (sRGB)"},
+                          {"id": "Output1", "type": "output", "inputs": ["Read1"]}], "output": "Output1"}
+        comp, _ = M.normalize(comp)
+        img = M.render_node(comp, "Output1", 0, comp_io.Sources(None), 1.0, ocio=comp_io.ocio_hook())
+        # sRGB in, sRGB out: the file's own numbers.
+        self.assertLessEqual(float(np.abs(np.round(img[..., :3] * 255) - src).max()), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -202,6 +202,7 @@ NODE_TYPES = {
         "file": {"kind": "file", "def": ""},
         "offset": {"kind": "int", "def": 0},
         "colorspace": {"kind": "ocio_cs", "def": "auto", "choices": COLORSPACES},
+        "out_colorspace": {"kind": "ocio_cs", "def": ""},
         "fit": {"kind": "enum", "def": "fit", "choices": FITS},
         "missing": {"kind": "enum", "def": "black", "choices": MISSING_FRAMES},
         "alpha": {"kind": "enum", "def": "auto", "choices": READ_ALPHA},
@@ -3194,8 +3195,12 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             F = format_at(comp, n["id"])
             rw = max(1, int(math.floor(F["width"] * scale + 0.5)))
             rh = max(1, int(math.floor(F["height"] * scale + 0.5)))
-            return resample(src, fit_matrix(src.shape[1], src.shape[0], rw, rh, n.get("fit") or "fit", scale), rw, rh) \
-                if src is not None else blank(rw, rh)
+            if src is None:
+                return blank(rw, rh)
+            img = resample(src, fit_matrix(src.shape[1], src.shape[0], rw, rh, n.get("fit") or "fit", scale), rw, rh)
+            # Its output colourspace: from the working space into it (an OCIOColorSpace inside the Read).
+            fn = ocio({"src": "", "dst": n["out_colorspace"]}) if ocio and n.get("out_colorspace") else None
+            return ocio_image(img, fn, True) if fn else img
         if t == "constant":
             c = param_at(n, "color", f) or [0, 0, 0, 1]
             img = np.empty((H, W, 4), np.float32)

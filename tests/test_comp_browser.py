@@ -1737,6 +1737,30 @@ class CompBrowserTests(unittest.TestCase):
             return Math.abs(d[0] - 51) <= 2 && Math.abs(d[1] - 128) <= 2 && Math.abs(d[2] - 204) <= 2; }}""", timeout=10000)
         self.assertEqual(self.errors, [])
 
+    def test_a_read_says_its_input_and_output_colourspace(self):
+        # Sebastian 2026-11-24: an input and an output colourspace on the Read, so it is clear how it is read.
+        import importlib.util
+        if importlib.util.find_spec("PyOpenColorIO") is None:
+            self.skipTest("needs PyOpenColorIO")
+        pg = self.page()
+        self.new_comp(pg)
+        pg.wait_for_function(f"() => {self.ED}.state.ocio && {self.ED}.state.ocio.available", timeout=10000)
+        pg.evaluate(f"""(file) => {{ const e = {self.ED}; const r = e.addNode('read', {{ file }});
+            e.comp().nodes.find((n) => n.type === 'output').inputs = [r.id]; e.select([r.id]); e.refresh(); }}""", self.png)
+        P = "__panel.compPropsPanel"
+        pg.wait_for_function(f"() => /handed on in the working space \\(ACEScg\\)/.test({P}.textContent)", timeout=8000)
+        self.assertIn("read as sRGB", pg.evaluate(f"() => {P}.textContent"))
+        self.assertIn("output colourspace", pg.evaluate(f"() => {P}.textContent"))
+        # Shown as the working space: the file's red.
+        pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; const d = c.getContext('2d').getImageData(2, c.height - 3, 1, 1).data; return d[0] > 245 && d[1] < 10; }}", timeout=8000)
+        # Handed on as sRGB and looked at as sRGB: the file's red again.
+        srgb = "sRGB Encoded Rec.709 (sRGB)"
+        pg.evaluate(f"""(cs) => {{ const e = {self.ED}; const r = e.comp().nodes.find((n) => n.type === 'read');
+            r.out_colorspace = cs; e.state.display = '\\u0003' + cs; e.refresh(); }}""", srgb)
+        pg.wait_for_function(f"(cs) => {P}.textContent.includes('handed on in ' + cs)", arg=srgb, timeout=8000)
+        pg.wait_for_function(f"() => {{ const c = {self.ED}.canvas; const d = c.getContext('2d').getImageData(2, c.height - 3, 1, 1).data; return d[0] > 245 && d[1] < 10; }}", timeout=8000)
+        self.assertEqual(self.errors, [])
+
     def test_the_ocio_menu_sits_right_of_the_exposure_and_offers_aces(self):
         pg = self.page()
         self.new_comp(pg)

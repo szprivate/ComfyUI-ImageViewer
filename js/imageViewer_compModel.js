@@ -79,7 +79,8 @@ export const NODE_TYPES = {
     read: { label: "Read", cat: "Image", inputs: [], params: {
         file: { kind: "file", def: "" },
         offset: { kind: "int", def: 0, help: "Frames to slide the footage by: +10 starts it 10 frames later" },
-        colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; or any colourspace of the OCIO config, converted to the working space" },
+        colorspace: { kind: "ocio_cs", def: "auto", choices: COLORSPACES, label: "input colourspace", help: "What the file holds. auto: EXR / HDR are linear, the rest sRGB; srgb: brought from sRGB into the working space; linear: the file's numbers as they are; or any colourspace of the OCIO config" },
+        out_colorspace: { kind: "ocio_cs", def: "", label: "output colourspace", help: "What the Read hands on (empty: the working space, what the comp works in). Another colourspace converts the picture from the working space into it" },
         fit: { kind: "enum", def: "fit", choices: FITS, help: "The Read gives the file at its own size; this is only how a file that is not the size it last had (changed on disk) is laid in" },
         missing: { kind: "enum", def: "black", choices: MISSING_FRAMES, help: "A frame of a sequence that is not on disk: black, the nearest frame there is (hold), or the render stops (error)" },
         alpha: { kind: "enum", def: "auto", choices: READ_ALPHA, help: "How the file's colour relates to its alpha. premultiply: it holds straight colour (most PNG / JPEG / TIFF), multiplied by the alpha as it loads. as stored: the colour as the file holds it - an already premultiplied file (an EXR render), or straight colour kept for a Premult later. auto: EXR / HDR as stored, the rest premultiplied" },
@@ -1860,12 +1861,15 @@ export function upstreamKey(comp, id) {
  * look at other times (Retime, Vectors, MotionBlur without vectors) render their input at those frames.
  * Returns a picture of its own size (formatAt) x scale.
  */
+/** A Read's output colourspace as an OCIO transform: from the working space into it. */
+export const readOutSpec = (n) => ({ src: "", dst: n.out_colorspace || "" });
 /** The OCIO transforms a comp's nodes ask for at frame f: [{spec, key}] (the page fetches their LUTs). */
 export function ocioNeeds(comp, frame) {
     comp = G.flattenComp(comp);
     const out = new Map();
     for (const n of comp.nodes || []) {
         for (const spec of EX.extraLuts(n)) out.set(OC.ocioKey(spec), spec);
+        if (!n.disable && n.type === "read" && n.out_colorspace) { const spec = readOutSpec(n); out.set(OC.ocioKey(spec), spec); }
         if (n.disable || (n.type !== "ocio_colorspace" && n.type !== "ocio_display")) continue;
         const p = {};
         for (const k of Object.keys(NODE_TYPES[n.type].params)) p[k] = paramAt(n, k, frame);
@@ -2326,7 +2330,10 @@ export function renderNode(comp, id, frame, ctx) {
             // Its own size (formatAt): the file 1:1; `fit` only matters when the file is not the size the node knows.
             const F = formatAt(comp, n.id), rw = Math.max(1, Math.round(F.width * scale)), rh = Math.max(1, Math.round(F.height * scale));
             if (!src) return O.withBox(blank(rw, rh), [0, 0, 0, 0]);
-            const img = resample(src, fitMatrix(src.w, src.h, rw, rh, n.fit || "fit", k), rw, rh);
+            let img = resample(src, fitMatrix(src.w, src.h, rw, rh, n.fit || "fit", k), rw, rh);
+            // Its output colourspace: the picture from the working space into it (an OCIOColorSpace inside).
+            const out = n.out_colorspace || "", lut = out && ctx.ocio ? ctx.ocio(readOutSpec(n)) : null;
+            if (lut) img = OC.ocioImage(img, (r, g, b) => OC.lutColor(lut, r, g, b), true);
             return O.withBox(img, O.scanBox(img));
         }
         case "constant": {

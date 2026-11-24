@@ -817,6 +817,15 @@ export function createCompEditor(host, opts = {}) {
     function fillLook(chans) { lastChans = chans; paintLook(); }
     /** The colour menu: what the picture's values are - the plain sRGB curve, or one of the config's colourspaces
      *  (the working space first, then the ACES ones) - always shown on sRGB. */
+    /** How a Read's numbers are taken in and handed on, in words (its Parameters pane). */
+    function readColourLine(n) {
+        const info = st.ocio && st.ocio.available ? st.ocio : null, work = info ? info.working : "linear";
+        const cs = n.colorspace || "auto", ext = String(n.file || "").toLowerCase().split(".").pop();
+        const asIn = cs === "auto" ? (["exr", "hdr"].includes(ext) ? "linear" : "sRGB") : cs === "srgb" ? "sRGB" : cs;
+        const out = n.out_colorspace || "";
+        const takenAs = asIn === "linear" ? "its numbers taken as they are" : `read as ${asIn}`;
+        return `Colour: ${takenAs}, handed on ${out ? `in ${out}` : `in the working space (${work})`}.`;
+    }
     function fillDisplay(sel) {
         const info = st.ocio;
         const plain = !info.working || !info.srgb_linear || info.working === info.srgb_linear;
@@ -3843,10 +3852,11 @@ export function createCompEditor(host, opts = {}) {
             pane.append(line);
             if (o.sourceInfo) o.sourceInfo(C.viewNode(n, eyeNow())).then((inf) => {
                 line.textContent = !inf || inf.kind === "missing" ? "No such file (yet)." : inf.kind === "refused" ? "Not in the folders the viewer may read."
-                    : inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : inf.kind === "comp" ? "A comp (its Output, rendered)" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`
+                    : (inf.kind === "still" ? "A still picture." : `${inf.kind === "video" ? "A film" : inf.kind === "comp" ? "A comp (its Output, rendered)" : "A sequence"}: frames ${inf.first}–${inf.last}${inf.fps ? ` at ${r3(inf.fps)} fps` : ""}.`)
                     + (inf.gaps ? ` ${inf.gaps} frame${inf.gaps > 1 ? "s" : ""} missing in it.` : "")
                     + (inf.timecode ? ` Timecode ${inf.timecode}.` : "") + (n.local ? " Reads its local copy." : "")
-                    + (n.type === "read" ? (C.readSize(n) ? ` ${C.readSize(n)[0]} × ${C.readSize(n)[1]} (its own size).` : "") : "");
+                    + (n.type === "read" ? (C.readSize(n) ? ` ${C.readSize(n)[0]} × ${C.readSize(n)[1]} (its own size).` : "") : "")
+                    + (n.type === "read" ? ` ${readColourLine(n)}` : "");
                 // The size the file says: the node keeps it (a Read is its file's own size).
                 if (n.type === "read" && inf && inf.width >= 1 && inf.height >= 1) learnReadSize(n, inf.width, inf.height);
             }).catch(() => { line.textContent = ""; });
