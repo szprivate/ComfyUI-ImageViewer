@@ -918,7 +918,7 @@ export const RotoMixin = {
             }
         };
         let a;
-        if (sigmaScr > 0.3) {
+        if (sigmaScr > 0.3 && canvasBlurs(sa.ownerDocument)) {
             // Drawn, then blurred onto the second canvas; filter lengths are in
             // canvas pixels, hence * k.
             this._rotoAlphaOf(sa, k, shape);
@@ -928,6 +928,9 @@ export const RotoMixin = {
                 ctx.drawImage(sa, 0, 0);
                 ctx.filter = "none";
             });
+        } else if (sigmaScr > 0.3) {
+            // A browser whose canvas has no filter (Safari): the same Gaussian in numbers.
+            a = gaussAlpha(this._rotoAlphaOf(sa, k, shape), sa.width, sa.height, sigmaScr * k);
         } else {
             a = this._rotoAlphaOf(sa, k, shape);
         }
@@ -1849,6 +1852,64 @@ function checkbox(label, checked, onChange) {
  * pixels their feather, blur and dilate are counted in; the matte covers that picture at W x H. Comp's
  * Roto node draws its preview through this (its render goes through roto_raster.py, as the node's does).
  */
+/** Whether a 2D canvas of `doc` blurs through `ctx.filter` (Safari's does not: it ignores the property, and a
+ *  feather or blur then did nothing). Asked once per document: a dot drawn blurred must spread. */
+const BLUR_OK = new WeakMap();
+let blursOff = false;
+/** For the tests: behave as a browser without a canvas filter. */
+export function canvasBlursOff(on) { blursOff = !!on; }
+export function canvasBlurs(doc) {
+    if (!doc || blursOff) return false;
+    if (BLUR_OK.has(doc)) return BLUR_OK.get(doc);
+    let ok = false;
+    try {
+        const a = doc.createElement("canvas"), b = doc.createElement("canvas");
+        a.width = a.height = b.width = b.height = 9;
+        const ca = a.getContext("2d"), cb = b.getContext("2d", { willReadFrequently: true });
+        ca.fillStyle = "#fff"; ca.fillRect(4, 4, 1, 1);
+        if ("filter" in cb) {
+            cb.filter = "blur(2px)";
+            cb.drawImage(a, 0, 0);
+            cb.filter = "none";
+            ok = cb.getImageData(2, 4, 1, 1).data[3] > 0;
+        }
+    } catch (e) { ok = false; }
+    BLUR_OK.set(doc, ok);
+    return ok;
+}
+
+/** A Gaussian of standard deviation `sigma` (pixels) over a w x h alpha plane: three box blurs each way, the
+ *  edge counted as 0 (what a canvas blur does with what lies outside it). */
+export function gaussAlpha(a, w, h, sigma) {
+    if (!(sigma > 0.3) || !w || !h) return a;
+    // Box widths whose three passes have the Gaussian's variance (Kovesi's recipe).
+    const ideal = Math.sqrt(12 * sigma * sigma / 3 + 1);
+    let wl = Math.floor(ideal); if (wl % 2 === 0) wl--;
+    const wu = wl + 2, m = Math.round((12 * sigma * sigma - 3 * wl * wl - 12 * wl - 9) / (-4 * wl - 4));
+    const radii = [0, 1, 2].map((i) => ((i < m ? wl : wu) - 1) / 2);
+    let src = Float32Array.from(a), tmp = new Float32Array(a.length);
+    const pass = (from, to, n, lines, step, line, r) => {
+        const inv = 1 / (2 * r + 1);
+        for (let l = 0; l < lines; l++) {
+            const o = l * line;
+            let acc = 0;
+            for (let i = 0; i <= r && i < n; i++) acc += from[o + i * step];
+            for (let i = 0; i < n; i++) {
+                to[o + i * step] = acc * inv;
+                const add = i + r + 1, sub = i - r;
+                if (add < n) acc += from[o + add * step];
+                if (sub >= 0) acc -= from[o + sub * step];
+            }
+        }
+    };
+    for (const r of radii) {
+        if (r < 1) continue;
+        pass(src, tmp, w, h, 1, w, r);
+        pass(tmp, src, h, w, w, 1, r);
+    }
+    return src;
+}
+
 export function rotoMatte(roto, frame, imgW, imgH, W, H, doc) {
     const acc = new Float32Array(W * H);
     const layers = roto && Array.isArray(roto.layers) ? roto.layers.map(normalizeLayer) : [];
