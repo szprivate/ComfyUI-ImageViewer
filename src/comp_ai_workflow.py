@@ -52,6 +52,7 @@ VIDEO_LOADERS = {"LoadVideo": "file", "VHS_LoadVideo": "video", "VHS_LoadVideoPa
 PICTURE_OUTPUTS = ("SaveImage", "PreviewImage", "SaveImageAdvanced", "Image Save", "SaveImageWebsocket",
                    "SaveAnimatedWEBP", "SaveAnimatedPNG")
 VIDEO_OUTPUTS = ("SaveVideo", "SaveWEBM", "VHS_VideoCombine")
+VIEWER_SENDS = ("ImageViewerSend", "bEpicSendToViewer")
 VIDEO_EXTS = (".mp4", ".webm", ".mov", ".mkv", ".gif", ".avi")
 PROMPT_NAMES = ("prompt", "text", "positive", "model.prompt")
 SKIP_INPUTS = {"image", "images", "filename_prefix", "upload", "video", "file", "channel", "format", "codec"}
@@ -152,9 +153,23 @@ def clean_graph(graph):
         raise WorkflowError("not a ComfyUI workflow (a JSON object of nodes with class_type and inputs)")
     if len(json.dumps(graph)) > G.MAX_GRAPH_BYTES:
         raise WorkflowError("that workflow is too large")
-    return {str(k): {"class_type": v["class_type"], "inputs": copy.deepcopy(v.get("inputs") or {}),
-                     **({"_meta": copy.deepcopy(v["_meta"])} if isinstance(v.get("_meta"), dict) else {})}
-            for k, v in graph.items() if v.get("class_type") not in G.FRONTEND_ONLY}
+    out = {}
+    for k, v in graph.items():
+        c = v.get("class_type")
+        if c in G.FRONTEND_ONLY:
+            continue
+        ins = copy.deepcopy(v.get("inputs") or {})
+        meta = {"_meta": copy.deepcopy(v["_meta"])} if isinstance(v.get("_meta"), dict) else {}
+        if c in VIEWER_SENDS:
+            # The viewer's own Send node is where a canvas usually ends: it stands for a SaveImage here, so the
+            # job's pictures come back as a save's do and nothing is pushed into the viewer while it runs.
+            if not _is_link(ins.get("input")):
+                continue
+            out[str(k)] = {"class_type": "SaveImage", "inputs": {"images": ins["input"], "filename_prefix": "comp/ai"},
+                           **meta}
+            continue
+        out[str(k)] = {"class_type": c, "inputs": ins, **meta}
+    return out
 
 
 def inspect(graph):
@@ -218,7 +233,7 @@ def make_custom(graph, name="", source="file", path=""):
     g = clean_graph(graph)
     info = inspect(g)
     if not info["outputs"]:
-        raise WorkflowError("the workflow saves nothing: it needs a SaveImage, PreviewImage or a video save "
+        raise WorkflowError("the workflow saves nothing: it needs a SaveImage, PreviewImage, Send to Image Viewer or a video save "
                             "(title it comp:out if there are several)")
     return {"graph": g, "name": str(name or "")[:120] or "My workflow", "source": source if source in ("canvas", "file") else "file",
             "path": str(path or "")[:1024], "saved": time.strftime("%Y-%m-%d %H:%M:%S"), "sig": info["sig"],

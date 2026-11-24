@@ -3537,12 +3537,42 @@ export function createCompEditor(host, opts = {}) {
         const row = el(doc, "div", "mg-prop cp-btnrow cp-ai-take");
         row.title = n.type === "ai_workflow" ? "The workflow this node runs" : "A workflow of your own in place of the node's list";
         const btns = row;
-        const take = (how) => Promise.resolve(o.aiTakeWorkflow && o.aiTakeWorkflow(how)).then((got) => {
-            if (!got) return;
-            takeCustom(n, got);
-            toast(`Workflow ${got.name}: ${got.inputs.length} input(s), ${got.outputs.length} output(s), ${got.params.length} parameter(s)`, "success");
-        });
-        btns.append(btn("From canvas", "The workflow on the ComfyUI canvas now, as ComfyUI would queue it (a copy is kept in the comp)", () => take({ how: "canvas" })));
+        // What a take said last, kept per node so a redraw of the pane still shows it (a ComfyUI toast can lie
+        // under the viewer, so the pane is where it is seen).
+        const said = (st.aiTakeSaid || (st.aiTakeSaid = new Map()));
+        const note = el(doc, "div", "mg-empty cp-ai-takemsg");
+        const showSaid = () => {
+            const m = said.get(n.id);
+            note.textContent = m ? m.text : "";
+            note.classList.toggle("cp-ai-err", !!(m && m.error));
+            note.style.display = m ? "" : "none";
+            if (m && m.error) note.style.color = "#ff8a80";
+            else note.style.color = "";
+        };
+        const take = (how, button, busyText, again) => {
+            if (!o.aiTakeWorkflow) return;
+            const was = button ? button.textContent : "";
+            if (button) { button.disabled = true; button.textContent = busyText || "Reading…"; }
+            said.set(n.id, { text: busyText || "Reading the workflow…" }); showSaid();
+            return Promise.resolve(again ? o.aiReloadWorkflow(again) : o.aiTakeWorkflow(how)).then((got) => {
+                if (!got) { said.delete(n.id); return; }
+                if (got.error) { said.set(n.id, { text: `The workflow was not taken: ${got.error}`, error: true }); return; }
+                takeCustom(n, got);
+                const text = `Workflow ${got.name}: ${(got.inputs || []).length} input(s), ${(got.outputs || []).length} output(s), ${(got.params || []).length} parameter(s)`;
+                said.set(n.id, { text });
+                toast(text, "success");
+            }).catch((e) => {
+                console.error("[ImageViewer] Comp: taking the workflow failed", e);
+                said.set(n.id, { text: `The workflow was not taken: ${(e && e.message) || e}`, error: true });
+            }).finally(() => {
+                if (button && button.isConnected) { button.disabled = false; button.textContent = was; }
+                showSaid();
+                if (!note.isConnected) renderProps();
+            });
+        };
+        const fc = btn("From canvas", "The workflow on the ComfyUI canvas now, as ComfyUI would queue it (a copy is kept in the comp)", () => take({ how: "canvas" }, fc, "Reading the canvas…"));
+        fc.classList.add("cp-ai-fromcanvas");
+        btns.append(fc);
         const fb = btn("From file ▾", "A workflow saved in ComfyUI, or a .json file on this computer (either format; a copy is kept in the comp)", () => {
             Promise.resolve(o.aiSavedWorkflows ? o.aiSavedWorkflows() : []).then((list) => {
                 const items = (list || []).slice(0, 40).map((p) => [p.replace(/\.json$/i, ""), () => take({ how: "saved", path: p })]);
@@ -3551,11 +3581,14 @@ export function createCompEditor(host, opts = {}) {
         });
         fb.classList.add("cp-ai-fromfile");
         btns.append(fb);
-        if (c) btns.append(btn("Reload", c.source === "canvas" ? "Take the canvas's workflow again" : c.source === "saved" ? `Read ${c.path} again` : "Choose the file again", () => {
-            Promise.resolve(o.aiReloadWorkflow && o.aiReloadWorkflow(c)).then((got) => { if (got) { takeCustom(n, got); toast(`Workflow ${got.name} taken again`, "success"); } });
-        }));
+        if (c && o.aiReloadWorkflow) {
+            const rb = btn("Reload", c.source === "canvas" ? "Take the canvas's workflow again" : c.source === "saved" ? `Read ${c.path} again` : "Choose the file again", () => take(null, rb, "Reading…", c));
+            btns.append(rb);
+        }
         if (c) btns.append(btn("Remove", n.type === "ai_workflow" ? "Take the workflow off the node" : "Take the workflow off the node: its own list runs again", () => forgetCustom(n)));
         pane.append(row);
+        pane.append(note);
+        showSaid();
         if (!c) return;
         const from = c.source === "canvas" ? "from the canvas" : c.source === "saved" ? `ComfyUI's ${c.path}` : `the file ${c.path || ""}`;
         const ins = (c.inputs || []).map((x) => `${x.name}${x.kind === "picture" ? "" : ` (${x.kind})`}`).join(", ") || "none (it runs once and is held)";

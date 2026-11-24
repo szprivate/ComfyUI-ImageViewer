@@ -19,6 +19,13 @@ async function post(route, body) {
     return data;
 }
 
+/** *p*, or an error saying what took too long after *ms*. */
+function inTime(p, ms, what) {
+    let t = 0;
+    return Promise.race([p, new Promise((_, no) => { t = setTimeout(() => no(new Error(`${what} took longer than ${Math.round(ms / 1000)} s`)), ms); })])
+        .finally(() => clearTimeout(t));
+}
+
 /** The workflow name ComfyUI's tab bar shows for the canvas, else "canvas". */
 function canvasName() {
     try {
@@ -72,14 +79,16 @@ export const CompAiWorkflowMixin = {
      * Take a workflow for an AI node: *how* is {how: "canvas"} (the open canvas, as ComfyUI would queue it),
      * {how: "saved", path} (a workflow saved in ComfyUI, "<sub>/<name>.json" below workflows/) or {how: "file"} (a
      * .json on this computer). Answers what the node keeps ({graph, name, source, path, sig, inputs, outputs,
-     * params}) or null when nothing was taken (said in a notice).
+     * params}), null when nothing was chosen, or {error} when it could not be taken (also said in a notice; the
+     * editor shows it in the node's pane, since a ComfyUI toast can lie under the viewer).
      */
     async compAiTakeWorkflow(how) {
         let json = null, name = "", source = "file", path = "";
         try {
             if (how.how === "canvas") {
-                const p = await app.graphToPrompt();
+                const p = await inTime(Promise.resolve(app.graphToPrompt()), 30000, "Reading the canvas");
                 json = p && p.output ? p.output : p;
+                if (!json || typeof json !== "object" || !Object.keys(json).length) throw new Error("the canvas has no nodes to run");
                 name = canvasName(); source = "canvas";
             } else if (how.how === "saved") {
                 path = String(how.path || "");
@@ -94,12 +103,21 @@ export const CompAiWorkflowMixin = {
                 json = got.json; name = got.name.replace(/\.json$/i, ""); path = got.name;
             }
             const graph = await asPrompt(json);
-            const { custom } = await post("/imageviewer/comp_ai_inspect", { graph, name, source: source === "saved" ? "file" : source, path });
+            let custom;
+            try {
+                ({ custom } = await inTime(post("/imageviewer/comp_ai_inspect", { graph, name, source: source === "saved" ? "file" : source, path }), 30000, "Reading the workflow"));
+            } catch (e) {
+                if (e.status === 404 || e.status === 405) throw new Error("this ComfyUI does not know the route yet: restart ComfyUI after updating the viewer");
+                throw e;
+            }
+            if (!custom) throw new Error("the server answered no workflow");
             if (source === "saved") custom.source = "saved";
             return custom;
         } catch (e) {
-            notice("error", "The workflow was not taken", String(e.message || e));
-            return null;
+            const msg = String((e && e.message) || e);
+            console.error("[ImageViewer] Comp: the workflow was not taken", e);
+            notice("error", "The workflow was not taken", msg);
+            return { error: msg };
         }
     },
 

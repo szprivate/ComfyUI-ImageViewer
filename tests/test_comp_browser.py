@@ -2283,6 +2283,36 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
         self.assertEqual(self.errors, [])
 
+    def test_from_canvas_says_in_the_node_why_a_workflow_was_not_taken(self):
+        """Sebastian 2026-11-24: "using the from canvas button does nothing". A failure went only to ComfyUI's
+        toast, which lies under the viewer; now the pane says it, the button shows it is reading, and a canvas that
+        ends in Send to Image Viewer is taken (the Send stands for its save)."""
+        pg = self.page()
+        state = {"flow": {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}}}}
+        pg.evaluate("""(flow) => import('/scripts/app.js').then((m) => {
+            window.__flow = flow; m.app.graphToPrompt = async () => { await new Promise((r) => setTimeout(r, 300)); return { output: window.__flow }; }; })""", state["flow"])
+        self.new_comp(pg)
+        ai = pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const a = e.addNode('ai_workflow'); out.inputs = [a.id]; e.refresh(); e.select([a.id]); return a.id; }}""")
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-fromcanvas')", timeout=10000)
+        pg.locator("comfyui-image-viewer-panel .cp-ai-fromcanvas").first.click()
+        pg.wait_for_function("() => { const b = __panel.shadowRoot.querySelector('.cp-ai-fromcanvas'); return b && b.disabled && /Reading/.test(b.textContent); }", timeout=5000)
+        pg.wait_for_function("() => { const m = __panel.shadowRoot.querySelector('.cp-ai-takemsg.cp-ai-err'); return m && m.offsetParent; }", timeout=10000)
+        msg = pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-takemsg').textContent")
+        self.assertIn("saves nothing", msg)
+        self.assertIn("Send to Image Viewer", msg)
+        self.assertFalse(pg.evaluate("() => __panel.shadowRoot.querySelector('.cp-ai-fromcanvas').disabled"))
+        self.assertFalse(pg.evaluate(f"(id) => !!{self.ED}.node(id).custom", ai))
+        pg.evaluate("""() => { window.__flow = {
+            "1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
+            "2": {"class_type": "ImageInvert", "inputs": {"image": ["1", 0]}},
+            "3": {"class_type": "ImageViewerSend", "inputs": {"input": ["2", 0]}} }; }""")
+        pg.locator("comfyui-image-viewer-panel .cp-ai-fromcanvas").first.click()
+        pg.wait_for_function(f"(id) => {self.ED}.node(id).custom", arg=ai, timeout=10000)
+        n = pg.evaluate(f"(id) => {self.ED}.node(id)", ai)
+        self.assertEqual(n["custom"]["graph"]["3"]["class_type"], "SaveImage")
+        pg.wait_for_function("() => { const m = __panel.shadowRoot.querySelector('.cp-ai-takemsg'); return m && m.textContent.includes('1 input(s), 1 output(s)') && !m.classList.contains('cp-ai-err'); }", timeout=10000)
+
     def test_an_ai_workflow_node_takes_the_canvas_workflow_and_runs_it(self):
         """Sebastian 2026-11-23: a workflow of his own in the AI nodes, from the canvas or a file, and an AI Workflow
         node: its loaders become the node's inputs, comp:<name> values its parameters, its saves the picture and a
