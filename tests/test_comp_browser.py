@@ -2405,6 +2405,22 @@ class CompBrowserTests(unittest.TestCase):
         self.assertTrue(pg.evaluate("() => !!__panel.shadowRoot.querySelector('.cp-btnrow')"))
         self.assertEqual(self.errors, [])
 
+    def test_the_from_file_menu_opens_under_its_button(self):
+        """Sebastian 2026-11-24: the From file menu of the AI nodes opened far from its button - it was placed
+        against the editor's box while the button is in the Parameters panel."""
+        pg = self.page()
+        self.new_comp(pg)
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp(); const out = c.nodes.find((n) => n.type === 'output');
+            const a = e.addNode('ai_depth'); out.inputs = [a.id]; e.refresh(); e.select([a.id]); }}""")
+        pg.wait_for_function("() => __panel.shadowRoot.querySelector('.cp-ai-fromfile')", timeout=10000)
+        pg.locator("comfyui-image-viewer-panel .cp-ai-fromfile").first.click()
+        pg.wait_for_function("() => [...__panel.shadowRoot.querySelectorAll('.cp-pop')].some((m) => /Browse this computer/.test(m.textContent))", timeout=10000)
+        r = pg.evaluate("""() => { const b = __panel.shadowRoot.querySelector('.cp-ai-fromfile').getBoundingClientRect();
+            const m = [...__panel.shadowRoot.querySelectorAll('.cp-pop')].find((x) => /Browse this computer/.test(x.textContent)).getBoundingClientRect();
+            return { bl: b.left, bb: b.bottom, ml: m.left, mt: m.top, mw: m.width }; }""")
+        self.assertLess(abs(r["mt"] - r["bb"]), 6, r)
+        self.assertLess(abs(r["ml"] - r["bl"]), 40, r)
+
     def test_from_canvas_says_in_the_node_why_a_workflow_was_not_taken(self):
         """Sebastian 2026-11-24: "using the from canvas button does nothing". A failure went only to ComfyUI's
         toast, which lies under the viewer; now the pane says it, the button shows it is reading, and a canvas that
