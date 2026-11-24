@@ -946,6 +946,17 @@ class CompBrowserTests(unittest.TestCase):
         pg.wait_for_timeout(500)
         px2 = self.pixel(pg, 0.5, 0.5)
         self.assertGreater(px2[1], px[1] + 40); self.assertLess(abs(px2[2] - px[2]), 4)
+        # "from" picks which channel of the result goes in; it is shown only while the output is not rgba.
+        self.assertNotIn("from", labels)
+        pg.evaluate(f"() => {{ const e = {ED}; e.select([]); e.select(['{gid}']); }}")
+        pg.wait_for_timeout(300)
+        labels2 = pg.evaluate(f"() => [...__panel.compPropsPanel.querySelectorAll('{P} .mg-prop label')].map((l) => l.textContent)")
+        self.assertIn("from", labels2)
+        fsel = pg.locator(f'{P} .mg-prop').filter(has=pg.locator("label", has_text=re.compile(r"^from$"))).locator("select")
+        self.assertEqual(fsel.evaluate("(s) => [...s.options].map((o) => o.value)"), ["auto", "red", "green", "blue", "alpha", "luminance"])
+        fsel.select_option("luminance")
+        pg.wait_for_timeout(300)
+        self.assertEqual(pg.evaluate(f"() => {ED}.node('{gid}').write_from"), "luminance")
         if SHOTS:
             pg.locator(P).screenshot(path=os.path.join(SHOTS, "comp-write-into.png"))
         self.assertEqual(self.errors, [])

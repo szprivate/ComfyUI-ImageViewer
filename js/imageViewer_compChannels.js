@@ -231,19 +231,50 @@ export function isTarget(t) { return isChannel(t) || isLayer(t); }
  * layer, r g b a), a channel of a layer ``defs`` know P's channel in its place there (depth.z: red), any other
  * name P's alpha.
  */
-export function writeTarget(base, bex, P, target, defs = null) {
+export const WRITE_FROM = ["auto", "red", "green", "blue", "alpha", "luminance"];
+const FROM_CH = { red: "r", green: "g", blue: "b", alpha: "a" };
+
+/** P's alpha is 1 everywhere: a picture with no alpha of its own (ComfyUI's IMAGE, a grey matte). */
+function opaque(P) {
+    const d = P.data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] !== 1) return false;
+    return true;
+}
+
+/** P's luminance (Rec. 709), the colour as it stands. */
+export function luminanceOf(P) {
+    const n = P.w * P.h, d = P.data, out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = d[i * 4] * 0.2126 + d[i * 4 + 1] * 0.7152 + d[i * 4 + 2] * 0.0722;
+    return out;
+}
+
+/**
+ * The node's picture P put into ``target`` of what came in (base, bex). ``from`` says which of P's channels goes
+ * there: "auto" (each target channel takes P's channel in its place, an alpha P's alpha - or, when P has no alpha
+ * of its own, P's luminance, so a grey picture goes into an alpha as the matte it is), red / green / blue / alpha,
+ * or luminance.
+ */
+export function writeTarget(base, bex, P, target, defs = null, from = "auto") {
     if (!isTarget(target) || target === "rgba") return [P, Object.assign({}, bex || {})];
     const s = start(base, bex);
+    let lum = null, flat = null;
+    const luma = () => (lum || (lum = luminanceOf(P)));
+    const take = (slot) => {
+        if (from === "luminance") return luma();
+        if (FROM_CH[from]) return channelOf(P, null, FROM_CH[from]);
+        if (slot === 3 && (flat === null ? (flat = opaque(P)) : flat)) return luma();
+        return channelOf(P, null, RGBA[slot]);
+    };
     if (isLayer(target)) {
         // The layer's channels that are there already, else the ones it is known by (a new layer: r g b a).
         const mine = Object.keys(bex || {}).filter((c) => layerOf(c) === target);
-        (mine.length ? mine : layerChannels(target, defs)).forEach((c, k) => put(s, c, channelOf(P, null, RGBA[sourceSlot(c, k)])));
+        (mine.length ? mine : layerChannels(target, defs)).forEach((c, k) => put(s, c, take(sourceSlot(c, k))));
     }
     else {
         const letter = IDX[target] !== undefined ? target : target.slice(target.indexOf(".") + 1);
         // A channel of a known layer (depth.z) takes P's channel in its place there; another name P's alpha.
         const known = IDX[letter] === undefined && defs ? layerChannels(layerOf(target), defs).indexOf(target) : -1;
-        put(s, target, channelOf(P, null, IDX[letter] !== undefined ? letter : known >= 0 ? RGBA[sourceSlot(target, known)] : "a"));
+        put(s, target, take(IDX[letter] !== undefined ? IDX[letter] : known >= 0 ? sourceSlot(target, known) : 3));
     }
     return [s.img, s.ex];
 }

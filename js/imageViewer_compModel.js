@@ -1917,11 +1917,16 @@ export const NO_WRITE = new Set(["shuffle", "addchannels", "removechannels", "co
     "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph", "sidebyside",
     "tracker", "planartracker", ...GEO3D, ...DEEP]);
 export const WRITE_PARAM = { kind: "target", def: "rgba", label: "output", help: "Where the result goes: rgba (the whole picture), one channel, or a layer; the rest of what comes in passes" };
+export const WRITE_FROM_PARAM = { kind: "enum", def: "auto", choices: CH.WRITE_FROM, label: "from",
+    help: "Which of the result's channels goes into the output: auto (each channel its own; an alpha takes the result's alpha, or its luminance when the result has no alpha of its own - a grey matte from a workflow's IMAGE), red, green, blue, alpha, or luminance",
+    only: (n) => !!n.write && n.write !== "rgba" };
 for (const [t, d] of Object.entries(NODE_TYPES)) {
     if (NO_WRITE.has(t)) continue;
-    if (d.params.write) { d.params.write = Object.assign({}, WRITE_PARAM); continue; }
-    if (!d.inputs.length) continue;
-    d.params = Object.assign({ write: Object.assign({}, WRITE_PARAM) }, d.params);
+    if (!d.params.write && !d.inputs.length) continue;
+    const rest = Object.assign({}, d.params);
+    delete rest.write; delete rest.write_from;
+    // Roto's matte is one picture (rotoWrite): no channel of it to pick.
+    d.params = Object.assign({ write: Object.assign({}, WRITE_PARAM) }, t === "roto" ? {} : { write_from: Object.assign({}, WRITE_FROM_PARAM) }, rest);
 }
 // A node with both: its own "output" choice (premultiplied / matte ...) is called "result", so the two rows differ.
 for (const d of Object.values(NODE_TYPES)) if (d.params.write && d.params.output && d.params.output.kind === "enum" && !d.params.output.label) d.params.output.label = "result";
@@ -2119,7 +2124,7 @@ export function renderNode(comp, id, frame, ctx) {
             const w = n.write || "rgba";
             if (w !== "rgba") {
                 const base = n.inputs[0] ? run(n.inputs[0], f, depth + 1) : blank(W, H);
-                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w, defs);
+                [img, ex] = CH.writeTarget(base, exOf(n.inputs[0], f), conform(img, base.w, base.h), w, defs, n.write_from || "auto");
             }
         }
         if (n && !n.disable && MASKABLE.has(n.type)) [img, ex] = maskStage(n, f, depth, img, ex);

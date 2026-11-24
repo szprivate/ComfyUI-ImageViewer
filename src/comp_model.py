@@ -2819,21 +2819,51 @@ def shuffle_channels(img, ex, out, picks):
     return s.img, s.ex
 
 
-def write_target(base, bex, P, target, defs=None):
+WRITE_FROM = ["auto", "red", "green", "blue", "alpha", "luminance"]
+_FROM_CH = {"red": 0, "green": 1, "blue": 2, "alpha": 3}
+
+
+def luminance_of(P):
+    """P's luminance (Rec. 709), the colour as it stands - the page's luminanceOf, in its order."""
+    p = P.astype(np.float64)
+    return (p[..., 0] * 0.2126 + p[..., 1] * 0.7152 + p[..., 2] * 0.0722).astype(np.float32)
+
+
+def write_target(base, bex, P, target, defs=None, frm="auto"):
+    """The node's picture P put into ``target`` of what came in; ``frm`` as the page's writeTarget ``from``."""
     if not is_target(target) or target == "rgba":
         return P, dict(bex or {})
     s = _State(base, bex)
+    cache = {}
+
+    def luma():
+        if "l" not in cache:
+            cache["l"] = luminance_of(P)
+        return cache["l"]
+
+    def take(slot):
+        if frm == "luminance":
+            return luma()
+        if frm in _FROM_CH:
+            return P[..., _FROM_CH[frm]]
+        if slot == 3:
+            if "o" not in cache:
+                cache["o"] = bool(np.all(P[..., 3] == 1))
+            if cache["o"]:
+                return luma()
+        return P[..., slot]
+
     if is_layer(target):
         mine = [c for c in (bex or {}) if layer_of(c) == target]
         for k, c in enumerate(mine or layer_channels(target, defs)):
-            s.put(c, P[..., source_slot(c, k)])
+            s.put(c, take(source_slot(c, k)))
     else:
         letter = target if target in _CH else target[target.index(".") + 1:]
         known = -1
         if letter not in _CH and defs:
             lc = layer_channels(layer_of(target), defs)
             known = lc.index(target) if target in lc else -1
-        s.put(target, P[..., _CH[letter] if letter in _CH else source_slot(target, known) if known >= 0 else 3])
+        s.put(target, take(_CH[letter] if letter in _CH else source_slot(target, known) if known >= 0 else 3))
     return s.img, s.ex
 
 
@@ -2895,10 +2925,12 @@ NO_WRITE = {"shuffle", "addchannels", "removechannels", "copy", "channelmerge", 
             "dot", "group", "group_input", "group_output", "backdrop", "sticky", "oneview", "joinviews", "anaglyph",
             "sidebyside", "tracker", "planartracker"} | GEO3D | DEEP
 WRITE_PARAM = {"kind": "target", "def": "rgba"}
+WRITE_FROM_PARAM = {"kind": "enum", "def": "auto", "choices": WRITE_FROM}
 for _wt, _wd in NODE_TYPES.items():
     if _wt in NO_WRITE or ("write" not in _wd["params"] and not _wd["inputs"]):
         continue
-    _wd["params"] = {"write": dict(WRITE_PARAM), **{k: v for k, v in _wd["params"].items() if k != "write"}}
+    _rest = {k: v for k, v in _wd["params"].items() if k not in ("write", "write_from")}
+    _wd["params"] = {"write": dict(WRITE_PARAM), **({} if _wt == "roto" else {"write_from": dict(WRITE_FROM_PARAM)}), **_rest}
 WRITES = {t for t, d in NODE_TYPES.items() if "write" in d["params"]}
 # Nodes that hand their input on unchanged: what they do is outside the pixels (a file written, metadata).
 PASS_THROUGH = {"output", "write", "metadata"}
@@ -2983,7 +3015,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             if w != "rgba":
                 i0 = (n.get("inputs") or [None])[0]
                 base = run(i0, f, depth + 1) if i0 else blank(W, H)
-                img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w, defs)
+                img, ex = write_target(base, ex_of(i0, f), conform(img, base.shape[1], base.shape[0]), w, defs,
+                                       n.get("write_from") or "auto")
         if n and not n.get("disable") and n.get("type") in MASKABLE:
             img, ex = mask_stage(n, f, depth, img, ex)
         memo[(i, f)] = img

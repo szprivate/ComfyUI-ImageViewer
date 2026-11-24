@@ -792,6 +792,29 @@ test("with nothing in the mask input, a channel of what comes in is the mask (ma
     assert.deepEqual(run(), all);
 });
 
+test("a picture with no alpha of its own goes into an alpha as its luminance; write_from picks a channel", () => {
+    const comp = C.newComp({ width: 2, height: 1 });
+    const rd = C.addNode(comp, read(comp, "matte.png"));
+    // A grey IMAGE as a workflow saves it: no alpha (1 everywhere), the matte in the colour.
+    const src = { w: 2, h: 1, data: Float32Array.from([0.8, 0.8, 0.8, 1, 0.25, 0.5, 0, 1]) };
+    const g = C.addNode(comp, C.makeNode(comp, "grade", { inputs: [rd.id, null], write: "a" }));
+    assert.equal(g.write_from, "auto");
+    const run = (id = g.id) => { const r = C.renderNode(comp, id, 0, { scale: 1, source: () => src }); return { px: Array.from(r.data).map((x) => Math.round(x * 1000) / 1000), ch: r.ch }; };
+    assert.deepEqual(run().px, [0.8, 0.8, 0.8, 0.8, 0.25, 0.5, 0, 0.411], "auto: the luminance into the alpha");
+    g.write_from = "red";
+    assert.deepEqual(run().px.filter((_, i) => i % 4 === 3), [0.8, 0.25]);
+    g.write_from = "alpha";
+    assert.deepEqual(run().px.filter((_, i) => i % 4 === 3), [1, 1], "the result's own alpha, as before");
+    g.write_from = "luminance";
+    g.write = "mask.a";
+    assert.deepEqual(Array.from(run().ch["mask.a"]).map((x) => Math.round(x * 1000) / 1000), [0.8, 0.411]);
+    // A result with an alpha of its own keeps giving it under auto.
+    src.data[3] = 0.5;
+    g.write_from = "auto";
+    g.write = "a";
+    assert.deepEqual(run().px.filter((_, i) => i % 4 === 3), [0.5, 1]);
+});
+
 test("bounding boxes: a small thing carries its box through transform, blur and merge, and the numbers stay", () => {
     const comp = C.newComp({ width: 40, height: 30 });
     const r = C.addNode(comp, read(comp, "a.png"));
