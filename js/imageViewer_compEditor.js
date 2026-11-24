@@ -161,10 +161,10 @@ const CSS = `
 .cp-over .cp-rg-sq[data-crop=tl],.cp-over .cp-rg-sq[data-crop=br]{cursor:nwse-resize}
 .cp-over .cp-rg-sq[data-crop=tr],.cp-over .cp-rg-sq[data-crop=bl]{cursor:nesw-resize}
 .cp-over .cp-rg-move{fill:transparent;pointer-events:all;cursor:move}
-.cp-pop{position:absolute;z-index:40}
+.cp-pop{position:absolute;z-index:60}
 .cp-pop div.off{opacity:.4;cursor:default}.cp-pop div.off:hover{background:none}
 .cp-pop div .cp-k{float:right;margin-left:18px;color:#8a8a92}
-.cp-dlg-shade{position:absolute;inset:0;z-index:50;background:#0008;display:flex;align-items:center;justify-content:center}
+.cp-dlg-shade{position:absolute;inset:0;z-index:70;background:#0008;display:flex;align-items:center;justify-content:center}
 .cp-dlg{background:#26262c;border:1px solid #44444c;border-radius:4px;padding:12px 14px;min-width:380px;max-width:92%;box-shadow:0 8px 28px #000a;color:#d8d8dc;font:12px/1.35 system-ui,Segoe UI,sans-serif}
 .cp-dlg h3{margin:0 0 10px;font-size:13px}
 .mg-prop input.cp-vec3{width:52px;min-width:0}
