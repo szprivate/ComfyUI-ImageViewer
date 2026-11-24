@@ -1740,6 +1740,13 @@ class CompBrowserTests(unittest.TestCase):
         spec = pg.evaluate(f"""() => {{ const sel = {BAR}.querySelector('.cp-display'); sel.value = '\\u0002ACEScg';
             sel.dispatchEvent(new Event('change')); return {self.ED}.state.display; }}""")
         self.assertEqual(spec, "\u0002ACEScg")
+        if SHOTS:
+            os.makedirs(SHOTS, exist_ok=True)
+            pg.evaluate(f"() => {{ const e = {self.ED}; e.state.display = 'sRGB - Display\\u0001ACES 2.0 - SDR 100 nits (Rec.709)'; e.addNode('grade', {{}}); }}")
+            pg.wait_for_timeout(400)
+            top = pg.evaluate("() => __panel.shadowRoot.querySelector('.tab').getBoundingClientRect().top")
+            bot = pg.evaluate(f"() => {BAR}.getBoundingClientRect().bottom")
+            pg.screenshot(path=os.path.join(SHOTS, "comp-bar-ocio.png"), clip={"x": 0, "y": max(0, top - 4), "width": 1500, "height": bot - top + 8})
 
     def test_an_unsaved_comp_has_a_star_in_its_tab(self):
         pg = self.page()
