@@ -2148,7 +2148,13 @@ export function createCompEditor(host, opts = {}) {
     function popMenu(anchor, items) {
         if (menuEl && menuEl._from === anchor) { closeMenus(); return null; }
         closeMenus();
-        const box = anchor.closest(".cp-graph") || root;
+        // The menu lies in the box its anchor is drawn in: the graph, the editor, or - for the
+        // Parameters panel, which is outside the editor's root - the panel's .comp-slot.
+        const box = anchor.closest(".cp-graph") || (root.contains(anchor) ? root : anchor.closest(".comp-slot") || anchor.parentElement) || root;
+        if (!root.contains(box) && !box._cpPopClose) {
+            box._cpPopClose = true;
+            box.addEventListener("pointerdown", (e) => { if (menuEl && !e.composedPath().includes(menuEl)) closeMenus(); }, true);
+        }
         const m = el(doc, "div", "mg-ctx cp-pop");
         m._from = anchor;
         for (const it of items) {
