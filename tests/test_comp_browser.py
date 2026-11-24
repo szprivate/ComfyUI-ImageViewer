@@ -495,6 +495,26 @@ class CompBrowserTests(unittest.TestCase):
         self.assertGreaterEqual(len(set(seen)), 4, seen)
         self.assertEqual(self.errors, [])
 
+    def test_a_selected_nodes_keys_are_ticks_on_the_main_timeline(self):
+        pg = self.page()
+        self.new_comp(pg)
+        ED = self.ED
+        ticks = "() => [...__panel.container.querySelectorAll('#kf-ticks .kf-tick')].length"
+        pg.evaluate(f"""() => {{ const e = {ED}; const n = e.comp().nodes.find((x) => x.id === 'Constant1');
+            n.tracks = {{ color: [{{ f: 0, v: [0, 0, 0, 1] }}, {{ f: 20, v: [1, 1, 1, 1] }}] }}; e.select([]); e.refresh(); }}""")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(ticks), 0, "no node selected: no ticks")
+        pg.evaluate(f"() => {ED}.select(['Constant1'])")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(ticks), 2, "the selected node's keys are ticks")
+        pg.evaluate(f"""() => {{ const e = {ED}; e.comp().nodes.find((x) => x.id === 'Constant1').tracks.color.push({{ f: 30, v: [1, 0, 0, 1] }}); e.refresh(); }}""")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(ticks), 3, "a new key adds a tick")
+        pg.evaluate(f"() => {ED}.select([])")
+        pg.wait_for_timeout(200)
+        self.assertEqual(pg.evaluate(ticks), 0)
+        self.assertEqual(self.errors, [])
+
     def test_frames_are_kept_rendered_ahead_and_marked_on_the_timeline(self):
         pg = self.page()
         self.new_comp(pg)
