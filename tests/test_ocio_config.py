@@ -86,10 +86,26 @@ class OcioConfig(unittest.TestCase):
         self.color_io.set_config("")
         names = [c["name"] for c in self.comp_ocio.info()["colorspaces"]]
         self.assertIn("ACEScg", names)
-        # The bar's one output: the sRGB display and its default view (the menu picks the input).
+        # The bar's one output: the sRGB ENCODING, never the ACES view that tone-maps (the menu picks the input).
         srgb = self.comp_ocio.info()["srgb"]
-        self.assertIn("srgb", srgb["display"].lower())
+        self.assertEqual(srgb, {"dst": "sRGB Encoded Rec.709 (sRGB)"})
         self.assertTrue(self.comp_ocio.resolve(dict({"src": "ACEScg"}, **srgb)))
+        # Sebastian's check: a picture taken from sRGB into ACEScg and shown as ACEScg looks as it started.
+        import numpy as np
+        px = np.array([[[0.2, 0.5, 0.8], [0.05, 0.9, 0.3], [1.0, 1.0, 1.0]]], np.float32)
+        to_cg = self.comp_ocio.apply_rgb(px.copy(), {"src": "sRGB Encoded Rec.709 (sRGB)", "dst": "ACEScg"})
+        back = self.comp_ocio.apply_rgb(to_cg, dict({"src": "ACEScg"}, **srgb))
+        self.assertLess(float(np.abs(back - px).max()), 1e-3)
+        # The page's preview: an exact matrix into linear Rec.709, then the sRGB curve - within a level.
+        lin = self.comp_ocio.info()["srgb_linear"]
+        self.assertEqual(lin, "Linear Rec.709 (sRGB)")
+        M = sys.modules[self.comp_ocio.__name__.rsplit('.', 1)[0] + '.comp_model']
+        src = np.random.RandomState(1).rand(1, 400, 3).astype(np.float32)
+        cg = self.comp_ocio.apply_rgb(src, {"src": "sRGB Encoded Rec.709 (sRGB)", "dst": "ACEScg"})
+        lut = self.comp_ocio.bake({"src": "ACEScg", "dst": lin})
+        self.assertEqual(lut[1], "matrix")
+        shown = self.comp_ocio._srgb_curve(np.clip(M.apply_lut(cg, lut), 0, None))
+        self.assertLessEqual(float(np.abs(np.round(shown * 255) - np.round(src * 255)).max()), 1.0)
         st, d = self.call("GET")
         self.assertEqual(st, 200)
         self.assertEqual(d["source"], "built-in")

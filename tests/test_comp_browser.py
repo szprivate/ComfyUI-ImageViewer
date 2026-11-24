@@ -1706,12 +1706,18 @@ class CompBrowserTests(unittest.TestCase):
         # A display and view of the config in the bar: the picture is drawn through its LUT.
         bar = pg.evaluate(f"() => Array.from(__panel.container.querySelectorAll('select.mg-btn')).map((s) => s.options.length)")
         self.assertTrue(any(n > 2 for n in bar), bar)
-        # A mid grey (linear 0.18) shown plainly, then read as ACEScg and shown on the config's sRGB output.
+        # A mid grey (linear 0.18) shown plainly, then read as ACEScct (log) and shown on plain sRGB.
         pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes = e.comp().nodes.filter((n) => n.type !== 'ocio_colorspace'); const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.18, 0.18, 0.18, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(500)
         plain = self.pixel(pg, 0.5, 0.5)
         views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB curve (plain)').options).map((o) => o.value)")
-        pick = next(v for v in views if v.startswith("\u0003") and "ACEScg" in v)
+        # Read as the working space (ACEScg) and shown on plain sRGB it is the plain picture: no tone mapping
+        # (Sebastian 2026-11-24: sRGB -> ACEScg in a node, ACEScg in this menu, did not look as it started).
+        cg = next(v for v in views if v == "\u0003ACEScg")
+        spec = pg.evaluate(f"(v) => {{ const e = {self.ED}; e.state.display = v; const s = e.displaySpec(); e.state.display = ''; return s; }}", cg)
+        self.assertIn("dst", spec, spec)
+        self.assertNotIn("view", spec, spec)
+        pick = next(v for v in views if v == "\u0003ACEScct")
         # The bake is slow the first time (an ACES config reads its LUT files): redraws asked for meanwhile wait
         # for the same answer - once they drew the plain picture and the menu seemed to do nothing.
         pg.evaluate("() => { const was = __panel._cpOcioLut.bind(__panel); __panel._cpOcioLut = async (spec) => { await new Promise((r) => setTimeout(r, 700)); return was(spec); }; }")
@@ -1721,8 +1727,14 @@ class CompBrowserTests(unittest.TestCase):
             pg.evaluate(f"() => {self.ED}.refresh()")
         pg.wait_for_function(f"(p) => {{ const c = {self.ED}.canvas; const d = c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data; return Math.abs(d[0] - p[0]) > 6; }}", arg=plain, timeout=8000)
         self.assertTrue(pg.evaluate(f"() => !!{self.ED}.state.display"))
-        if SHOTS:
-            pg.screenshot(path=os.path.join(SHOTS, "comp-ocio.png"))
+        # Sebastian's check (2026-11-24): a picture's values taken from sRGB into ACEScg by a node and shown as
+        # ACEScg look as they started (here the constant's numbers are the "sRGB picture").
+        pg.evaluate(f"""() => {{ const e = {self.ED}; const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.2, 0.5, 0.8, 1];
+            e.select(['Constant1']); e.addNode('ocio_colorspace'); const n = e.comp().nodes.find((x) => x.type === 'ocio_colorspace');
+            n.in_space = 'sRGB Encoded Rec.709 (sRGB)'; n.out_space = 'ACEScg'; e.comp().nodes.find((x) => x.type === 'output').inputs = [n.id];
+            e.state.display = '\\u0003ACEScg'; e.refresh(); }}""")
+        pg.wait_for_function(f"""() => {{ const c = {self.ED}.canvas; const d = c.getContext('2d').getImageData(Math.floor(c.width / 2), Math.floor(c.height / 2), 1, 1).data;
+            return Math.abs(d[0] - 51) <= 2 && Math.abs(d[1] - 128) <= 2 && Math.abs(d[2] - 204) <= 2; }}""", timeout=10000)
         self.assertEqual(self.errors, [])
 
     def test_the_ocio_menu_sits_right_of_the_exposure_and_offers_aces(self):
@@ -1746,11 +1758,11 @@ class CompBrowserTests(unittest.TestCase):
         self.assertEqual(values[:3], ["", "\u0003ACEScg", "\u0003ACES2065-1"], st)     # the working space, then the ACES ones
         self.assertIn("ACEScg (working)", [o[0] for o in st["options"]])
         # A colourspace picked: the picture read as it and shown on the config's sRGB output - never the other way.
-        spec = pg.evaluate(f"""() => {{ const e = {self.ED}; e.state.ocio.srgb = {{ display: 'sRGB - Display', view: 'ACES 2.0 - SDR 100 nits (Rec.709)' }};
+        spec = pg.evaluate(f"""() => {{ const e = {self.ED}; e.state.ocio.srgb = {{ dst: 'sRGB Encoded Rec.709 (sRGB)' }}; e.state.ocio.srgb_linear = 'Linear Rec.709 (sRGB)';
             const sel = {BAR}.querySelector('.cp-display'); sel.value = '\\u0003ACES2065-1';
             sel.dispatchEvent(new Event('change')); return [e.state.display, e.displaySpec ? e.displaySpec() : null]; }}""")
         self.assertEqual(spec[0], "\u0003ACES2065-1")
-        self.assertEqual(spec[1], {"src": "ACES2065-1", "display": "sRGB - Display", "view": "ACES 2.0 - SDR 100 nits (Rec.709)"})
+        self.assertEqual(spec[1], {"src": "ACES2065-1", "dst": "Linear Rec.709 (sRGB)"})
         if SHOTS:
             os.makedirs(SHOTS, exist_ok=True)
             pg.evaluate(f"() => {{ const e = {self.ED}; e.state.display = '\\u0003ACEScg'; e.addNode('grade', {{}}); }}")

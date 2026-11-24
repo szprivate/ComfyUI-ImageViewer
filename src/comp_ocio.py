@@ -55,12 +55,80 @@ def info():
             displays.append({"name": d, "views": list(cfg.getViews(d)), "default": cfg.getDefaultView(d)})
     except Exception:  # noqa: BLE001 - a v1 config without displays still converts colourspaces
         pass
-    # The viewer's one output (color_io): the config's sRGB display with its default view on v2, else its
-    # sRGB output colourspace. The bar's menu picks the INPUT colourspace and always shows through this.
-    srgb = {"display": st["view"][0], "view": st["view"][1]} if st.get("view") else {"dst": st["target"]}
+    # The bar's menu picks the INPUT colourspace and always shows it on plain sRGB (srgb_out).
+    srgb = srgb_out()
+    lin = srgb_linear(srgb)
     return {"available": True, "source": st["source"], "working": st["linear"], "srgb": srgb,
+            "srgb_linear": lin,
             "colorspaces": [{"name": n, "family": st["families"].get(n, "")} for n in st["names"]],
             "displays": displays, "default_display": displays[0]["name"] if displays else ""}
+
+
+SRGB_ENCODED = ("srgb encoded rec.709 (srgb)", "srgb - texture", "utility - srgb - texture", "srgb_texture",
+                "srgb_tx", "srgb texture", "srgb")
+
+
+def srgb_out():
+    """The comp viewer's output: the sRGB ENCODING only, never a view that tone-maps (an ACES config's
+    default sRGB view does, so a picture taken from sRGB into ACEScg and shown back did not look like it
+    started). A plain sRGB-encoded colourspace when the config has one, else an un-tone-mapped view of the
+    sRGB display, else what the viewer shows on (color_io's target / view)."""
+    cfg, st = _cfg()
+    if cfg is None:
+        return {"dst": st["target"]}
+    by_lower = {n.lower(): n for n in st["names"]}
+    for want in SRGB_ENCODED:
+        if want in by_lower:
+            return {"dst": by_lower[want]}
+    for role in ("color_picking", "texture_paint"):
+        try:
+            cs = cfg.getColorSpace(role)
+        except Exception:  # noqa: BLE001
+            cs = None
+        name = cs.getName() if cs is not None else ""
+        if name in st["names"] and "srgb" in name.lower() and "lin" not in name.lower():
+            return {"dst": name}
+    if st.get("view"):
+        display = st["view"][0]
+        try:
+            views = list(cfg.getViews(display))
+        except Exception:  # noqa: BLE001
+            views = []
+        plain = next((v for v in views if v.lower().replace("-", "").replace(" ", "") in
+                      ("untonemapped", "video(colorimetric)", "standard")), None)
+        return {"display": display, "view": plain or st["view"][1]}
+    return {"dst": st["target"]}
+
+
+def _srgb_curve(x):
+    x = np.asarray(x, dtype=np.float64)
+    return np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(np.maximum(x, 0), 1 / 2.4) - 0.055)
+
+
+def srgb_linear(out=None):
+    """The linear colourspace whose sRGB encoding ``out`` is (Linear Rec.709 (sRGB) in the built-in config),
+    checked by the numbers: the page then bakes the input into IT - for a linear input an exact matrix - and
+    puts the sRGB curve on itself. A LUT straight into the encoded values interpolated a matrix and a steep
+    curve together and missed saturated colours by up to 100 levels. None when nothing fits."""
+    cfg, st = _cfg()
+    out = out if out is not None else srgb_out()
+    if cfg is None or not out.get("dst"):
+        return None
+    probe = np.array([[[0.0, 0.001, 0.01], [0.05, 0.18, 0.5], [0.8, 1.0, 0.3]]], np.float32)
+    want = _srgb_curve(probe)
+    for name in st["names"]:
+        low = name.lower()
+        if "lin" not in low or not any(k in low for k in ("srgb", "rec.709", "rec709", "bt.709")):
+            continue
+        if any(k in low for k in ("ap0", "ap1", "p3", "2020", "aces")):
+            continue
+        try:
+            got = apply_rgb(probe.copy(), {"src": name, "dst": out["dst"]})
+        except Exception:  # noqa: BLE001
+            continue
+        if processor({"src": name, "dst": out["dst"]}) is not None and float(np.abs(got - want).max()) < 2e-3:
+            return name
+    return None
 
 
 def resolve(spec):

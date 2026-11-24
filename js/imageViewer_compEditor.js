@@ -381,14 +381,19 @@ export function createCompEditor(host, opts = {}) {
     const LUT_RETRY_MS = 15000;
     const lutOf = (spec) => { const e = luts.get(C.OC.ocioKey(spec)); return (e && e.lut) || null; };
     // st.display: "" the plain sRGB curve, or "\u0003<colourspace>": the picture's values read as that colourspace
-    // and shown through the config's sRGB output (st.ocio.srgb - the viewer's own rule, color_io), as the
-    // viewer's colour menu does. Anything else (an older save naming a display / view) is the plain curve.
+    // and shown on the plain sRGB encoding (st.ocio.srgb = comp_ocio.srgb_out: never a view that tone-maps, so
+    // sRGB -> ACEScg in a node and ACEScg here gives the picture back). Anything else (an older save naming a
+    // display / view), or a server that does not say what its sRGB is, is the plain curve.
     const displaySpec = () => {
         if (!st.display || st.display[0] !== "\u0003") return null;
         const info = st.ocio && !st.ocio.then ? st.ocio : null;
-        const out = (info && info.srgb) || { display: "*", view: "*" };
-        return Object.assign({ src: st.display.slice(1) }, out);
+        if (!info || !info.srgb) return null;
+        // Into linear Rec.709 when the config has it (an exact matrix for a linear input), the curve put on
+        // by viewEncode (displayCurve); else straight into the encoded values.
+        if (info.srgb_linear) return { src: st.display.slice(1), dst: info.srgb_linear };
+        return Object.assign({ src: st.display.slice(1) }, info.srgb);
     };
+    const displayCurve = (ds) => !!(ds && st.ocio && !st.ocio.then && st.ocio.srgb_linear && ds.dst === st.ocio.srgb_linear);
     async function needLuts(specs) {
         if (!o.ocioLut) return;
         await Promise.all(specs.map((spec) => {
@@ -1202,7 +1207,7 @@ export function createCompEditor(host, opts = {}) {
         const imgB = bId ? C.renderNode(st.comp, bId, f, { ...sourcesCtx(pics), scale, cache: heavy, matte, ocio: lutOf, cacheAll: true, cacheBytes: CACHE_BYTES }) : null;
         const shownImg = viewTools.compose(layerOf(img), imgB ? layerOf(imgB) : null);
         C.viewEncode(shownImg, data.data, { gain: Math.pow(2, st.ev), channel: st.channel,
-            color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null });
+            color: dl ? (r, g, b) => C.OC.lutColor(dl, r, g, b) : null, curve: displayCurve(ds) });
         const rgn = regionPx(scale);
         if (rgn) blankOutside(data.data, img.w, img.h, rgn);
         const marked = viewTools.afterEncode(shownImg, data.data, scale);
