@@ -95,6 +95,21 @@ class CompAiWorkflow(unittest.TestCase):
         with self.assertRaises(self.W.WorkflowError):
             self.W.make_custom({"1": {"class_type": "LoadImage", "inputs": {"image": "x"}}})   # saves nothing
 
+    def test_the_viewers_send_node_counts_as_the_workflows_save(self):
+        """Sebastian 2026-11-24: From canvas did nothing on a canvas that ends in Send to Image Viewer - it saved
+        nothing the comp knew. It stands for a SaveImage now, so running the job pushes nothing into the viewer."""
+        g = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"}},
+             "2": {"class_type": "ImageInvert", "inputs": {"image": ["1", 0]}},
+             "3": {"class_type": "ImageViewerSend", "_meta": {"title": "comp:out"}, "inputs": {"input": ["2", 0], "file_format": "png"}},
+             "4": {"class_type": "bEpicSendToViewer", "inputs": {"input": ["1", 0]}},
+             "5": {"class_type": "ImageViewerSend", "inputs": {"input": "not a link"}}}
+        c = self.W.make_custom(g, "canvas", "canvas")
+        self.assertEqual(c["graph"]["3"], {"class_type": "SaveImage", "_meta": {"title": "comp:out"},
+                                           "inputs": {"images": ["2", 0], "filename_prefix": "comp/ai"}})
+        self.assertEqual(c["graph"]["4"]["class_type"], "SaveImage")
+        self.assertNotIn("5", c["graph"])
+        self.assertEqual([(x["name"], x["node"]) for x in c["outputs"]], [("out", "3"), ("out2", "4")])
+
     def comp(self, custom, kind="ai_workflow", **node):
         n = {"id": "AI1", "type": kind, "inputs": ["Read1", "Mask1"], "custom": custom, **node}
         return {"comp": 1, "format": {"width": 60, "height": 40, "fps": 24, "frames": 4}, "output": "Output1",
