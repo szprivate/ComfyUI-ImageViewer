@@ -330,8 +330,8 @@ NODE_TYPES = {
         "r": {"kind": "enum", "def": "B", "choices": COPY_CHOICES}, "g": {"kind": "enum", "def": "B", "choices": COPY_CHOICES},
         "b": {"kind": "enum", "def": "B", "choices": COPY_CHOICES}, "a": {"kind": "enum", "def": "A.a", "choices": COPY_CHOICES},
     }},
-    "premult": {"inputs": ["src"], "params": {}},
-    "unpremult": {"inputs": ["src"], "params": {}},
+    "premult": {"inputs": ["src"], "params": {"by": {"kind": "chan", "def": "a"}}},
+    "unpremult": {"inputs": ["src"], "params": {"by": {"kind": "chan", "def": "a"}}},
     "retime": {"inputs": ["src"], "params": {
         "speed": {"kind": "num", "def": 1},
         "start": {"kind": "int", "def": 0},
@@ -1398,16 +1398,18 @@ def copy_image(B, A, pick):
     return out
 
 
-def premult_image(img):
+def premult_image(img, plane=None):
     d = img.astype(np.float64)
     a = d[..., 3:4]
-    return np.concatenate([d[..., :3] * a, a], axis=2).astype(np.float32)
+    k = a if plane is None else plane.astype(np.float64)[..., None]
+    return np.concatenate([d[..., :3] * k, a], axis=2).astype(np.float32)
 
 
-def unpremult_image(img):
+def unpremult_image(img, plane=None):
     d = img.astype(np.float64)
     a = d[..., 3:4]
-    rgb = np.where(a > 0, d[..., :3] / np.where(a > 0, a, 1), d[..., :3])
+    k = a if plane is None else plane.astype(np.float64)[..., None]
+    rgb = np.where(k > 0, d[..., :3] / np.where(k > 0, k, 1), d[..., :3])
     return np.concatenate([rgb, a], axis=2).astype(np.float32)
 
 
@@ -3285,10 +3287,15 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             pick = [n.get(k) or NODE_TYPES["copy"]["params"][k]["def"] for k in "rgba"]
             Bi = run(ins[0], f, d1)
             return copy_image(Bi, conform(run(ins[1], f, d1), Bi.shape[1], Bi.shape[0]), pick)
-        if t == "premult":
-            return premult_image(run(ins[0], f, d1))
-        if t == "unpremult":
-            return unpremult_image(run(ins[0], f, d1))
+        if t in ("premult", "unpremult"):
+            s = run(ins[0], f, d1)
+            by = n.get("by") or "a"
+            plane = None
+            if by != "a":
+                plane = channel_of(s, ex_of(ins[0], f), by)
+                if plane is None:
+                    plane = np.zeros(s.shape[:2], np.float32)
+            return premult_image(s, plane) if t == "premult" else unpremult_image(s, plane)
         if t == "retime":
             tf = retime_frame(n, f)
             s0 = ins[0]

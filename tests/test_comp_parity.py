@@ -106,6 +106,12 @@ def mask_cases(sources):
                              N("grade", 1, ["lumakeyer1", None], gain=2, mask_in="m.a"), out("grade1")])}, sources))
     c.append(({"comp": comp([read(1), read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
                              N("glow", 1, ["Read1", "lumakeyer1"], mask_channel="m.a", mix=0.8), out("glow1")])}, sources))
+    # Premult / Unpremult by another channel: a matte kept in a layer of its own.
+    c.append(({"comp": comp([read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
+                             N("premult", 1, ["lumakeyer1"], by="m.a"), out("premult1")])}, sources))
+    c.append(({"comp": comp([read(2), N("lumakeyer", 1, ["Read2"], write="m.a"),
+                             N("premult", 1, ["lumakeyer1"], by="m.a"), N("unpremult", 1, ["premult1"], by="m.a"),
+                             out("unpremult1")])}, sources))
     # A picture with no alpha of its own (a workflow's grey IMAGE) into an alpha: its luminance; or a channel picked.
     opaque = N("shuffle", 1, ["Read2", None, None], route={"r": "B:r", "g": "B:g", "b": "B:b", "a": "1"})
     c.append(({"comp": comp([read(1), read(2), opaque, N("grade", 1, ["shuffle1", None], gain=1.5, write="a"),
