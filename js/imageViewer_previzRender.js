@@ -92,17 +92,22 @@ export const PrevizRenderMixin = {
 
     // ── The dialog ───────────────────────────────────────────────────────────
 
-    /** Open the render dialog — or close it, when it is already open. */
+    /**
+     * Render… opens the Render panel (Sebastian 2026-11-24: the dialog was merged into it,
+     * imageViewer_previzRenderPanel.js) with its settings unfolded.
+     */
     previzRenderDialog() {
         if (!this.isPrevizTab()) return;
-        if (this._renderDlg && this._renderDlg.root.isConnected) {
-            if (!this._previzRendering) this._renderDlgClose();
-            return;
-        }
-        // Over the whole viewer, which is positioned and always an ancestor
-        // of wherever the panels are docked.
-        const host = this.container;
-        if (!host) return;
+        if (this.previzRenderPanelOpen) this.previzRenderPanelOpen({ settings: true });
+    },
+
+    /**
+     * The render settings and the shot's Render button, built into `host` (the Render panel's
+     * settings fold). The settings are the scene's (scene3d's `render`): every Render panel shows
+     * the same ones. `onChange(settings)` is told after each change; `still` is what the panel's own
+     * Render button reads. Answers { root, read, sync, refresh }.
+     */
+    _renderFormBuild(host, { onChange = null } = {}) {
         const doc = host.ownerDocument;
         const scene = this.previzScene();
         const st = S.renderSettings(scene);
@@ -141,14 +146,7 @@ export const PrevizRenderMixin = {
         };
         const section = (title) => el("div", "rd-section", title);
 
-        const shade = el("div", "rd-shade");
-        const box = el("div", "rd-box");
-        box.setAttribute("role", "dialog");
-        box.setAttribute("aria-label", "Render the shot");
-        const head = el("div", "rd-head");
-        const close = el("button", "rd-x", "✕");
-        close.title = "Close (Esc)";
-        head.append(el("span", "rd-title", "Render Shot"), close);
+        const box = el("div", "rd-form");
 
         // Output
         const name = el("input", "rd-in rd-text");
@@ -213,10 +211,10 @@ export const PrevizRenderMixin = {
         const bar = el("div", "rd-bar");
         progress.append(bar);
         const message = el("div", "rd-message");
-        const cancel = el("button", "rd-btn", "Cancel");
-        const go = el("button", "rd-btn rd-go", "Render");
+        const go = el("button", "rd-btn rd-go", "Render shot");
+        go.title = "Render the frame range through the camera and write it out (Render in the panel's bar shows one frame here)";
         const foot = el("div", "rd-foot");
-        foot.append(cancel, go);
+        foot.append(go);
 
         const fpsRow = row("Frame rate", fps, el("span", "rd-sub", "fps"));
         const ptRow = row("", ptWrap);
@@ -224,20 +222,13 @@ export const PrevizRenderMixin = {
         const aaRow = row("Anti-aliasing", aa);
         const useCamRow = row("Resolution", useCam.wrap);
         const qualityRow = row("", codecWrap, qualityWrap);
+        // The camera and the look first: they are what the panel's own Render shows too.
         box.append(
-            head,
-            section("Output"),
-            row("Name", name, where),
-            row("Format", format),
-            qualityRow,
             section("Camera"),
             row("Camera", camera),
             useCamRow,
             row("", sizeWrap),
             row("Scale", scale, outSize),
-            section("Frames"),
-            row("Range", rangeWrap),
-            fpsRow,
             section("Look"),
             row("Renderer", renderer),
             ptRow,
@@ -245,12 +236,16 @@ export const PrevizRenderMixin = {
             row("Background", bgWrap),
             aaRow,
             row("Include", includeWrap),
-            section("After"),
+            section("Shot"),
+            row("Name", name, where),
+            row("Format", format),
+            qualityRow,
+            row("Range", rangeWrap),
+            fpsRow,
             row("", addNode.wrap),
             summary, progress, message, foot,
         );
-        shade.append(box);
-        host.append(shade);
+        host.append(box);
 
         let whereAsked = 0;
         const read = () => ({
@@ -300,7 +295,7 @@ export const PrevizRenderMixin = {
                 if (asked !== whereAsked) return;
                 const t = await exportTarget(isVideo ? "video" : "frame", s.name, isVideo ? s.format : "png",
                                              canvasContext(), null, !isVideo);
-                if (asked === whereAsked && shade.isConnected) {
+                if (asked === whereAsked && box.isConnected) {
                     where.textContent = t ? `→ output/${t.relative}` : "";
                     where.title = "The next version: an earlier render is never written over.";
                 }
@@ -315,36 +310,34 @@ export const PrevizRenderMixin = {
                 + (isVideo ? ` · ${secs.toFixed(secs < 10 ? 2 : 1)} s at ${s.fps} fps` : "")
                 + (s.renderer === "pathtraced" ? ` · path traced, ${s.samples} samples` : (s.aa > 1 ? ` · ${s.aa}× AA` : ""));
         };
+        // Every change is kept on the scene at once (no undo step), so the panel's Render, the next
+        // panel and the next session start from it.
+        const keep = () => {
+            const s = read();
+            this._renderKeep({ ...s, end: s.end >= last ? null : s.end,
+                               fps: Math.abs(s.fps - (scene.fps || 24)) < 1e-6 ? null : s.fps });
+            if (onChange) { try { onChange(s); } catch (e) { console.warn("[ImageViewer] render settings", e); } }
+        };
         for (const n of [name, format, quality, codec, camera, width, height, scale, start, end, fps,
                          shading, background, color, aa, useCam.box, grid.box, helpers.box, addNode.box,
                          renderer, samples, bounces]) {
             n.addEventListener("input", sync);
-            n.addEventListener("change", sync);
+            n.addEventListener("change", () => { sync(); keep(); });
         }
         preset.onchange = () => {
             const [w, h] = preset.value.split("x").map(Number);
             if (w && h) { width.value = String(w); height.value = String(h); }
             preset.value = "";
-            sync();
+            sync(); keep();
         };
-        whole.onclick = () => { start.value = "0"; end.value = String(last); sync(); };
+        whole.onclick = () => { start.value = "0"; end.value = String(last); sync(); keep(); };
         here.onclick = () => {
             const f = Math.min(last, Math.max(0, Math.round(this.currentFrame || 0)));
             start.value = end.value = String(f);
-            sync();
+            sync(); keep();
         };
         // Nothing typed here is a hotkey — neither the viewer's nor ComfyUI's.
-        box.addEventListener("keydown", (e) => {
-            e.stopPropagation();
-            if (e.key === "Escape") { e.preventDefault(); if (!this._previzRendering) this._renderDlgClose(); }
-        });
-        shade.addEventListener("pointerdown", (e) => {
-            if (e.target === shade && !this._previzRendering) this._renderDlgClose();
-        });
-        close.onclick = cancel.onclick = () => {
-            if (this._previzRendering) { this._previzRenderStop = true; return; }
-            this._renderDlgClose();
-        };
+        box.addEventListener("keydown", (e) => { e.stopPropagation(); });
         go.onclick = async () => {
             if (this._previzRendering) { this._previzRenderStop = true; return; }
             const s = read();
@@ -354,7 +347,6 @@ export const PrevizRenderMixin = {
             const fields = [...box.querySelectorAll("input, select"), whole, here];
             fields.forEach((n) => { n.disabled = true; });
             go.textContent = "Stop";
-            cancel.textContent = "Stop";
             message.textContent = "";
             message.classList.remove("error");
             box.classList.add("rendering");
@@ -368,24 +360,28 @@ export const PrevizRenderMixin = {
                 },
             });
             box.classList.remove("rendering");
-            go.textContent = "Render";
-            cancel.textContent = "Close";
+            go.textContent = "Render shot";
             fields.forEach((n) => { n.disabled = false; });
             sync();
-            if (result && result.ok && !result.stopped) { this._renderDlgClose(); return; }
+            bar.style.width = "0";
             message.textContent = result ? result.message : "Nothing was rendered.";
             message.classList.toggle("error", !!(result && result.error));
         };
 
-        this._renderDlg = { root: shade, box, go };
         sync();
-        (doc.defaultView || window).requestAnimationFrame(() => go.focus());
-    },
-
-    _renderDlgClose() {
-        const d = this._renderDlg;
-        this._renderDlg = null;
-        if (d && d.root) d.root.remove();
+        // The camera list again (a camera added or renamed since), keeping what is chosen.
+        const refresh = () => {
+            const now = S.cameras(scene);
+            const want = [...now.map((c) => [c.id, c.name]), ["", "Free view (perspective)"]];
+            const have = [...camera.options].map((o) => [o.value, o.textContent]);
+            if (JSON.stringify(want) === JSON.stringify(have)) return;
+            const v = camera.value;
+            camera.textContent = "";
+            for (const [cv, label] of want) camera.append(Object.assign(el("option"), { value: String(cv), textContent: label }));
+            camera.value = want.some(([cv]) => cv === v) ? v : this._renderCameraId(S.renderSettings(scene), scene);
+            sync();
+        };
+        return { root: box, read, sync, refresh, scene };
     },
 
     // ── The render ───────────────────────────────────────────────────────────

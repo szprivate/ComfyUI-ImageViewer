@@ -1625,6 +1625,9 @@ export function parseScene(raw) {
         activeCamera: typeof data.activeCamera === "string" ? data.activeCamera : null,
     });
     if (data.render && typeof data.render === "object") scene.render = renderSettings(data);
+    // Each Render panel's AI workflow (imageViewer_previzRenderPanel.js): {panel id: {custom, values, last}}.
+    if (data.renderAi && typeof data.renderAi === "object" && !Array.isArray(data.renderAi))
+        scene.renderAi = JSON.parse(JSON.stringify(data.renderAi));
     // A world: where walking starts, and which world (and version) this is.
     if (data.walk && typeof data.walk === "object") scene.walk = walkSettings(data);
     const world = worldInfo(data);

@@ -3766,6 +3766,12 @@ try:
                                       resolve=lambda p: _resolve_raw_path(str(p))[0] if p else None)
         except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
             print(f"[ImageViewer] Matchmove routes not registered: {e}")
+        # The 3D space's Render panel: a workflow of the user's own run on the render's passes (render3d_ai.py).
+        try:
+            from . import render3d_ai
+            render3d_ai.register(_safe_add, web=web, path_access=path_access, folder_paths=folder_paths)
+        except Exception as e:  # noqa: BLE001 - the rest of the viewer works without it
+            print(f"[ImageViewer] Render panel routes not registered: {e}")
         # The Farm space: rented GPU machines rendering workflows, relayed to agentY's /agentY/pool (farm_routes.py).
         try:
             from . import farm_routes
