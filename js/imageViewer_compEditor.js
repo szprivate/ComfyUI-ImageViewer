@@ -380,13 +380,18 @@ export function createCompEditor(host, opts = {}) {
     const luts = new Map(), lutAsk = new Map();
     const LUT_RETRY_MS = 15000;
     const lutOf = (spec) => { const e = luts.get(C.OC.ocioKey(spec)); return (e && e.lut) || null; };
-    // st.display: "" the plain sRGB curve, or "\u0003<colourspace>": the picture's values read as that colourspace
+    // st.display: "" the working space (plain sRGB without OCIO), or "\u0003<colourspace>": the picture's values read as that colourspace
     // and shown on the plain sRGB encoding (st.ocio.srgb = comp_ocio.srgb_out: never a view that tone-maps, so
     // sRGB -> ACEScg in a node and ACEScg here gives the picture back). Anything else (an older save naming a
     // display / view), or a server that does not say what its sRGB is, is the plain curve.
     const displaySpec = () => {
-        if (!st.display || st.display[0] !== "\u0003") return null;
         const info = st.ocio && !st.ocio.then ? st.ocio : null;
+        // "": the working space shown on sRGB. A Read of an sRGB file brings it INTO the working space (comp_io
+        // srgb_into_working), so in an ACES config that is ACEScg -> linear Rec.709 (a matrix), then the curve.
+        if (!st.display || st.display[0] !== "\u0003") {
+            if (!info || !info.srgb_linear || !info.working || info.working === info.srgb_linear) return null;
+            return { src: info.working, dst: info.srgb_linear };
+        }
         if (!info || !info.srgb) return null;
         // Into linear Rec.709 when the config has it (an exact matrix for a linear input), the curve put on
         // by viewEncode (displayCurve); else straight into the encoded values.
@@ -814,7 +819,8 @@ export function createCompEditor(host, opts = {}) {
      *  (the working space first, then the ACES ones) - always shown on sRGB. */
     function fillDisplay(sel) {
         const info = st.ocio;
-        sel.append(new Option("sRGB curve (plain)", ""));
+        const plain = !info.working || !info.srgb_linear || info.working === info.srgb_linear;
+        sel.append(new Option(plain ? "sRGB curve (plain)" : `Working space (${info.working})`, ""));
         const names = (info.colorspaces || []).map((c) => c.name);
         if (names.length) {
             const g = el(doc, "optgroup");
@@ -829,7 +835,7 @@ export function createCompEditor(host, opts = {}) {
         sel.value = known ? st.display : "";
         const shown = sel.selectedOptions[0] ? sel.selectedOptions[0].textContent : "";
         const out = info.srgb ? (info.srgb.display ? `${info.srgb.display} · ${info.srgb.view}` : info.srgb.dst) : "sRGB";
-        sel.title = `What the picture's values are${shown ? ` (now: ${shown})` : ""}: the plain sRGB curve, or a colourspace of the OCIO config, `
+        sel.title = `What the picture's values are${shown ? ` (now: ${shown})` : ""}: the working space, or a colourspace of the OCIO config, `
             + `shown on ${out}. Config: ${info.source}${info.path ? ` (${info.path})` : ""}; working space ${info.working}`;
     }
     let lastDirty = null;

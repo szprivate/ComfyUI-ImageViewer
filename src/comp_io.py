@@ -569,7 +569,8 @@ class Sources:
                 from . import comp_ocio
                 raw = u8.astype(np.float32) / 255
                 return M.from_float(comp_ocio.from_space(raw[..., :3], cs), raw[..., 3] if raw.shape[-1] > 3 else None, linear=True)
-            return M.decode8(u8, linear=cs == "linear")
+            img = M.decode8(u8, linear=cs == "linear")
+            return img if cs == "linear" else _srgb_in(img)
         file = frame_path(path, n) if kind == "sequence" else path
         if kind == "sequence" and not os.path.isfile(file):
             rule = node.get("missing") or "black"
@@ -587,6 +588,8 @@ class Sources:
         u8 = None if ocs else _read_u8(file)
         if u8 is not None:
             img = from_u8(u8, linear=linear)
+            if not linear:
+                img = _srgb_in(img)
             if kind == "still":
                 self.stills[key] = img
             return img
@@ -596,6 +599,8 @@ class Sources:
             img = M.from_float(comp_ocio.from_space(rgb, cs), alpha, linear=True)
         else:
             img = M.from_float(rgb, alpha, linear=linear)
+            if not linear:
+                img = _srgb_in(img)
         if kind == "still":
             self.stills[key] = img
         return img
@@ -630,6 +635,23 @@ class Sources:
         for _, src in self.precomps.values():
             src.close()
         self.precomps.clear()
+
+
+def _srgb_in(img):
+    """An sRGB file's decoded (linear Rec.709) picture into the working space; as it is without OCIO."""
+    try:
+        from . import comp_ocio
+        return comp_ocio.srgb_into_working(img)
+    except Exception:  # noqa: BLE001 - no OCIO: the working space is linear Rec.709
+        return img
+
+
+def _to_srgb_linear(rgb):
+    try:
+        from . import comp_ocio
+        return comp_ocio.working_to_srgb_linear(rgb)
+    except Exception:  # noqa: BLE001
+        return rgb
 
 
 def _ocio_ok(cs):
@@ -796,7 +818,7 @@ def is_float(ext, options=None):
 def _encode(rgb, enc):
     """Straight linear colours to display values 0..1: plain sRGB, or an OCIO display (``display_encoder``)."""
     if enc is None:
-        return np.clip(M.linear_to_srgb(np.clip(rgb, 0, None)), 0, 1)
+        return np.clip(M.linear_to_srgb(np.clip(_to_srgb_linear(rgb), 0, None)), 0, 1)
     return np.clip(enc(rgb), 0, 1)
 
 

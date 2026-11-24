@@ -1710,7 +1710,7 @@ class CompBrowserTests(unittest.TestCase):
         pg.evaluate(f"() => {{ const e = {self.ED}; e.comp().nodes = e.comp().nodes.filter((n) => n.type !== 'ocio_colorspace'); const c = e.comp().nodes.find((n) => n.id === 'Constant1'); c.color = [0.18, 0.18, 0.18, 1]; e.comp().nodes.find((n) => n.type === 'output').inputs = ['Constant1']; e.refresh(); }}")
         pg.wait_for_timeout(500)
         plain = self.pixel(pg, 0.5, 0.5)
-        views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB curve (plain)').options).map((o) => o.value)")
+        views = pg.evaluate("() => Array.from(Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.classList.contains('cp-display')).options).map((o) => o.value)")
         # Read as the working space (ACEScg) and shown on plain sRGB it is the plain picture: no tone mapping
         # (Sebastian 2026-11-24: sRGB -> ACEScg in a node, ACEScg in this menu, did not look as it started).
         cg = next(v for v in views if v == "\u0003ACEScg")
@@ -1721,7 +1721,7 @@ class CompBrowserTests(unittest.TestCase):
         # The bake is slow the first time (an ACES config reads its LUT files): redraws asked for meanwhile wait
         # for the same answer - once they drew the plain picture and the menu seemed to do nothing.
         pg.evaluate("() => { const was = __panel._cpOcioLut.bind(__panel); __panel._cpOcioLut = async (spec) => { await new Promise((r) => setTimeout(r, 700)); return was(spec); }; }")
-        pg.evaluate("(v) => { const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.options[0].text === 'sRGB curve (plain)'); s.value = v; s.dispatchEvent(new Event('change')); }", pick)
+        pg.evaluate("(v) => { const s = Array.from(__panel.container.querySelectorAll('select.mg-btn')).find((s) => s.classList.contains('cp-display')); s.value = v; s.dispatchEvent(new Event('change')); }", pick)
         for _ in range(4):
             pg.wait_for_timeout(120)
             pg.evaluate(f"() => {self.ED}.refresh()")

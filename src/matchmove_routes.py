@@ -247,7 +247,7 @@ def register(add, *, web, path_access, folder_paths=None, resolve=None, export_r
         img = p.picture(n)
         if img is None:
             return None
-        rgb = np.clip(M.linear_to_srgb(np.clip(img[..., :3], 0, None)), 0, 1)
+        rgb = np.clip(M.linear_to_srgb(np.clip(comp_io._to_srgb_linear(img[..., :3]), 0, None)), 0, 1)
         h, w = rgb.shape[:2]
         if lens and (lens.get("k1") or lens.get("k2")):
             from . import comp_warp as WP

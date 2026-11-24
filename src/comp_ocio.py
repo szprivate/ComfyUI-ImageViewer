@@ -25,11 +25,15 @@ _procs = {}
 _luts = {}
 
 
+_bridges = {}
+
+
 def reset():
     """Forget the processors and LUTs (the config changed: color_io.reset)."""
     with _lock:
         _procs.clear()
         _luts.clear()
+        _bridges.clear()
 
 
 def _cfg():
@@ -270,3 +274,49 @@ def bake(spec, size=LUT_SIZE):
         while len(_luts) > 24:
             _luts.pop(next(iter(_luts)))
     return got
+
+
+def _bridge(to_working):
+    """The matrix (3 x 3 + offset, float64) between the config's linear Rec.709 and the working space, or
+    None when they are one space, the config has no linear Rec.709, or there is no OCIO. Kept per config."""
+    if not available():
+        return None
+    key = (color_io.config_tag(), to_working)
+    with _lock:
+        if key in _bridges:
+            return _bridges[key]
+    lin, work = srgb_linear(), working()
+    m = None
+    if lin and work and lin != work:
+        spec = {"src": lin, "dst": work} if to_working else {"src": work, "dst": lin}
+        got = matrix_of(spec)
+        if got is not None:
+            m = np.asarray(got, np.float64)
+    with _lock:
+        _bridges[key] = m
+    return m
+
+
+def _through(rgb, m):
+    rgb = np.asarray(rgb, np.float32)
+    out = rgb.astype(np.float64) @ m[:9].reshape(3, 3).T + m[9:12]
+    return out.astype(np.float32)
+
+
+def srgb_into_working(img):
+    """A picture whose rgb is linear Rec.709 (what the sRGB curve decodes an 8-bit file to) put into the working
+    space - ACEScg in an ACES config -, premultiplied rgb through the matrix, alpha kept; the same array when the
+    two are one space. A Read of an sRGB file on "auto" / "srgb" goes through it, so the comp's values ARE the
+    working space, as an OCIO node and the viewer's colourspace menu take them (Sebastian 2026-11-24)."""
+    m = _bridge(True)
+    if m is None:
+        return img
+    out = np.array(img, np.float32, copy=True)
+    out[..., :3] = _through(out[..., :3], m)
+    return out
+
+
+def working_to_srgb_linear(rgb):
+    """Straight working-space colours as linear Rec.709, for the plain sRGB curve after (an 8-bit render)."""
+    m = _bridge(False)
+    return np.asarray(rgb, np.float32) if m is None else _through(rgb, m)

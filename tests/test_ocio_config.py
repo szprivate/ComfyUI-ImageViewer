@@ -159,6 +159,32 @@ class OcioConfig(unittest.TestCase):
         self.assertEqual(asyncio.run(go()), 403)
         self.assertEqual(self.color_io.chosen_config(), "")
 
+    def test_a_read_of_an_srgb_file_lands_in_the_working_space_and_comes_back_out(self):
+        # Sebastian 2026-11-24: on "auto" a Read gave linear Rec.709 while the comp called its values ACEScg,
+        # so the colour menu set to ACEScg showed a picture that had not started there.
+        import numpy as np
+        from PIL import Image
+        self.color_io.set_config("")
+        comp_io = importlib.import_module(self.pkg + ".comp_io")
+        src = (np.random.RandomState(3).rand(8, 8, 3) * 255).round().astype(np.uint8)
+        png = os.path.join(self.tmp, "plate.png")
+        Image.fromarray(src).save(png)
+        node = {"id": "Read1", "type": "read", "file": png, "colorspace": "auto"}
+        img = comp_io.Sources(None)(node, 0)
+        lin = img[..., :3]
+        expect = self.comp_ocio.apply_rgb(src.astype(np.float32) / 255,
+                                          {"src": "sRGB Encoded Rec.709 (sRGB)", "dst": "ACEScg"})
+        self.assertLess(float(np.abs(lin - expect).max()), 2e-3)
+        # Out again as an 8-bit picture: the file's own numbers.
+        out = comp_io.still_pixels(img, "png")
+        out = np.asarray(out)[..., :3].astype(np.float64)
+        if out.max() <= 1.0:
+            out = out * 255
+        self.assertLessEqual(float(np.abs(np.round(out) - src).max()), 1.0)
+        # "linear" leaves the numbers alone.
+        img = comp_io.Sources(None)(dict(node, colorspace="linear"), 0)
+        self.assertLess(float(np.abs(img[..., :3] - src / 255).max()), 1e-3)
+
 
 if __name__ == "__main__":
     unittest.main()
