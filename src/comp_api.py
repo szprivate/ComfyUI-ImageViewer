@@ -36,7 +36,7 @@ LABELS = {"read": "Read", "constant": "Constant", "roto": "Roto", "paint": "Pain
           "removechannels": "Remove", "channelmerge": "ChannelMerge", "channelmath": "ChannelMath", "premult": "Premult",
           "unpremult": "Unpremult", "retime": "Retime", "vectors": "Vectors", "metadata": "Metadata", "write": "Write",
           "camera3d": "Camera", "card3d": "Card", "geo3d": "Shape", "project3d": "Project", "scene3d": "Scene", "scenefile3d": "SceneFile", "light3d": "Light",
-          "pointcloud": "PointCloud", "render3d": "Render3D", "deepread": "DeepRead", "deepfromimage": "DeepFromImage",
+          "pointcloud": "PointCloud", "render3d": "Render3D", "relight": "Relight", "deepread": "DeepRead", "deepfromimage": "DeepFromImage",
           "deepmerge": "DeepMerge", "deepholdout": "DeepHoldout", "deepcrop": "DeepCrop", "deepflatten": "DeepFlatten",
           "oneview": "OneView", "joinviews": "JoinViews", "anaglyph": "Anaglyph", "sidebyside": "SideBySide",
           "output": "Output", "dot": "Dot", "group": "Group", "group_input": "Input", "group_output": "GroupOutput",
@@ -47,7 +47,7 @@ NODE_GAP = 60
 
 
 # The AI nodes (comp_ai.AI_KINDS): their pictures come from a ComfyUI run, kept as the node's results.
-AI_TYPES = ("ai_matte", "ai_depth", "ai_inpaint", "ai_upscale", "ai_workflow")
+AI_TYPES = ("ai_matte", "ai_depth", "ai_normals", "ai_inpaint", "ai_upscale", "ai_workflow")
 
 
 def _shuffle_legacy(n, params):

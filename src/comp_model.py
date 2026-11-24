@@ -38,6 +38,7 @@ def _sibling(name):
 
 
 G3 = _sibling("comp_3d")
+RL = _sibling("comp_relight")
 DP = _sibling("comp_deep")
 try:
     from . import comp_paint as PT
@@ -504,6 +505,26 @@ NODE_TYPES = {
         "rays": {"kind": "int", "def": 64, "min": 1, "max": 4096},
         "bounces": {"kind": "int", "def": 5, "min": 1, "max": 32},
         "depth": {"kind": "enum", "def": "depth.z", "choices": G3.DEPTH_OUT},
+    }},
+    "relight": {"inputs": ["src", "lights", "camera", "normals"], "params": {
+        "mode": {"kind": "enum", "def": "add light", "choices": RL.RELIGHT_MODES},
+        "output": {"kind": "enum", "def": "result", "choices": RL.RELIGHT_OUTPUTS},
+        "gain": {"kind": "num", "def": 1, "min": 0, "key": True},
+        "normals": {"kind": "enum", "def": "from depth", "choices": RL.RELIGHT_NORMALS},
+        "layer": {"kind": "layer", "def": "rgba"},
+        "space": {"kind": "enum", "def": "camera", "choices": RL.RELIGHT_SPACES},
+        "encoding": {"kind": "enum", "def": "0..1", "choices": RL.RELIGHT_ENCODINGS},
+        "green": {"kind": "enum", "def": "up", "choices": RL.RELIGHT_GREEN},
+        "depth_channel": {"kind": "chan", "def": "depth.z"},
+        "depth_mode": {"kind": "enum", "def": "distance", "choices": G3.DEPTH_MODES},
+        "multiply": {"kind": "num", "def": 1, "min": 0.0001, "key": True},
+        "smooth": {"kind": "num", "def": 2, "min": 0, "max": 50, "key": True},
+        "wrap": {"kind": "num", "def": 0, "min": 0, "max": 1, "key": True},
+        "specular": {"kind": "num", "def": 0, "min": 0, "key": True},
+        "shininess": {"kind": "num", "def": 32, "min": 1, "max": 2000, "key": True},
+        "key_direction": {"kind": "vec3", "def": [-0.5, 0.6, 0.6], "key": True},
+        "key_color": {"kind": "color", "def": [1, 1, 1, 1], "key": True},
+        "key_intensity": {"kind": "num", "def": 0.5, "min": 0, "key": True},
     }},
     "deepread": {"inputs": [], "params": {
         "file": {"kind": "file", "def": ""},
@@ -2883,7 +2904,7 @@ _TWO_IN = {"merge", "copy", "channelmerge"}
 # Nodes with a mask input (the last) and a mix on top of what they do (the page's MASKABLE / maskMix).
 MASKABLE = ["grade", "colorcorrect", "ocio_colorspace", "ocio_display", "glow", "lensflare", "blur",
             "shuffle", "copy", "erode", "laplacian", "channelmerge", "channelmath", "premult", "unpremult", "lumakeyer",
-            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus", "zdefocus"] + list(_X.EXTRA_MASKABLE)
+            "chromakeyer", "keyer", "motionblur", "depthblur", "defocus", "zdefocus", "relight"] + list(_X.EXTRA_MASKABLE)
 OWN_MIX = {t for t in MASKABLE if "mix" in NODE_TYPES[t]["params"]}
 for _mt in MASKABLE:
     _md = NODE_TYPES[_mt]
@@ -3064,6 +3085,18 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
                                             max(1, _round_js(param_at(n, "step", f) * scale)))
             return [{"kind": "points", "pos": pos.reshape(-1), "col": col.reshape(-1), "size": param_at(n, "size", f) * scale}]
         return []
+
+    def lights_of(i, f, depth):
+        n = view_node(node_by_id(comp, i), view) if i and depth < 256 else None
+        if not n or n.get("disable"):
+            return []
+        if n["type"] == "scene3d":
+            return [o for s_ in (n.get("inputs") or []) for o in lights_of(s_, f, depth + 1)]
+        if n["type"] != "light3d":
+            return []
+        p = P3(n, f)
+        return [{"kind": "light", "id": n["id"], "type": p["light"], "color": p["color"], "intensity": p["intensity"],
+                 "cone": p["cone"], "world": G3.trs(p["translate"], p["rotate"], [1, 1, 1])}]
 
     def render3d(n, f, d1):
         ins = n["inputs"]
@@ -3281,6 +3314,17 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
             p["size"] = p["size"] * scale
             p["maximum"] = p["maximum"] * scale
             return z_defocus_image(src, z, p)
+        if t == "relight":
+            src = run(ins[0], f, d1)
+            sex = ex_of(ins[0], f)
+            p = P(n, f, NODE_TYPES["relight"]["params"])
+            depth = channel_of(src, sex, p["depth_channel"] or "depth.z")
+            nrm = None
+            if p["normals"] == "normals input" and len(ins) > 3 and ins[3]:
+                nrm = conform(run(ins[3], f, d1), src.shape[1], src.shape[0])
+            cam = camera_of(ins[2] if len(ins) > 2 else None, f, src.shape[1], src.shape[0], False)
+            return RL.relight_image(src, sex, {"cam": cam, "lights": lights_of(ins[1] if len(ins) > 1 else None, f, d1),
+                                               "depth": depth, "normals": nrm, "scale": scale}, p)
         if t in ("camera3d", "card3d", "geo3d", "scene3d", "pointcloud", "scenefile3d", "light3d"):
             if t in ("camera3d", "scenefile3d", "light3d"):
                 return blank(W, H), {}

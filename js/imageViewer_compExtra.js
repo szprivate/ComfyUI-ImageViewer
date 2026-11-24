@@ -39,7 +39,7 @@ const vfxResults = { kind: "ai", def: null, help: "The film the workflow made (R
 const prerender = { kind: "enum", def: "on", choices: ["on", "off"],
     help: "on: what comes into the node is rendered to a film first and that goes through the workflow. off: the film of the Read coming in is used as it is (faster; only a Read of a film, with nothing between)" };
 
-export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_inpaint: "inpaint", ai_upscale: "upscale", ai_workflow: "workflow" };
+export const AI_KINDS = { ai_matte: "matte", ai_depth: "depth", ai_normals: "normals", ai_inpaint: "inpaint", ai_upscale: "upscale", ai_workflow: "workflow" };
 /** The VFX nodes: the History's Convert Footage workflows (LTX-2.5, src/clip_vfx.py) on the comp, over its
  *  whole frame range at once (comp_vfx on the server). Their `results` is ONE film or EXR sequence:
  *  {file, offset, first, last, width, height, colorspace, key, prerender}; frames first..last show it, the
@@ -48,7 +48,7 @@ export const VFX_KINDS = { vfx_alpha: "alpha", vfx_hdr: "hdr", vfx_reframe: "ref
 /** The ones whose picture takes the result's size (the others keep the size that comes in). */
 const VFX_SIZED = new Set(["reframe", "upscale"]);
 /** The data pictures (read as numbers, not as sRGB colour). */
-const AI_DATA = new Set(["matte", "depth"]);
+const AI_DATA = new Set(["matte", "depth", "normals"]);
 
 export const EXTRA_TYPES = {
     // ── keying and matte finishing ──
@@ -190,6 +190,10 @@ export const EXTRA_TYPES = {
     } },
     ai_depth: { label: "AI Depth", cat: "AI", inputs: ["src"], params: {
         invert: { kind: "enum", def: "off", choices: ["off", "on"], help: "off: near is white" },
+        results,
+    } },
+    // A normal map of the picture (camera space: x right, y up, z towards the camera, as 0..1 colours), for Relight.
+    ai_normals: { label: "AI Normals", cat: "AI", inputs: ["src"], params: {
         results,
     } },
     ai_inpaint: { label: "AI Inpaint", cat: "AI", inputs: ["src", "mask"], params: {
@@ -489,7 +493,8 @@ function aiMake(n, f, p, api) {
             if (kind === "depth") { if (p.invert === "on") m = 1 - m; o[i] = m; o[i + 1] = m; o[i + 2] = m; o[i + 3] = 1; continue; }
             if (p.output === "matte") { o[i] = m; o[i + 1] = m; o[i + 2] = m; o[i + 3] = 1; }
             else { o[i] = S[i] * m; o[i + 1] = S[i + 1] * m; o[i + 2] = S[i + 2] * m; o[i + 3] = S[i + 3] * m; }
-        } else if (kind === "upscale") { o[i] = R[i]; o[i + 1] = R[i + 1]; o[i + 2] = R[i + 2]; o[i + 3] = R[i + 3]; }
+        } else if (kind === "normals") { o[i] = R[i]; o[i + 1] = R[i + 1]; o[i + 2] = R[i + 2]; o[i + 3] = 1; }
+        else if (kind === "upscale") { o[i] = R[i]; o[i + 1] = R[i + 1]; o[i + 2] = R[i + 2]; o[i + 3] = R[i + 3]; }
         else {
             const a = S[i + 3], m = mk ? mk[i + 3] : 1;
             for (let c = 0; c < 4; c++) o[i + c] = S[i + c] * (1 - m) + R[i + c] * a * m;

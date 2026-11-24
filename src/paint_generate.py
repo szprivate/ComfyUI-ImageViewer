@@ -43,10 +43,11 @@ BUILTIN_DIR = os.path.join(HERE, "paint_workflows")
 COMP_DIR = os.path.join(HERE, "comp_ai_workflows")   # the Comp's own workflows (comp_ai.py); not listed in Paint
 
 ACTIONS = ("fill", "remove", "extend", "edit", "background", "select_subject", "select_objects", "upscale")
-COMP_ACTIONS = ("depth",)           # what only the Comp's AI nodes ask for (its own workflows, comp_ai_workflows/)
+COMP_ACTIONS = ("depth", "normals")           # what only the Comp's AI nodes ask for (its own workflows, comp_ai_workflows/)
 LABELS = {"fill": "Generative fill", "remove": "Remove object", "extend": "Extend (fill the new border)",
           "edit": "Edit with a prompt", "background": "Remove background", "select_subject": "Select foreground",
-          "select_objects": "Select objects", "upscale": "Upscale with detail", "depth": "Depth map"}
+          "select_objects": "Select objects", "upscale": "Upscale with detail", "depth": "Depth map",
+          "normals": "Normal map"}
 # A model that takes no mask (an edit model) is shown the place to change as a flat grey, and told so;
 # its picture is then laid in through the selection, so nothing outside it changes.
 GREY = 128

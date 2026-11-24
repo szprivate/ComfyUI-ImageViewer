@@ -1,5 +1,5 @@
 {
- "_note": "The Comp's AI nodes' workflows, per node: a short list of what fits the node's task on a film's frames. An id is Paint's built-in of that id (src/paint_workflows) or one of the entries below (files in this folder). The first one this ComfyUI has is the node's default. A depth entry answers its model's distance as a float EXR, or with \"depth\": \"near_white\" a map that is already near = white (scaled per frame by ComfyUI's node).",
+ "_note": "The Comp's AI nodes' workflows, per node: a short list of what fits the node's task on a film's frames. An id is Paint's built-in of that id (src/paint_workflows) or one of the entries below (files in this folder). The first one this ComfyUI has is the node's default. A depth entry answers its model's distance as a float EXR, or with \"depth\": \"near_white\" a map that is already near = white (scaled per frame by ComfyUI's node). A normals entry answers a normal map in the camera's space (x right, y up, z towards the camera; 0..1) as a float EXR.",
  "lists": {
   "matte": {
    "action": "background",
@@ -28,6 +28,15 @@
     "comp_moge2_vitl",
     "comp_lotus_depth",
     "comp_marigold_v2_depth"
+   ]
+  },
+  "normals": {
+   "action": "normals",
+   "workflows": [
+    "comp_moge2_normals",
+    "comp_marigold_v2_normals",
+    "comp_moge3_vitl_normals",
+    "comp_moge3_vitg_normals"
    ]
   },
   "inpaint": {
@@ -367,6 +376,151 @@
     }
    ],
    "depth": "near_white"
+  },
+  {
+   "id": "comp_moge2_normals",
+   "label": "MoGe 2 Large (its own normals, sharp)",
+   "file": "moge2_vitl_normals.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "normals"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge_depth_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_2_vitl_normal_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_2_vitl_normal_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  },
+  {
+   "id": "comp_marigold_v2_normals",
+   "label": "Marigold V2 (finest detail, slow, 22 GB)",
+   "file": "marigold_v2_normals.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "normals"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "image_marigold_v2_surface_normal_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "BasicGuider",
+    "ConditioningLoader",
+    "DisableNoise",
+    "KSamplerSelect",
+    "LoadImage",
+    "LoraLoaderModelOnly",
+    "ManualSigmas",
+    "MarigoldV2PostProcess",
+    "ModelSamplingAuraFlow",
+    "SamplerCustomAdvanced",
+    "SaveImageAdvanced",
+    "UNETLoader",
+    "VAEDecode",
+    "VAEEncode",
+    "VAELoader"
+   ],
+   "models": [
+    {
+     "name": "qwen_image_edit_2509_int8_convrot.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/diffusion_models/qwen_image_edit_2509_int8_convrot.safetensors",
+     "directory": "diffusion_models"
+    },
+    {
+     "name": "marigold_v2_normals.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/loras/marigold_v2_normals.safetensors",
+     "directory": "loras"
+    },
+    {
+     "name": "marigold_v2_normals_conditioning.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/embeddings/marigold_v2_normals_conditioning.safetensors",
+     "directory": "embeddings"
+    },
+    {
+     "name": "marigold_v2_normals_vae.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/marigold-v2-0/resolve/main/vae/marigold_v2_normals_vae.safetensors",
+     "directory": "vae"
+    }
+   ]
+  },
+  {
+   "id": "comp_moge3_vitl_normals",
+   "label": "MoGe 3 Large (normals from its geometry)",
+   "file": "moge3_vitl_normals.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "normals"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge3_geometry_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_3_vitl_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_3_vitl_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
+  },
+  {
+   "id": "comp_moge3_vitg_normals",
+   "label": "MoGe 3 Giant (normals from its geometry, 2.5 GB)",
+   "file": "moge3_vitg_normals.json",
+   "api": false,
+   "format": "api",
+   "actions": [
+    "normals"
+   ],
+   "size": {
+    "mp": null,
+    "mult": 1,
+    "max": 8192
+   },
+   "from": "utility_moge3_geometry_estimation (ComfyUI's own nodes)",
+   "nodes": [
+    "LoadImage",
+    "LoadMoGeModel",
+    "MoGeInference",
+    "MoGeRender",
+    "SaveImageAdvanced"
+   ],
+   "models": [
+    {
+     "name": "moge_3_vitg_fp16.safetensors",
+     "url": "https://huggingface.co/Comfy-Org/MoGe/resolve/main/geometry_estimation/moge_3_vitg_fp16.safetensors",
+     "directory": "geometry_estimation"
+    }
+   ]
   }
  ]
 }
