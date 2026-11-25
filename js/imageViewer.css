@@ -2674,6 +2674,8 @@ audio.src-media { width: 90%; }
 .previz-menu-item.has-sub::after { content: "\25B8"; float: right; margin-left: 14px; color: #888; }
 .previz-submenu { display: none; top: -4px; left: calc(100% + 2px); }
 .previz-submenu.left { left: auto; right: calc(100% + 2px); }
+.previz-menu.scroll { overflow-y: auto; overscroll-behavior: contain; }
+.previz-menu.scroll > * { flex-shrink: 0; }
 .previz-menu-subwrap.open > .previz-submenu { display: flex; }
 .previz-menu-subwrap.open > .previz-menu-item.has-sub { background: #333; color: #fff; }
 .previz-menu.bar-menu .previz-submenu .previz-menu-item { white-space: nowrap; }

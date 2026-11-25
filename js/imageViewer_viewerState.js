@@ -434,6 +434,8 @@ export function describeViewerState(s) {
         } else o.workflow = null;
         o.ai = !!rp.ai;
         if (rp.ipr) o.ipr = true;
+        if (Array.isArray(rp.refs) && rp.refs.length) o.refs = rp.refs.map((x) => String(x || ""));
+        if (rp.ref_slots) o.ref_slots = Number(rp.ref_slots) || 0;
         if (Array.isArray(rp.region)) o.region = rp.region.map(r3);
         if (rp.rendered) o.rendered_frame = rp.rendered.frame;
         if (rp.result && rp.result.file) o.result = { frame: rp.result.frame, filename: String(rp.result.file.filename || "") };

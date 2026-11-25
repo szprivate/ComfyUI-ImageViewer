@@ -38,7 +38,15 @@
     0
    ],
    "n": 1,
-   "seed": 0
+   "seed": 0,
+   "model.images.image_3": [
+    "5",
+    0
+   ],
+   "model.images.image_4": [
+    "6",
+    0
+   ]
   },
   "_meta": {
    "title": "Positive prompt"
@@ -55,6 +63,26 @@
   },
   "_meta": {
    "title": "comp:out"
+  }
+ },
+ "5": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/ref1.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:ref1"
+  }
+ },
+ "6": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/ref2.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:ref2"
   }
  }
 }

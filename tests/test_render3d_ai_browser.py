@@ -236,6 +236,77 @@ AGENT = """async () => {
            field, state: state && state.render_panel, render: { ok: r.ok, rendered: r.rendered } };
 }"""
 
+REFS = """async () => {
+  const P = window.__panel;
+  const st = P._r3St;
+  const h = P.render3dPanel;
+  const sent = [];
+  const before = window.__fetchApi;
+  window.__fetchApi = async (path, opts) => {
+    if (String(path).startsWith('/imageviewer/render3d_ai')) {
+      sent.push(JSON.parse(opts.body));
+      return { ok: true, status: 200, json: async () => ({ run: 'r2', graph: {}, outputs: { '9': 'out' }, main: 'out', uses: {}, seed: 1 }) };
+    }
+    return before(path, opts);
+  };
+  P._paintQueue = async () => 'pid2';
+  P._cpAiWaitNodes = async () => ({ '9': [{ filename: 'ai_ref.png', subfolder: 'render3d/ai/r2', type: 'output' }] });
+  st.region = { on: false, box: null };
+  P._r3Keep(st, { name: 'Two refs', source: 'file', path: 'refs.json', sig: 'y',
+    graph: { '1': { class_type: 'LoadImage', inputs: { image: 'a.png' } }, '2': { class_type: 'LoadImage', inputs: { image: 'r.png' }, _meta: { title: 'comp:ref1' } },
+             '3': { class_type: 'LoadImage', inputs: { image: 'r2.png' }, _meta: { title: 'comp:ref2' } },
+             '9': { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'x' } } },
+    inputs: [{ name: 'src', node: '1', kind: 'picture' }, { name: 'ref1', node: '2', kind: 'picture' }, { name: 'ref2', node: '3', kind: 'picture' }],
+    outputs: [{ name: 'out', node: '9', kind: 'picture' }], params: [] });
+  const emptyHint = h.querySelector('.r3-ref-hint').textContent;
+  const takes = h.querySelector('.r3-takes').textContent;
+  P.previzRenderPanelRefs(st, { add: [{ filename: 'ref_a.png', type: 'output', subfolder: '' }, { filename: 'ref_b.png', type: 'output', subfolder: '' },
+                                      { filename: 'ref_c.png', type: 'output', subfolder: '' }, { filename: 'ref_a.png', type: 'output', subfolder: '' }] });
+  st.draw();
+  const thumbs = h.querySelectorAll('.r3-refs .r3-ref').length;
+  const unused = h.querySelectorAll('.r3-refs .r3-ref.unused').length;
+  const ans = await P.previzRenderAi(st);
+  window.__fetchApi = before;
+  const refs = (sent[0] && sent[0].refs) || [];
+  h.querySelector('.r3-refs .r3-ref .r3-ref-x').click();
+  const afterRemove = (P.previzScene().renderAi.render3d.refs || []).map((r) => r.filename);
+  const info = await P.previzSceneAgent('render_panel_info', {});
+  const cleared = await P.previzSceneAgent('render_panel_set', { refs: [] });
+  return { emptyHint, takes, thumbs, unused, ok: ans && ans.ok, sent: refs.length, png: refs.every((r) => r.startsWith('data:image/png;base64,')),
+           afterRemove, infoRefs: info.refs, slots: info.ref_slots, cleared: cleared.refs, left: h.querySelectorAll('.r3-refs .r3-ref').length };
+}"""
+
+MENU = """async () => {
+  const P = window.__panel;
+  const st = P._r3St;
+  const before = window.__fetchApi;
+  const wf = (id, label) => ({ id, label, missing: [] });
+  const edit = ['nano_banana_pro_edit', 'gpt_image_25_edit', 'flux2_klein_9b_edit'].map((id) => wf(id, id));
+  for (let i = 0; i < 70; i++) edit.push(wf('other_' + i, 'Other edit ' + i));
+  window.__fetchApi = async (path, opts) => {
+    if (String(path).startsWith('/imageviewer/comp_ai_workflows')) return { ok: true, status: 200, json: async () => ({ workflows: [wf('comp_r3_zimage_depth', 'Z'), wf('comp_r3_qwen2511', 'Q'), wf('comp_r3_gpt25', 'G')] }) };
+    if (String(path).startsWith('/imageviewer/paint/workflows')) return { ok: true, status: 200, json: async () => ({ actions: {
+      edit: { workflows: edit }, upscale: { workflows: [wf('seedvr2_7b', 'SeedVR2'), wf('topaz_x', 'Topaz')] } } }) };
+    return before(path, opts);
+  };
+  const btn = P.render3dPanel.querySelector('.r3-render');
+  await P._r3PickMenu(st, btn);
+  window.__fetchApi = before;
+  const menu = P._previzAddMenu;
+  const top = [...menu.querySelectorAll(':scope > .previz-menu-item, :scope > .previz-menu-subwrap > .previz-menu-item')].map((b) => b.textContent);
+  const heads = [...menu.querySelectorAll(':scope > .previz-menu-head')].map((b) => b.textContent);
+  const moreBtn = [...menu.querySelectorAll('.previz-menu-subwrap > .previz-menu-item')].find((b) => b.textContent.startsWith('More workflows'));
+  moreBtn.click();
+  const sub = moreBtn.parentElement.querySelector('.previz-submenu');
+  const host = P._previzMenuHost().getBoundingClientRect(), r = sub.getBoundingClientRect();
+  const html = JSON.stringify([...menu.children].map((c) => c.tagName + '.' + c.className + ':' + (c.firstChild && c.firstChild.textContent || '')));
+  const out = { html, seps: menu.querySelectorAll(':scope > .previz-menu-sep').length, top, heads, more: moreBtn.textContent, subItems: sub.querySelectorAll('.previz-menu-item').length,
+                scroll: sub.classList.contains('scroll'), scrolls: sub.scrollHeight > sub.clientHeight + 10,
+                inside: r.top >= host.top - 1 && r.bottom <= host.bottom + 1 };
+  P._previzCloseAddMenu();
+  return out;
+}"""
+
 
 def _free_port():
     with socket.socket() as s:
@@ -307,6 +378,8 @@ class RenderPanelBrowserTests(unittest.TestCase):
                 pg.screenshot(path=os.path.join(shots, "render-panel-region.png"))
             ipr = pg.evaluate(IPR)
             agent = pg.evaluate(AGENT)
+            refs = pg.evaluate(REFS)
+            menu = pg.evaluate(MENU)
             if shots:
                 pg.evaluate("() => { const P = window.__panel; P._r3St.region.on = false; P._r3St.pass = 'beauty'; P._r3St.draw(); }")
                 pg.wait_for_timeout(300)
@@ -385,6 +458,31 @@ class RenderPanelBrowserTests(unittest.TestCase):
         self.assertTrue(agent["render"]["ok"])
         if agent["state"] is not None:
             self.assertEqual(agent["state"]["prompt"], "a blue car in a red canyon")
+        # Reference pictures: kept on the panel, sent as data URLs for the ref loaders the workflow has.
+        self.assertIn("up to 2 reference pictures", refs["emptyHint"])
+        self.assertIn("ref1", refs["takes"])
+        self.assertEqual(refs["thumbs"], 3, "a picture added twice is kept once")
+        self.assertEqual(refs["unused"], 1, "the third is more than the workflow takes")
+        self.assertTrue(refs["ok"])
+        self.assertEqual(refs["sent"], 2, "only as many as the workflow takes are sent")
+        self.assertTrue(refs["png"])
+        self.assertEqual(refs["afterRemove"], ["ref_b.png", "ref_c.png"])
+        self.assertEqual(refs["infoRefs"], ["ref_b.png", "ref_c.png"])
+        self.assertEqual(refs["slots"], 2)
+        self.assertEqual(refs["cleared"], [])
+        self.assertEqual(refs["left"], 0)
+        # The workflow menu: the main models, the rest in one submenu that scrolls inside the viewer.
+        self.assertEqual(menu["heads"], ["Realistic render", "Edit the picture", "Upscale"])
+        self.assertIn("nano_banana_pro_edit", menu["top"], menu["html"])
+        self.assertNotIn("", menu["top"], "a separator is a line, not an empty row")
+        self.assertEqual(menu["seps"], 2)
+        self.assertIn("SeedVR2", menu["top"])
+        self.assertNotIn("Topaz", menu["top"])
+        self.assertFalse(any(t.startswith("Other edit") for t in menu["top"]), "the long list is not in the menu itself")
+        self.assertEqual(menu["more"], "More workflows (71)")
+        self.assertEqual(menu["subItems"], 71)
+        self.assertTrue(menu["scroll"] and menu["scrolls"], menu)
+        self.assertTrue(menu["inside"], menu)
         self.assertEqual(errors, [])
 
 

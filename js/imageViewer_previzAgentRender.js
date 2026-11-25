@@ -6,9 +6,11 @@
 //
 //   render_panel_info   {panel?}                       the panel: prompt, workflow (+ its settings), AI / IPR /
 //                                                      region, the last render and result; the prepared list
-//   render_panel_set    {panel?, prompt?, workflow?, values?, ai?, ipr?, region?}
+//   render_panel_set    {panel?, prompt?, workflow?, values?, ai?, ipr?, region?, refs?}
 //                       workflow: a prepared id ("comp_r3_zimage_depth" ...), "canvas", or null (off);
-//                       region: [x0, y0, x1, y1] shares of the picture (y down), true / false, or null (whole)
+//                       region: [x0, y0, x1, y1] shares of the picture (y down), true / false, or null (whole);
+//                       refs: reference pictures (file paths, up to 4; [] or null clears them). A workflow's
+//                       loaders named ref / ref2 ... take them (the prepared Qwen 2511 one, GPT 2.5 two)
 //   render_panel_render {panel?, ai?, frame?}           Render as the button does; answers the result's file
 //
 // `panel` is a Render panel's id ("render3d" the first one; render_panel_info lists them). The panel is opened
@@ -44,6 +46,8 @@ export const PrevizAgentRenderMixin = {
                 settings: (c.params || []).filter((p) => p !== pp).map((p) => ({ id: p.id, name: p.name, kind: p.kind,
                     value: k.values && k.values[p.id] !== undefined ? k.values[p.id] : p.def })),
             } : null,
+            refs: (k.refs || []).map((r) => r.path || r.filename),
+            ref_slots: RP.refSlots(c),
             ai: !!(st.aiOn && c), ipr: !!st.ipr,
             region: st.region && st.region.on && st.region.box ? st.region.box : null,
             rendered: st.frame === null ? null : { frame: st.frame, size: st.size || null, preview: !!(st.passes && st.passes.preview) },
@@ -96,6 +100,13 @@ export const PrevizAgentRenderMixin = {
                 if (!p) throw new Error(`the workflow has no setting ${key}; it has ${(c.params || []).map((x) => x.name).join(", ")}`);
                 kk.values[p.id] = val;
             }
+        }
+        if (a.refs !== undefined) {
+            const list = a.refs === null ? [] : Array.isArray(a.refs) ? a.refs : [a.refs];
+            const items = list.map((r) => (typeof r === "string" ? { path: r } : r));
+            if (items.length > RP.MAX_REFS) throw new Error(`at most ${RP.MAX_REFS} reference pictures`);
+            if (items.some((r) => !RP.cleanRef(r))) throw new Error("refs are file paths of pictures (png, jpg, webp)");
+            this.previzRenderPanelRefs(st, { set: items });
         }
         if (a.ai !== undefined) st.aiOn = !!a.ai;
         if (a.region !== undefined) {
