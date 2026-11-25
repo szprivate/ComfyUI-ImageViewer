@@ -344,6 +344,61 @@ class UsdSceneTests(unittest.TestCase):
         with self.uio.shared_stage(path, "/Set/Spoon_1", {"overs": {"": {"visible": False}}}) as edited:
             self.assertNotIn(id(edited), seen)
 
+    def test_a_layout_saved_and_opened_again_still_draws_every_model(self):
+        """Kitchen Set opened, saved as .usda and opened again: each model kept its
+        layout's prim path while pointing at the asset file, and drew nothing
+        ("/Kitchen_set/.../BowlD_1 is not in Bowl.usd")."""
+        folder = os.path.join(self.tmp, "kitchen")
+        os.makedirs(os.path.join(folder, "assets"), exist_ok=True)
+        bowl = os.path.join(folder, "assets", "Bowl.usda")
+        st = Usd.Stage.CreateNew(bowl)
+        root = UsdGeom.Xform.Define(st, "/Bowl")
+        st.SetDefaultPrim(root.GetPrim())
+        m = UsdGeom.Mesh.Define(st, "/Bowl/Geom")
+        m.CreatePointsAttr([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
+        m.CreateFaceVertexCountsAttr([4])
+        m.CreateFaceVertexIndicesAttr([0, 1, 2, 3])
+        st.GetRootLayer().Save()
+        layout = os.path.join(folder, "Kitchen_set.usda")
+        st = Usd.Stage.CreateNew(layout)
+        top = UsdGeom.Xform.Define(st, "/Kitchen_set")
+        st.SetDefaultPrim(top.GetPrim())
+        UsdGeom.Xform.Define(st, "/Kitchen_set/Props_grp")
+        for i in range(3):
+            x = UsdGeom.Xform.Define(st, f"/Kitchen_set/Props_grp/BowlD_{i}")
+            x.AddTranslateOp().Set((float(i) * 2, 0.0, 0.0))
+            x.GetPrim().GetPayloads().AddPayload("./assets/Bowl.usda")
+            x.GetPrim().SetInstanceable(True)
+        st.GetRootLayer().Save()
+
+        scene = self.us.load(layout)
+        models = [it for it in scene["items"] if it.get("kind") == "model"]
+        self.assertEqual(len(models), 3)
+        saved = os.path.join(self.dirs["output"], "scenes", "kitchen_again.usda")
+        self.us.save(scene, saved)
+        for round_trip in range(2):
+            back = self.us.load(saved)
+            models = [it for it in back["items"] if it.get("kind") == "model"]
+            self.assertEqual(len(models), 3)
+            for it in models:
+                src = it["src"]
+                verts, _f, _c = self.uio.stage_to_mesh(src["path"], prim_path=src.get("prim"))
+                self.assertEqual(len(verts), 4, src)
+            # Saved again from the reopened scene, it still opens.
+            self.us.save(back, saved)
+        # A scene saved after such a reopen (the asset as path, the layout's prim
+        # kept) opens too: the prim is dropped when the path IS the asset.
+        for it in back["items"]:
+            if it.get("kind") == "model":
+                it["src"]["path"] = it["src"]["asset"]
+        self.us.save(back, saved)
+        os.remove(layout)               # and with the layout gone, the asset stands in
+        for it in self.us.load(saved)["items"]:
+            if it.get("kind") == "model":
+                self.assertNotIn("prim", it["src"])
+                verts, _f, _c = self.uio.stage_to_mesh(it["src"]["path"])
+                self.assertEqual(len(verts), 4)
+
     def test_an_old_json_scene_still_opens_and_saves_as_usd(self):
         old = {"fps": 24, "length": 10, "items": [
             {"id": "b", "kind": "primitive", "name": "Box", "primitive": {"type": "box"}, "color": "#ff0000",
