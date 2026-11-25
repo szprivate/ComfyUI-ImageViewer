@@ -166,8 +166,31 @@ def _usd_display_path(path, prim=None, frame=0, edits=None):
         if usd_io is not None and usd_io.is_usd(path):
             return usd_io.display_proxy(path, prim, edits) or path
     except Exception as e:
-        print(f"[ImageViewer] could not build a preview of {os.path.basename(path)}: {e}")
+        _preview_failed(path, prim, e)
     return path
+
+
+_PREVIEW_FAILS = {}
+
+
+def _preview_failed(path, prim, error):
+    """Say once per file that its previews fail, not once per model: a layout of
+    hundreds of models of a few files (Kitchen Set) filled the log with a line
+    per model, and the page asks again on every reload."""
+    name = os.path.basename(path)
+    key = os.path.normcase(os.path.abspath(path))
+    seen = _PREVIEW_FAILS.get(key)
+    if seen is None:
+        if len(_PREVIEW_FAILS) > 500:
+            _PREVIEW_FAILS.clear()
+        _PREVIEW_FAILS[key] = {"count": 1}
+        where = f" at {prim}" if prim else ""
+        print(f"[ImageViewer] could not build a preview of {name}{where}: {error} "
+              "(further failures of this file are counted, not printed)")
+        return
+    seen["count"] += 1
+    if seen["count"] in (10, 100, 1000):
+        print(f"[ImageViewer] {seen['count']} previews of {name} could not be built")
 
 
 def _frame_arg(request):

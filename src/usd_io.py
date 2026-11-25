@@ -1105,6 +1105,16 @@ def src_file(src):
     return None
 
 
+def _same_file(a, b):
+    """True / False whether two paths name one file; None when either is missing."""
+    if not a or not b:
+        return None
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
 def _src_exists(src):
     f = src_file(src)
     return bool(f and os.path.isfile(f))
@@ -1173,6 +1183,15 @@ def import_scene(path, load_payloads=True):
                     if not _src_exists(src):
                         item["src"] = {"path": asset, "name": src.get("name") or os.path.basename(asset),
                                        "format": "usd", "usdAsset": asset}
+                elif src.get("asset") and src.get("prim"):
+                    # Taken from someone else's layout (Kitchen Set): drawn as
+                    # layout + prim, and the payload is the asset file under it.
+                    # The prim path is the LAYOUT's, so it must stay with the
+                    # layout - put on the asset file it names nothing there.
+                    src["asset"] = asset
+                    if not (_same_file(src.get("path"), asset) is False and _src_exists(src)):
+                        src["path"] = asset
+                        src.pop("prim", None)
                 else:
                     src["path"] = asset
             scene["items"].append(item)
