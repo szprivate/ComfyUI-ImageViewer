@@ -1227,7 +1227,8 @@ export const PrevizMixin = {
         const fill = (box, list) => {
             for (let e of list) {
                 // A submenu given as a function is made when its menu opens (the Mesh menu's).
-                if (e && typeof e.sub === "function") e = { ...e, sub: e.sub() || [] };
+                // (Only on an entry object: "-".sub is String.prototype.sub, which made every separator an empty row.)
+                if (e && typeof e === "object" && typeof e.sub === "function") e = { ...e, sub: e.sub() || [] };
                 if (e === "-") {
                     box.append(Object.assign(doc.createElement("div"), { className: "previz-menu-sep" }));
                     continue;
@@ -1262,9 +1263,15 @@ export const PrevizMixin = {
                         // Beside the row, on the side with room; pulled up if it would run past the bottom.
                         sub.classList.remove("left");
                         sub.style.top = "";
-                        const h = host.getBoundingClientRect(), r = sub.getBoundingClientRect();
+                        const h = host.getBoundingClientRect();
+                        // A long list (no submenus of its own) scrolls within the viewer's height.
+                        if (!sub.querySelector(":scope > .previz-menu-subwrap")) {
+                            sub.style.maxHeight = "";
+                            if (sub.scrollHeight > h.height - 20) { sub.style.maxHeight = `${Math.max(120, h.height - 20)}px`; sub.classList.add("scroll"); }
+                        }
+                        const r = sub.getBoundingClientRect();
                         if (r.right > h.right - 4) sub.classList.add("left");
-                        if (r.bottom > h.bottom - 12) sub.style.top = `${Math.min(0, h.bottom - 12 - r.bottom)}px`;
+                        if (r.bottom > h.bottom - 12) sub.style.top = `${Math.max(h.top + 4 - wrap.getBoundingClientRect().top, Math.min(0, h.bottom - 12 - r.bottom))}px`;
                     };
                     wrap.addEventListener("mouseenter", open);
                     b.onclick = (ev) => { ev.stopPropagation(); open(); };
@@ -1301,6 +1308,11 @@ export const PrevizMixin = {
         const h = host.getBoundingClientRect();
         menu.style.left = `${x - h.left}px`;
         menu.style.top  = `${y - h.top}px`;
+        // A long list (no submenus, which a scrolling box would clip) scrolls within the viewer's height.
+        if (!menu.querySelector(":scope > .previz-menu-subwrap") && menu.scrollHeight > h.height - 20) {
+            menu.style.maxHeight = `${Math.max(120, h.height - 20)}px`;
+            menu.classList.add("scroll");
+        }
         const m = menu.getBoundingClientRect();
         // (A little short of the edge: the viewer's resize strip lies over its last pixels.)
         if (m.bottom > h.bottom - 12) menu.style.top  = `${Math.max(0, y - h.top - m.height)}px`;

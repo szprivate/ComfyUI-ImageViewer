@@ -99,7 +99,11 @@
     "2",
     0
    ],
-   "prompt": "Turn image 1 into a photorealistic photograph. Keep the camera, the layout and every object's shape and place exactly as in image 1 (image 2 is its depth). Realistic materials, natural light."
+   "prompt": "Turn image 1 into a photorealistic photograph. Keep the camera, the layout and every object's shape and place exactly as in image 1 (image 2 is its depth). Realistic materials, natural light.",
+   "image3": [
+    "18",
+    0
+   ]
   },
   "_meta": {
    "title": "Positive prompt"
@@ -124,7 +128,11 @@
     "2",
     0
    ],
-   "prompt": ""
+   "prompt": "",
+   "image3": [
+    "18",
+    0
+   ]
   },
   "_meta": {
    "title": "Negative prompt"
@@ -214,6 +222,16 @@
   },
   "_meta": {
    "title": "comp:out"
+  }
+ },
+ "18": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/ref1.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:ref1"
   }
  }
 }

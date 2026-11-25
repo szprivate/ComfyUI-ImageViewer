@@ -23,14 +23,52 @@
 // Generate does (_paintQueue, with the sign-in) and waits for its outputs (_cpAiWaitNodes). One `this` with the panel.
 import { api } from "../../scripts/api.js";
 import * as S from "./imageViewer_scene3d.js";
-import { notice, canvasContext } from "./imageViewer_exportUI.js";
+import { notice, canvasContext, openFilePicker } from "./imageViewer_exportUI.js";
 import { asPrompt } from "./imageViewer_compAiWorkflow.js";
-import { floatDialog } from "./imageViewer_atlasDrops.js";
+import { floatDialog, wirePictureDrop } from "./imageViewer_atlasDrops.js";
+import * as A from "./imageViewer_atlasRender.js";
 import { showInstallLog } from "./imageViewer_installLog.js";
 
 export const RENDER_PASSES = [["beauty", "Beauty"], ["depth", "Depth"], ["normals", "Normals"], ["mask", "Mask"]];
 /** The prepared list: Paint's built-ins for these actions (they take one picture and a prompt). */
 const PREPARED_ACTIONS = ["edit", "upscale"];
+/** The main models shown at the top of the menu (Sebastian 2026-11-25: "the workflow list is super long");
+ *  every other prepared workflow is under "More workflows". In this order, where this ComfyUI has them. */
+export const MAIN_PREPARED = [
+    "nano_banana_pro_edit", "nano_banana2_edit", "gpt_image_25_edit", "seedream5_edit",
+    "flux2_klein_9b_edit", "qwen2511_lightning_edit", "flux_kontext_edit",
+    "magnific_precise", "seedvr2_7b", "upscale_model",
+];
+/** Reference pictures a panel keeps (render3d_ai.MAX_REFS), sent at most this long on their longest side. */
+export const MAX_REFS = 4;
+const REF_SIDE = 2048;
+/** What a prepared workflow's prompt calls its pictures, for the hint under the references. */
+const REF_HINTS = {
+    comp_r3_qwen2511: "In the prompt: image 1 is the render, image 2 its depth, image 3 the first reference (one is used).",
+    comp_r3_gpt25: "In the prompt: image 1 is the render, image 2 its depth, images 3 and 4 the references.",
+};
+
+/** The reference loaders a workflow has (render3d_ai.ref_index): how many pictures it can take. */
+export function refSlots(custom) {
+    let n = 0;
+    for (const x of (custom && custom.inputs) || []) {
+        if (x.kind && x.kind !== "picture") continue;
+        const m = String(x.name || "").toLowerCase().replace(/[^a-z0-9_]/g, "").match(/^(.*?)_?(\d*)$/);
+        if (!m || !["ref", "reference", "style", "refimage", "ref_image", "reference_image"].includes(m[1])) continue;
+        const i = m[2] ? Number(m[2]) : 1;
+        if (i >= 1 && i <= MAX_REFS) n = Math.max(n, i);
+    }
+    return n;
+}
+
+/** A kept reference ({path} | {filename, type, subfolder}, name) cleaned; null when it names no file. */
+export function cleanRef(r) {
+    if (!r || typeof r !== "object") return null;
+    const ref = A.pictureRef(r);
+    if (!ref) return null;
+    const name = String(r.name || r.filename || String(r.path || "").split(/[\\/]/).pop() || "picture");
+    return { ...ref, name };
+}
 
 const STYLE = `
 .r3-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
@@ -72,6 +110,17 @@ select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444
     background: #1c1c1c; color: #eee; border: 1px solid #444; border-radius: 4px; padding: 3px 6px; }
 .r3-prompt textarea:disabled { opacity: 0.5; }
 .r3-prompt .r3-label { flex: none; padding-top: 4px; }
+.r3-refs { display: flex; gap: 6px; align-items: center; padding: 2px 6px 4px; flex: none; flex-wrap: wrap; }
+.r3-refs .r3-label { flex: none; }
+.r3-refs.drop-on { outline: 1px dashed #ff6600; outline-offset: -2px; }
+.r3-ref { position: relative; width: 44px; height: 44px; border: 1px solid #444; border-radius: 4px; overflow: hidden; background: #1c1c1c; flex: none; }
+.r3-ref img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.r3-ref .r3-ref-n { position: absolute; left: 2px; bottom: 1px; font-size: 9px; color: #fff; text-shadow: 0 0 2px #000; }
+.r3-ref .r3-ref-x { position: absolute; right: 0; top: 0; width: 15px; height: 15px; padding: 0; border: none; border-radius: 0 0 0 4px;
+    background: rgba(0,0,0,0.65); color: #eee; font-size: 10px; line-height: 15px; cursor: pointer; display: none; }
+.r3-ref:hover .r3-ref-x { display: block; }
+.r3-ref.unused { opacity: 0.4; }
+.r3-refs .r3-hint { flex: 1 1 160px; min-width: 0; }
 .r3-stage .r3-region { position: absolute; border: 1px dashed #ff6600; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); pointer-events: none; display: none; }
 .r3-stage.region-on { cursor: crosshair; }
 .r3-stage.region-on .r3-region.has { display: block; }
@@ -378,10 +427,40 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         });
         prompt.addEventListener("change", persist);
         promptRow.append(el(d, "span", "r3-label", "Prompt"), prompt);
-        root.append(bar, stage, promptRow, scroll);
+        // Reference pictures (a style, a product, a face): loaders named ref / ref2 ... take them.
+        const refsRow = el(d, "div", "r3-refs");
+        const refsList = el(d, "div", "r3-refs-list");
+        refsList.style.display = "contents";
+        const refAdd = el(d, "button", "r3-btn r3-ref-add", "+");
+        refAdd.title = "Add a reference picture: the History selection or a file (or drop one here)";
+        refAdd.onclick = () => {
+            const r = refAdd.getBoundingClientRect();
+            v._previzOpenMenu([
+                { label: "The History selection", run: () => {
+                    const got = (v.selectedHistorySnapshots ? v.selectedHistorySnapshots() : []).map((x) => x.imgObj)
+                        .filter((f) => f && A.isAtlasPicture(f) && A.pictureRef(f));
+                    if (!got.length) { notice("info", "Reference pictures", "Select pictures in the History strip first (Ctrl+click for several)."); return; }
+                    v.previzRenderPanelRefs(st, { add: got });
+                } },
+                { label: "From a file…", run: () => openFilePicker(v.container, {
+                    id: "render3d-refs", title: "Reference pictures", kind: "image", exts: [".png", ".jpg", ".jpeg", ".webp"],
+                    multiple: true, go: "Add", note: `Up to ${MAX_REFS} pictures the workflow takes beside the render.`,
+                    onPick: async (files) => { v.previzRenderPanelRefs(st, { add: files.map((f) => ({ path: f.path, name: f.name })) }); return { ok: true }; },
+                }) },
+                ...((mine().refs || []).length ? ["-", { label: "Remove all", run: () => v.previzRenderPanelRefs(st, { set: [] }) }] : []),
+            ], r.left, r.bottom + 2, refAdd);
+        };
+        const refHint = el(d, "span", "r3-hint r3-ref-hint");
+        refsRow.append(el(d, "span", "r3-label", "Refs"), refsList, refAdd, refHint);
+        wirePictureDrop(refsRow, {
+            onItems: (items) => v.previzRenderPanelRefs(st, { add: items }),
+            onSkipped: (n) => notice("warn", "Reference pictures", `${n} file(s) left out: only pictures (png, jpg, webp).`),
+            onStatus: (text, bad) => { if (bad) notice("error", "Reference pictures", text); },
+        });
+        root.append(bar, stage, promptRow, refsRow, scroll);
         host.append(style, root);
         ui = { root, bar, render, aiBtn, iprBtn, regionBtn, passes, wipe, info, stage, imgA, imgB, line, regionEl, tagL, tagR, empty, busy,
-               aiFold, setBtn, setWin: null, prompt, promptRow, picRect, form: null, formScene: null, aiSig: null };
+               aiFold, setBtn, setWin: null, prompt, promptRow, refsRow, refsList, refAdd, refHint, refSig: null, picRect, form: null, formScene: null, aiSig: null };
         buildForm();
         buildAi();
         draw();
@@ -562,6 +641,34 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         ui.imgB.style.clipPath = st.wipe ? `inset(0 ${(100 - st.wipeX * 100).toFixed(2)}% 0 0)` : "";
     }
 
+    /** The reference strip: a thumbnail per kept picture (× takes it away), and what the workflow does with them. */
+    function drawRefs(c) {
+        const refs = mine().refs || [];
+        const slots = refSlots(c);
+        const sig = JSON.stringify([refs, slots]);
+        if (ui.refSig === sig) return;
+        ui.refSig = sig;
+        const d = doc();
+        ui.refsList.textContent = "";
+        refs.forEach((r, i) => {
+            const t = el(d, "div", "r3-ref" + (c && i >= slots ? " unused" : ""));
+            t.title = r.name + (c && i >= slots ? " (this workflow does not take it)" : "");
+            const img = el(d, "img");
+            img.draggable = false;
+            try { img.src = v.thumbUrl ? v.thumbUrl(r.path ? { path: r.path, external: true } : r) : ""; } catch (_) { /* no picture */ }
+            const x = el(d, "button", "r3-ref-x", "×");
+            x.title = "Remove";
+            x.onclick = (e) => { e.stopPropagation(); v.previzRenderPanelRefs(st, { remove: i }); };
+            t.append(img, el(d, "span", "r3-ref-n", `ref${i + 1}`), x);
+            ui.refsList.append(t);
+        });
+        ui.refAdd.disabled = refs.length >= MAX_REFS;
+        ui.refHint.textContent = !refs.length
+            ? (!c ? "Drop pictures here for a workflow that takes references." : slots ? `This workflow takes ${slots === 1 ? "one reference picture" : `up to ${slots} reference pictures`}: drop them here.` : "")
+            : !c ? "" : !slots ? "This workflow takes no reference pictures (name a loader comp:ref1 in your own)."
+            : (c.source === "prepared" && REF_HINTS[c.path]) || `Used: ${Math.min(refs.length, slots)} of ${refs.length}.`;
+    }
+
     function draw() {
         if (!ui || !ui.root.isConnected) return;
         buildForm();
@@ -596,6 +703,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         ui.prompt.placeholder = !c ? "Describe the scene: what everything is made of, where, the light. Used by the workflow you choose."
             : pp ? `Describe the scene (empty: the workflow's own - ${String(pp.def || "").slice(0, 90)}${String(pp.def || "").length > 90 ? "…" : ""})`
             : "This workflow takes no prompt";
+        drawRefs(c);
         ui.wipe.disabled = !st.ai || !st.passes;
         ui.wipe.classList.toggle("on", st.wipe);
         ui.setBtn.classList.toggle("on", !!(ui.setWin && ui.setWin.shade.isConnected));
@@ -746,6 +854,8 @@ export const PrevizRenderPanelMixin = {
             mask: ["mask", "alpha", "matte", "a", "holdout"],
             beauty: ["beauty", "render", "rgb", "color", "colour", "src", "image", "plate", "rgba"],
         };
+        const ref = (!x || !x.kind || x.kind === "picture") ? refSlots({ inputs: [{ name: n }] }) : 0;
+        if (ref) return `ref${ref}`;
         for (const [p, list] of Object.entries(names)) if (list.includes(n)) return p;
         for (const p of ["depth", "normals", "mask"]) if (names[p].some((a) => a.length > 2 && n.startsWith(a))) return p;
         return x && x.kind === "mask" ? "mask" : "beauty";
@@ -974,7 +1084,7 @@ export const PrevizRenderPanelMixin = {
         ]);
         const entries = [
             { label: "From the canvas", run: () => this._r3Take(st, { how: "canvas" }) },
-            { label: "Saved workflow", sub: saved.length ? saved.slice(0, 60).map((p) => ({ label: p.replace(/\.json$/i, ""), run: () => this._r3Take(st, { how: "saved", path: p }) }))
+            { label: "Saved workflow", sub: saved.length ? saved.slice(0, 300).map((p) => ({ label: p.replace(/\.json$/i, ""), run: () => this._r3Take(st, { how: "saved", path: p }) }))
                 : [{ label: "No saved workflows", disabled: true }] },
             { label: "From a file…", run: () => this._r3Take(st, { how: "file" }) },
             "-",
@@ -987,7 +1097,20 @@ export const PrevizRenderPanelMixin = {
         const real = prepared.filter((it) => it.group === "render"), other = prepared.filter((it) => it.group !== "render");
         entries.push({ head: "Realistic render" },
             ...(real.length ? real.map(row) : [{ label: "None installed in this ComfyUI", disabled: true }]));
-        if (other.length) entries.push({ head: "Edit the picture" }, ...other.map(row));
+        // The main models only; the rest of Paint's list (dozens) under one submenu, which scrolls.
+        const rank = (it) => MAIN_PREPARED.indexOf(it.id);
+        const main = other.filter((it) => rank(it) >= 0).sort((a, b) => rank(a) - rank(b));
+        const more = other.filter((it) => rank(it) < 0);
+        const edits = main.filter((it) => it.action !== "upscale"), ups = main.filter((it) => it.action === "upscale");
+        if (edits.length) entries.push({ head: "Edit the picture" }, ...edits.map(row));
+        if (ups.length) entries.push({ head: "Upscale" }, ...ups.map(row));
+        if (more.length) {
+            const moreEdit = more.filter((it) => it.action !== "upscale"), moreUp = more.filter((it) => it.action === "upscale");
+            entries.push("-", { label: `More workflows (${more.length})`, sub: [
+                ...(moreEdit.length ? [{ head: "Edit" }, ...moreEdit.map(row)] : []),
+                ...(moreUp.length ? [{ head: "Upscale" }, ...moreUp.map(row)] : []),
+            ] });
+        }
         this._previzOpenMenu(entries, r.left, r.bottom + 2, anchor);
     },
 
@@ -1089,6 +1212,46 @@ export const PrevizRenderPanelMixin = {
         return s.state === "done";
     },
 
+    /** Change panel `st`'s reference pictures: `add` items ({path} | History items), `remove` an index, `set` a list. */
+    previzRenderPanelRefs(st, { add = null, remove = null, set = null } = {}) {
+        const k = st.keep();
+        if (!k) return [];
+        let refs = (set ? set : (k.refs || [])).map(cleanRef).filter(Boolean);
+        if (Number.isInteger(remove)) refs.splice(remove, 1);
+        if (add) {
+            for (const r of add.map(cleanRef).filter(Boolean)) {
+                const key = JSON.stringify(A.pictureRef(r));
+                if (!refs.some((x) => JSON.stringify(A.pictureRef(x)) === key)) refs.push(r);
+            }
+        }
+        if (refs.length > MAX_REFS) {
+            notice("info", "Reference pictures", `The panel keeps ${MAX_REFS}: the first ${MAX_REFS} are kept.`);
+            refs = refs.slice(0, MAX_REFS);
+        }
+        if (refs.length) k.refs = refs; else delete k.refs;
+        st.persist();
+        st.draw && st.draw();
+        return refs;
+    },
+
+    /** The first `n` kept references as data URLs (at most REF_SIDE on their longest side), for render3d_ai. */
+    async _r3RefData(refs, n) {
+        const out = [];
+        const doc = this.container.ownerDocument;
+        for (const r of (refs || []).slice(0, Math.max(0, n))) {
+            const url = this.buildImgUrl(r.path ? { path: r.path, external: true } : r, { noColor: true });
+            let img;
+            try { img = await loadImg(doc, url); } catch (_e) { throw new Error(`the reference picture ${r.name} could not be read`); }
+            const sc = Math.min(1, REF_SIDE / Math.max(img.naturalWidth, img.naturalHeight, 1));
+            const cv = doc.createElement("canvas");
+            cv.width = Math.max(1, Math.round(img.naturalWidth * sc));
+            cv.height = Math.max(1, Math.round(img.naturalHeight * sc));
+            cv.getContext("2d").drawImage(img, 0, 0, cv.width, cv.height);
+            out.push(cv.toDataURL("image/png"));
+        }
+        return out;
+    },
+
     _r3Stop(st) {
         const run = st.run;
         if (!run) return;
@@ -1130,7 +1293,8 @@ export const PrevizRenderPanelMixin = {
                         passes = {};
                         for (const p of ["beauty", "depth", "normals", "mask"]) if (st.passes[p]) passes[p] = await cropUrl(doc, st.passes[p], rpx);
                     }
-                    prep = await post("/imageviewer/render3d_ai", { custom: c, values: runValues(k, c), passes, frame: st.frame });
+                    const refs = await this._r3RefData(k.refs, refSlots(c));
+                    prep = await post("/imageviewer/render3d_ai", { custom: c, values: runValues(k, c), passes, frame: st.frame, refs });
                     break;
                 } catch (e) {
                     const miss = e.data && e.data.missing;

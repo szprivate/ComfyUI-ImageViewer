@@ -168,6 +168,46 @@ class RealisticRender(unittest.TestCase):
                 sys.modules.pop(k, None)
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_reference_pictures_fill_the_ref_loaders_and_empty_slots_go(self):
+        tmp = tempfile.mkdtemp()
+        _app, dirs, pkg = _load(tmp, [])
+        try:
+            G = importlib.import_module(pkg + ".paint_generate")
+            W = importlib.import_module(pkg + ".comp_ai_workflow")
+            R = importlib.import_module(pkg + ".render3d_ai")
+            self.assertEqual([R.ref_index(n) for n in ("ref", "ref1", "Ref 2", "reference_3", "style4", "ref5", "src", "image3")],
+                             [1, 1, 2, 3, 4, 0, 0, 0])
+            self.assertEqual(R.pass_for("ref2", "picture"), "ref2")
+            self.assertEqual(R.pass_for("ref2", "mask"), "mask")
+            passes = {"beauty": png(200), "depth": png(120), "normals": png(128), "mask": png(255)}
+            # GPT 2.5: image_3 / image_4 are the references; with one picture image_4 and its loader go.
+            e, g = G._builtin("comp_r3_gpt25")
+            custom = W.make_custom(g, e["label"])
+            res = R.prepare(custom, passes, dirs["input"], refs=[png(30)])
+            self.assertEqual(res["uses"], {"beauty": "beauty", "depth": "depth", "ref1": "ref1"})
+            self.assertEqual(res["refs"], 1)
+            node = next(n for n in res["graph"].values() if n["class_type"] == "OpenAIGPTImageNodeV2")
+            self.assertIn("model.images.image_3", node["inputs"])
+            self.assertNotIn("model.images.image_4", node["inputs"])
+            self.assertEqual(sum(1 for n in res["graph"].values() if n["class_type"] == "LoadImage"), 3)
+            ref_file = next(n["inputs"]["image"] for n in res["graph"].values() if (n.get("_meta") or {}).get("title") == "comp:ref1")
+            self.assertTrue(os.path.isfile(os.path.join(dirs["input"], *ref_file.split("/"))))
+            # Qwen 2511: image3 on both encoders, or no image3 without a picture.
+            e, g = G._builtin("comp_r3_qwen2511")
+            custom = W.make_custom(g, e["label"])
+            enc = lambda r: [n for n in r["graph"].values() if n["class_type"] == "TextEncodeQwenImageEditPlus"]
+            with_ref = R.prepare(custom, passes, dirs["input"], refs=[png(30), png(60)])
+            self.assertTrue(all("image3" in n["inputs"] for n in enc(with_ref)))
+            self.assertEqual(with_ref["refs"], 1)          # it has one slot
+            without = R.prepare(custom, passes, dirs["input"])
+            self.assertTrue(all("image3" not in n["inputs"] for n in enc(without)))
+            with self.assertRaises(R.RenderAiError):
+                R.prepare(custom, passes, dirs["input"], refs=["data:text/plain;base64,aGk="])
+        finally:
+            for k in [k for k in sys.modules if k == pkg or k.startswith(pkg + ".")]:
+                sys.modules.pop(k, None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()
