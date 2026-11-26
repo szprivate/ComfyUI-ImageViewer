@@ -138,8 +138,6 @@ select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444
 .r3-stack-row svg { width: 14px; height: 14px; flex: none; display: block; }
 .r3-stack-row svg.r3-ico { width: 16px; height: 16px; }
 .r3-stack-row .r3-sbtn:hover { background: #4a4a4a; color: #fff; }
-.r3-stack-row .r3-caret svg { transition: transform 0.1s; }
-.r3-stack-row.sel .r3-caret svg { transform: rotate(90deg); }
 .r3-stack-row .r3-ico { color: #d0763f; display: flex; flex: none; }
 .r3-stack-name { flex: 1 1 auto; min-width: 0; background: #1d1d1d; border: 1px solid #383838; border-radius: 3px;
     padding: 2px 6px; color: #eee; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1181,6 +1179,15 @@ export const PrevizRenderPanelMixin = {
             for (const id of Object.keys(k.values)) if (!ids.has(id)) delete k.values[id];
         }
         stackSync(k, st);
+        // A workflow brings a prompt of its own: put it in the layer's Prompt field so the user
+        // can read and change it - and what is queued is what the field shows (Sebastian 2026-11-26).
+        // A reload of the same workflow keeps what was typed; a new or replaced one starts from its own.
+        const layer = (k.stack || [])[st.sel || 0];
+        const pp = promptParam(custom);
+        if (layer && pp && (!layer.prompt || !before || before.sig !== custom.sig)) {
+            layer.prompt = String(pp.def || "");
+            k.prompt = layer.prompt;
+        }
         st.error = "";
         st.persist();
         if (st.rebuildAi) st.rebuildAi();
