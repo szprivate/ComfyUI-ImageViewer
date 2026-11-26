@@ -122,14 +122,29 @@ select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444
 .r3-ref:hover .r3-ref-x { display: block; }
 .r3-ref.unused { opacity: 0.4; }
 .r3-refs .r3-hint { flex: 1 1 160px; min-width: 0; }
-.r3-stack { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px; }
-.r3-stack-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid #3a3a3a; border-radius: 4px;
-    background: #232323; color: #ccc; font-size: 12px; cursor: pointer; user-select: none; }
-.r3-stack-row:hover { border-color: #666; }
-.r3-stack-row.sel { border-color: #ff6600; background: rgba(255, 102, 0, 0.14); color: #fff; }
-.r3-stack-row .r3-stack-n { color: #888; flex: none; }
-.r3-stack-row .r3-stack-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.r3-stack-add { align-self: flex-start; }
+.r3-stack { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 8px; }
+.r3-stack-add { width: 100%; background: #3a3a3a; border: 1px solid #4a4a4a; border-radius: 5px; color: #ddd;
+    padding: 4px 0; text-align: center; cursor: pointer; font-size: 12px; min-height: 24px; }
+.r3-stack-add:hover { background: #464646; border-color: #666; color: #fff; }
+.r3-stack-row { display: flex; align-items: center; gap: 5px; padding: 3px 5px; border: 1px solid #333; border-radius: 5px;
+    background: #2b2b2b; color: #ccc; font-size: 12px; cursor: pointer; user-select: none; }
+.r3-stack-row:hover { border-color: #555; }
+.r3-stack-row:focus, .r3-stack-row:focus-within, .r3-stack-row .r3-sbtn:focus { outline: none; }
+.r3-stack-row.sel { border-color: #ff6600; background: #33291f; }
+.r3-stack-row.drop-before { box-shadow: 0 -2px 0 #ff6600; }
+.r3-stack-row.drop-after { box-shadow: 0 2px 0 #ff6600; }
+.r3-stack-row .r3-sbtn { width: 20px; height: 20px; padding: 0; border: none; border-radius: 3px; flex: none;
+    background: transparent; color: #aaa; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+.r3-stack-row svg { width: 14px; height: 14px; flex: none; display: block; }
+.r3-stack-row svg.r3-ico { width: 16px; height: 16px; }
+.r3-stack-row .r3-sbtn:hover { background: #4a4a4a; color: #fff; }
+.r3-stack-row .r3-caret svg { transition: transform 0.1s; }
+.r3-stack-row.sel .r3-caret svg { transform: rotate(90deg); }
+.r3-stack-row .r3-ico { color: #d0763f; display: flex; flex: none; }
+.r3-stack-name { flex: 1 1 auto; min-width: 0; background: #1d1d1d; border: 1px solid #383838; border-radius: 3px;
+    padding: 2px 6px; color: #eee; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r3-stack-row .r3-grip { cursor: grab; color: #666; }
+.r3-stack-row .r3-grip:active { cursor: grabbing; }
 .r3-stage .r3-region { position: absolute; border: 1px dashed #ff6600; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); pointer-events: none; display: none; }
 .r3-stage.region-on { cursor: crosshair; }
 .r3-stage.region-on .r3-region.has { display: block; }
@@ -268,6 +283,65 @@ async function asDataUrl(doc, url) {
     c.width = img.naturalWidth; c.height = img.naturalHeight;
     c.getContext("2d").drawImage(img, 0, 0);
     return c.toDataURL("image/png");
+}
+
+/**
+ * An API-format graph (what the panel keeps: {node id: {class_type, inputs}}) as the UI workflow
+ * app.loadGraphData takes ({nodes: [...], links: [...]}): the nodes built through LiteGraph, their
+ * widgets filled by name, the links re-tied - without it the canvas chokes on the API form
+ * (Sebastian 2026-11-26: "Loading aborted ... e is not iterable"). A graph that is already in the
+ * UI form goes through as it is.
+ */
+function apiToUiGraph(graph) {
+    if (!graph || typeof graph !== "object") return null;
+    if (Array.isArray(graph.nodes)) return graph;
+    const lg = window.LiteGraph, LG = window.LGraph;
+    if (!lg || !LG || !lg.createNode) return null;
+    const g = new LG();
+    const made = new Map();
+    let i = 0;
+    for (const [id, spec] of Object.entries(graph)) {
+        const n = spec && spec.class_type && lg.createNode(spec.class_type);
+        if (!n) continue;
+        if (Number.isFinite(Number(id))) n.id = Number(id);
+        if (spec._meta && spec._meta.title) n.title = spec._meta.title;
+        n.pos = [60 + (i % 3) * 340, 60 + Math.floor(i / 3) * 220];
+        for (const [k, v] of Object.entries(spec.inputs || {})) {
+            if (Array.isArray(v) && v.length === 2) continue;
+            const w = (n.widgets || []).find((x) => x.name === k);
+            if (!w) continue;
+            w.value = v;
+            if (w.callback) { try { w.callback(v, null, n); } catch (_) { /* a widget that refuses the value keeps its own */ } }
+        }
+        g.add(n);
+        made.set(String(id), n);
+        i++;
+    }
+    for (const [id, spec] of Object.entries(graph)) {
+        const n = made.get(String(id));
+        if (!n) continue;
+        for (const [k, v] of Object.entries(spec.inputs || {})) {
+            if (!(Array.isArray(v) && v.length === 2)) continue;
+            const s = made.get(String(v[0]));
+            const slot = (n.inputs || []).findIndex((x) => x.name === k);
+            if (!s || slot < 0) continue;
+            try { s.connect(v[1], n, slot); } catch (_) { /* a slot the live node does not have */ }
+        }
+    }
+    return g.serialize();
+}
+
+/** Put a layer's workflow on the open canvas; answers whether it went. */
+function loadCustomInCanvas(custom) {
+    const ui = custom && custom.graph && apiToUiGraph(custom.graph);
+    if (!ui) return false;
+    try {
+        app.loadGraphData(ui, true, true, custom.name || "render3d");
+        return true;
+    } catch (e) {
+        console.warn("[ImageViewer] the workflow did not load into the canvas", e);
+        return false;
+    }
 }
 
 const loadImg = (doc, url) => new Promise((resolve, reject) => {
@@ -605,11 +679,13 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
                 if (!kk) return;
                 stackSelect(kk, st, i);
                 st.persist(); ui.aiSig = null; buildAi(); draw();
-                v._r3PickMenu(st, e.target);
+                // The menu item that ran is gone with its menu: anchor to the row's own menu button.
+                const row = (ui.aiFold.body.querySelectorAll(".r3-stack-row") || [])[st.sel || 0];
+                v._r3PickMenu(st, (row && row.querySelector(".r3-menu")) || e.target);
             } },
             { label: "Load workflow in Canvas", disabled: !(l && l.custom && l.custom.graph),
               title: "Put this layer's workflow on the open canvas",
-              run: () => { app.loadGraphData(l.custom.graph, true, true, l.custom.name || "render3d"); } },
+              run: () => { if (!loadCustomInCanvas(l.custom)) notice("error", "Workflow not loaded", "The canvas refused the workflow."); } },
             "-",
             { label: "Move up", disabled: i === 0, run: () => move(-1) },
             { label: "Move down", disabled: i === n - 1, run: () => move(1) },
@@ -628,25 +704,21 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         body.textContent = "";
         const k = mine();
         const c = k.custom;
-        // The stack (Sebastian 2026-11-25): layer 1 runs on the passes, every next one on the
-        // picture the layer before gave; the selected layer is what the settings below edit.
+        // The stack (Sebastian 2026-11-25, laid out as Blender's modifier stack on 2026-11-26):
+        // layer 1 runs on the passes, every next one on the picture the layer before gave; the
+        // selected layer is what the settings below edit.
         const stack = stackSync(k, st);
         const listBox = el(d, "div", "r3-stack");
-        stack.forEach((l, i) => {
-            const row = el(d, "div", "r3-stack-row" + (i === (st.sel || 0) ? " sel" : ""));
-            row.append(el(d, "span", "r3-stack-n", `${i + 1}`),
-                       el(d, "span", "r3-stack-name", (l.custom && (l.custom.name || "My workflow")) || "—"));
-            row.title = "Click to edit this layer; right-click: replace, move, load in Canvas, remove";
-            row.addEventListener("click", () => {
-                const kk = keep();
-                if (!kk || (st.sel || 0) === i) return;
-                stackSelect(kk, st, i);
-                st.persist(); ui.aiSig = null; buildAi(); draw();
-            });
-            row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); stackMenu(ev, i); });
-            listBox.append(row);
-        });
-        const add = el(d, "button", "r3-btn r3-stack-add", stack.length ? "+ Add layer" : "+ Choose workflow");
+        const NS = "http://www.w3.org/2000/svg";
+        const ico = (paths, cls) => {
+            const s = d.createElementNS(NS, "svg");
+            s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+            s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+            if (cls) s.setAttribute("class", cls);
+            for (const p of paths) { const n = d.createElementNS(NS, "path"); n.setAttribute("d", p); s.append(n); }
+            return s;
+        };
+        const add = el(d, "button", "r3-stack-add", "+  " + (stack.length ? "Add workflow" : "Choose workflow"));
         add.title = stack.length
             ? "Put another workflow on top: what the last layer gives is what it gets"
             : "The workflow this panel runs on its render";
@@ -656,9 +728,85 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             stackSync(kk, st);
             stackSelect(kk, st, kk.stack.length);
             st.persist(); ui.aiSig = null; buildAi(); draw();
-            v._r3PickMenu(st, add);
+            // The rebuild above replaced this button: the menu anchors to the new one in its
+            // place, not to the detached element (a detached rect is 0,0 - the window's corner).
+            const now = (ui.aiFold && ui.aiFold.body.querySelector(".r3-stack-add")) || add;
+            v._r3PickMenu(st, now);
         };
         listBox.append(add);
+        stack.forEach((l, i) => {
+            const sel = i === (st.sel || 0);
+            const row = el(d, "div", "r3-stack-row" + (sel ? " sel" : ""));
+            const caret = el(d, "button", "r3-sbtn r3-caret");
+            caret.append(ico(["m9 6 6 6-6 6"]));
+            caret.title = sel ? "This layer's settings are below" : "Edit this layer's settings below";
+            row.append(caret, ico(["M4 4h6v6H4z", "M14 14h6v6h-6z", "M10 7h2a2 2 0 0 1 2 2v5"], "r3-ico"));
+            row.append(el(d, "span", "r3-stack-name", (l.custom && (l.custom.name || "My workflow")) || "—"));
+            const menuBtn = el(d, "button", "r3-sbtn r3-menu");
+            menuBtn.append(ico(["m6 9 6 6 6-6"]));
+            menuBtn.title = "Replace, load in Canvas, move, remove";
+            const x = el(d, "button", "r3-sbtn r3-x", "✕");
+            x.title = "Take this layer off the stack";
+            const grip = el(d, "button", "r3-sbtn r3-grip", "⋮⋮");
+            grip.title = "Drag to change the order";
+            row.append(menuBtn, x, grip);
+            row.title = "Click to edit this layer";
+            row.addEventListener("click", (ev) => {
+                if (ev.target.closest(".r3-sbtn")) return;
+                const kk = keep();
+                if (!kk || (st.sel || 0) === i) return;
+                stackSelect(kk, st, i);
+                st.persist(); ui.aiSig = null; buildAi(); draw();
+            });
+            caret.onclick = () => row.click();
+            menuBtn.onclick = (ev) => { ev.stopPropagation(); stackMenu(ev, i); };
+            x.onclick = (ev) => { ev.stopPropagation(); removeLayer(i); };
+            row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); stackMenu(ev, i); });
+            // Drag on the grip: an insertion line between the rows, the move on letting go.
+            grip.addEventListener("pointerdown", (ev) => {
+                if (ev.button !== 0) return;
+                ev.preventDefault(); ev.stopPropagation();
+                const n = stack.length;
+                let at = i;
+                const rows = () => [...listBox.querySelectorAll(".r3-stack-row")];
+                const mark = () => rows().forEach((r, j) => {
+                    r.classList.toggle("drop-before", at < n && j === at);
+                    r.classList.toggle("drop-after", at === n && j === n - 1);
+                });
+                const move = (e2) => {
+                    let want = n;
+                    const rs = rows();
+                    for (let j = 0; j < rs.length; j++) {
+                        const b = rs[j].getBoundingClientRect();
+                        if (e2.clientY < b.top + b.height / 2) { want = j; break; }
+                    }
+                    if (want === at) return;
+                    at = want;
+                    mark();
+                };
+                const up = () => {
+                    grip.removeEventListener("pointermove", move);
+                    grip.removeEventListener("pointerup", up);
+                    grip.removeEventListener("pointercancel", up);
+                    rows().forEach((r) => r.classList.remove("drop-before", "drop-after"));
+                    if (at === i || at === i + 1) return;
+                    const kk = keep();
+                    if (!kk) return;
+                    stackSync(kk, st);
+                    const [mv] = kk.stack.splice(i, 1);
+                    const to = at > i ? at - 1 : at;
+                    kk.stack.splice(to, 0, mv);
+                    st.sel = to;
+                    kk.custom = mv.custom; kk.values = mv.values || {};
+                    st.persist(); ui.aiSig = null; buildAi(); draw();
+                };
+                grip.addEventListener("pointermove", move);
+                grip.addEventListener("pointerup", up);
+                grip.addEventListener("pointercancel", up);
+                try { grip.setPointerCapture(ev.pointerId); } catch (_) { /* a synthetic event has no pointer */ }
+            });
+            listBox.append(row);
+        });
         body.append(listBox);
         const head = el(d, "div", "r3-row");
         const pick = el(d, "button", "r3-btn r3-wf-pick", c ? "Change ▾" : "Choose workflow ▾");
