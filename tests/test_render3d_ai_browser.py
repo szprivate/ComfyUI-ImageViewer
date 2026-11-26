@@ -46,7 +46,9 @@ OPEN = """async () => {
     renderBtn: !!h.querySelector('.r3-render'),
     passes: [...h.querySelectorAll('.r3-pass-select option')].map((b) => b.value),
     bar: [...h.querySelectorAll('.r3-bar > button')].map((b) => b.textContent),
-    promptField: !!h.querySelector('.r3-prompt .r3-prompt-in'),
+    stackPanel: !!P.renderStackPanel,
+    noPromptInRender: !h.querySelector('.r3-prompt-in'),
+    noLowerSelector: !h.querySelector('.r3-wf-pick'),
   };
 }"""
 
@@ -116,9 +118,13 @@ AI = """async () => {
     outputs: [{ name: 'out', node: '9', kind: 'picture' }, { name: 'lines', node: '10', kind: 'picture' }],
     params: [{ id: 'wf_prompt', name: 'prompt', node: '5', input: 'text', kind: 'prompt', def: 'clay' }] });
   const h = P.render3dPanel;
-  const takes = h.querySelector('.r3-takes').textContent;
-  const inFold = !!h.querySelector('[data-param="wf_prompt"]');
-  const prompt = h.querySelector('.r3-prompt-in');
+  P._r3StackPrimary().build();
+  const caret0 = P.renderStackPanel.querySelector('.r3-stack-row .r3-caret');
+  if (caret0) caret0.click();
+  const S = P.renderStackPanel;
+  const takes = (S.querySelector('.r3-takes') || { textContent: '' }).textContent;
+  const inFold = !!S.querySelector('[data-param="wf_prompt"]');
+  const prompt = S.querySelector('.r3-prompt-in');
   const placeholder = prompt.placeholder;
   prompt.value = 'a red car'; prompt.dispatchEvent(new Event('input')); prompt.dispatchEvent(new Event('change'));
   const ans = await P.previzRenderAi(st);
@@ -228,7 +234,10 @@ AGENT = """async () => {
   const P = window.__panel;
   const set = await P.previzSceneAgent('render_panel_set', { prompt: 'a blue car in a red canyon', region: [0.1, 0.2, 0.6, 0.9], ai: false });
   const info = await P.previzSceneAgent('render_panel_info', {});
-  const field = P.render3dPanel.querySelector('.r3-prompt-in').value;
+  P._r3StackPrimary().build();
+  const fc = P.renderStackPanel.querySelector('.r3-stack-row .r3-caret');
+  if (fc) fc.click();
+  const field = (P.renderStackPanel.querySelector('.r3-prompt-in') || { value: '' }).value;
   const state = P.agentViewerState ? P.agentViewerState() : null;
   const r = await P.previzSceneAgent('render_panel_render', { ai: false });
   await P.previzSceneAgent('render_panel_set', { region: null });
@@ -258,22 +267,28 @@ REFS = """async () => {
              '9': { class_type: 'SaveImage', inputs: { images: ['1', 0], filename_prefix: 'x' } } },
     inputs: [{ name: 'src', node: '1', kind: 'picture' }, { name: 'ref1', node: '2', kind: 'picture' }, { name: 'ref2', node: '3', kind: 'picture' }],
     outputs: [{ name: 'out', node: '9', kind: 'picture' }], params: [] });
-  const emptyHint = h.querySelector('.r3-ref-hint').textContent;
-  const takes = h.querySelector('.r3-takes').textContent;
+  P._r3StackPrimary().build();
+  const rc = P.renderStackPanel.querySelector('.r3-stack-row .r3-caret');
+  if (rc) rc.click();
+  const S = P.renderStackPanel;
+  const emptyHint = S.querySelector('.r3-ref-hint').textContent;
+  const takes = (S.querySelector('.r3-takes') || { textContent: '' }).textContent;
   P.previzRenderPanelRefs(st, { add: [{ filename: 'ref_a.png', type: 'output', subfolder: '' }, { filename: 'ref_b.png', type: 'output', subfolder: '' },
                                       { filename: 'ref_c.png', type: 'output', subfolder: '' }, { filename: 'ref_a.png', type: 'output', subfolder: '' }] });
+  P._r3StackPrimary().build();
   st.draw();
-  const thumbs = h.querySelectorAll('.r3-refs .r3-ref').length;
-  const unused = h.querySelectorAll('.r3-refs .r3-ref.unused').length;
+  const thumbs = S.querySelectorAll('.r3-refs .r3-ref').length;
+  const unused = S.querySelectorAll('.r3-refs .r3-ref.unused').length;
   const ans = await P.previzRenderAi(st);
   window.__fetchApi = before;
   const refs = (sent[0] && sent[0].refs) || [];
-  h.querySelector('.r3-refs .r3-ref .r3-ref-x').click();
+  S.querySelector('.r3-refs .r3-ref .r3-ref-x').click();
+  P._r3StackPrimary().build();
   const afterRemove = (P.previzScene().renderAi.render3d.refs || []).map((r) => r.filename);
   const info = await P.previzSceneAgent('render_panel_info', {});
   const cleared = await P.previzSceneAgent('render_panel_set', { refs: [] });
   return { emptyHint, takes, thumbs, unused, ok: ans && ans.ok, sent: refs.length, png: refs.every((r) => r.startsWith('data:image/png;base64,')),
-           afterRemove, infoRefs: info.refs, slots: info.ref_slots, cleared: cleared.refs, left: h.querySelectorAll('.r3-refs .r3-ref').length };
+           afterRemove, infoRefs: info.refs, slots: info.ref_slots, cleared: cleared.refs, left: S.querySelectorAll('.r3-refs .r3-ref').length };
 }"""
 
 MENU = """async () => {
@@ -394,10 +409,12 @@ class RenderPanelBrowserTests(unittest.TestCase):
         self.assertFalse(opened["oldDialog"], "no dialog over the viewer any more")
         self.assertTrue(opened["form"] and opened["settingsOpen"], "the settings are in a floating window")
         self.assertFalse(opened["inPanel"], "no settings fold in the panel itself")
-        self.assertEqual(opened["shotBtn"], "Render shot")
+        self.assertEqual(opened["shotBtn"], "Save settings")
         self.assertTrue(opened["renderBtn"])
         self.assertEqual(opened["bar"][:5], ["Render", "AI", "IPR", "Region", "Settings"])
-        self.assertTrue(opened["promptField"], "the prompt is a field under the picture")
+        self.assertTrue(opened["stackPanel"], "the AI Render Stack is a panel of its own")
+        self.assertTrue(opened["noPromptInRender"], "the prompt left the Render panel for the stack")
+        self.assertTrue(opened["noLowerSelector"], "the lower workflow selector is gone")
         self.assertEqual(opened["passes"], ["beauty", "depth", "normals", "mask"])
         self.assertTrue(r["ok"], r["error"])
         self.assertEqual(r["hiddenDuring"], "hidden", "the viewport canvas is taken off screen while a render owns it")

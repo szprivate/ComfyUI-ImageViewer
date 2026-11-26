@@ -878,7 +878,9 @@ class ViewerPanel extends HTMLElement {
                                        ['mmGuide', 'mmGuidePanel', 'mm-guide-panel'],
                                        ['mmPlate', 'mmPlatePanel', 'mm-plate-panel'],
                                        // The Render panel (imageViewer_previzRenderPanel.js).
-                                       ['render3d', 'render3dPanel', 'render3d-panel']]) {
+                                       ['render3d', 'render3dPanel', 'render3d-panel'],
+                                       // The AI Render Stack panel (imageViewer_previzRenderPanel.js).
+                                       ['renderStack', 'renderStackPanel', 'render3d-stack-panel']]) {
             let lp = sr.getElementById(`${id}-panel`);
             if (!lp && this.channelsPanel && this.channelsPanel.parentNode) {
                 lp = this.channelsPanel.ownerDocument.createElement('div');

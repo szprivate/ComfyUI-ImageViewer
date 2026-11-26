@@ -73,6 +73,7 @@ const GROUPS = [
         { label: "Character Picker", panel: "picker", needs: "3d" },
         { label: "Dope Sheet", panel: "dopeSheet", needs: "3d" },
         { label: "Render", panel: "render3d", needs: "3d" },
+        { label: "AI Render Stack", panel: "renderStack", needs: "3d" },
         { label: "Playblast\u2026", run: (p) => p.previzPlayblastDialog(), needs: "3d" },
         { label: "Clip Sequencer", panel: "clips", needs: "3d" },
     ] },

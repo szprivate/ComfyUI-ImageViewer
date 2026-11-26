@@ -31,6 +31,7 @@ const WINDOWS = [
     ["Plate", "mmPlate"],
     // The render settings, one frame's passes and an AI workflow over them (imageViewer_previzRenderPanel.js).
     ["Render", "render3d"],
+    ["AI Render Stack", "renderStack"],
     ["History", "history"],
 ];
 

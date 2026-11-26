@@ -145,6 +145,14 @@ select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444
     padding: 2px 6px; color: #eee; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .r3-stack-row .r3-grip { cursor: grab; color: #666; }
 .r3-stack-row .r3-grip:active { cursor: grabbing; }
+.r3-stack-row .r3-caret svg { transition: transform 0.1s; }
+.r3-stack-row.open .r3-caret svg { transform: rotate(90deg); }
+.r3-stack-row .r3-sliders { color: #9ab; }
+.r3-layer-body { border: 1px solid #333; border-top: none; border-radius: 0 0 5px 5px; margin: -4px 0 6px; padding: 6px 8px 8px;
+    background: #262626; }
+.r3-layer-body .r3-prompt { padding: 2px 0 4px; border-top: none; }
+.r3-stack-scroll { flex: 1 1 auto; max-height: none; overflow: auto; }
+.r3-stack-panel { gap: 0; }
 .r3-stage .r3-region { position: absolute; border: 1px dashed #ff6600; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); pointer-events: none; display: none; }
 .r3-stage.region-on { cursor: crosshair; }
 .r3-stage.region-on .r3-region.has { display: block; }
@@ -259,8 +267,15 @@ export function runValues(keep, custom) {
 function stackSync(k, st) {
     if (!k) return [];
     if (!Array.isArray(k.stack)) k.stack = k.custom ? [{ custom: k.custom, values: k.values || {} }] : [];
+    // A panel kept before the stack had its prompt and refs of its own: the first layer inherits them.
+    if (k.stack.length && !k.stack[0].prompt && !k.stack[0].refs && (k.prompt || (k.refs && k.refs.length))) {
+        if (k.prompt) k.stack[0].prompt = k.prompt;
+        if (k.refs) k.stack[0].refs = k.refs;
+    }
     const i = Math.max(0, Math.min(st.sel || 0, k.stack.length));
-    if (k.custom) k.stack[i] = { custom: k.custom, values: k.values || {} };
+    if (k.custom) {
+        k.stack[i] = { ...k.stack[i], custom: k.custom, values: k.values || {}, prompt: k.prompt || "", refs: k.refs || [] };
+    }
     st.sel = i;
     return k.stack;
 }
@@ -271,8 +286,8 @@ function stackSelect(k, st, i) {
     const n = Math.max(0, Math.min(i, k.stack.length));
     const l = k.stack[n];
     st.sel = n;
-    if (l) { k.custom = l.custom; k.values = l.values || {}; }
-    else { delete k.custom; delete k.values; }
+    if (l) { k.custom = l.custom; k.values = l.values || {}; k.prompt = l.prompt || ""; k.refs = l.refs || []; }
+    else { delete k.custom; delete k.values; delete k.prompt; delete k.refs; }
 }
 
 /** A picture the panel shows (a file URL or a data URL) as a PNG data URL, for the next layer's passes. */
@@ -484,13 +499,16 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const busy = el(d, "div", "r3-busy");
         const regionEl = el(d, "div", "r3-region");
         stage.append(imgA, imgB, line, regionEl, tagL, tagR, empty, busy);
-        // Where the picture lies in the stage (object-fit: contain), in stage pixels.
+        // Where the picture lies in the stage (object-fit: contain, then the zoom/pan), in stage pixels.
         const picRect = () => {
             const r = stage.getBoundingClientRect();
             const sz = st.size || { w: 16, h: 9 };
-            const k = Math.min(r.width / sz.w, r.height / sz.h);
+            const z = (st.view && st.view.z) || 1;
+            const k = Math.min(r.width / sz.w, r.height / sz.h) * z;
             const w = sz.w * k, h = sz.h * k;
-            return { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h, stage: r };
+            const cx = r.left + r.width / 2 + ((st.view && st.view.x) || 0);
+            const cy = r.top + r.height / 2 + ((st.view && st.view.y) || 0);
+            return { left: cx - w / 2, top: cy - h / 2, width: w, height: h, stage: r };
         };
         const toShare = (e) => {
             const p = picRect();
@@ -504,90 +522,63 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
             stage.addEventListener("pointermove", move);
             stage.addEventListener("pointerup", up);
         };
-        stage.addEventListener("dblclick", () => { if (st.region.on) { st.region.box = null; placeRegion(); } });
+        stage.addEventListener("dblclick", () => {
+            if (st.region.on) { st.region.box = null; placeRegion(); return; }
+            st.view = { z: 1, x: 0, y: 0 };
+            placeView(); placeRegion(); drawInfo();
+        });
         const moveWipe = (e) => {
             const r = stage.getBoundingClientRect();
             if (!r.width) return;
             st.wipeX = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
             placeWipe();
         };
+        const movePan = (e0) => {
+            const v0 = st.view || (st.view = { z: 1, x: 0, y: 0 });
+            const x0 = e0.clientX, y0 = e0.clientY, bx = v0.x, by = v0.y;
+            const move = (e) => { v0.x = bx + (e.clientX - x0); v0.y = by + (e.clientY - y0); placeView(); placeRegion(); };
+            const up = () => { stage.removeEventListener("pointermove", move); stage.removeEventListener("pointerup", up); stage.removeEventListener("pointercancel", up); };
+            stage.addEventListener("pointermove", move);
+            stage.addEventListener("pointerup", up);
+            stage.addEventListener("pointercancel", up);
+        };
         stage.addEventListener("pointerdown", (e) => {
             if (e.button !== 0) return;
             if (st.region.on && e.target !== line) { e.preventDefault(); drawRegion(e); return; }
-            if (!st.wipe) return;
+            if (st.wipe && e.target === line) { e.preventDefault(); moveWipe(e); const up = () => { stage.removeEventListener("pointermove", moveWipe); stage.removeEventListener("pointerup", up); }; stage.setPointerCapture && stage.setPointerCapture(e.pointerId); stage.addEventListener("pointermove", moveWipe); stage.addEventListener("pointerup", up); return; }
+            if (st.wipe) { e.preventDefault(); moveWipe(e); const up = () => { stage.removeEventListener("pointermove", moveWipe); stage.removeEventListener("pointerup", up); }; stage.setPointerCapture && stage.setPointerCapture(e.pointerId); stage.addEventListener("pointermove", moveWipe); stage.addEventListener("pointerup", up); return; }
             e.preventDefault();
-            moveWipe(e);
-            const up = () => { stage.removeEventListener("pointermove", moveWipe); stage.removeEventListener("pointerup", up); };
-            stage.setPointerCapture && stage.setPointerCapture(e.pointerId);
-            stage.addEventListener("pointermove", moveWipe);
-            stage.addEventListener("pointerup", up);
+            movePan(e);
         });
 
-        const scroll = el(d, "div", "r3-scroll");
-        const fold = (key, title) => {
-            const f = el(d, "details", `r3-fold r3-fold-${key}`);
-            f.open = !!st.folds[key];
-            f.addEventListener("toggle", () => { st.folds[key] = f.open; });
-            const sum = el(d, "summary", "", title);
-            const body = el(d, "div", "r3-body");
-            f.append(sum, body);
-            scroll.append(f);
-            return { f, body, sum };
+        // Zoom and pan, as the viewer itself (Sebastian 2026-11-26: "I'd like to be able to zoom in"):
+        // the wheel zooms about the cursor, a drag with nothing to draw pans, a double-click fits.
+        const placeView = () => {
+            const z = (st.view && st.view.z) || 1, x = (st.view && st.view.x) || 0, y = (st.view && st.view.y) || 0;
+            const t = `translate(${x}px, ${y}px) scale(${z})`;
+            ui.imgA.style.transform = t;
+            ui.imgB.style.transform = t;
+            stage.classList.toggle("zoomed", z !== 1 || x !== 0 || y !== 0);
         };
-        const aiFold = fold("ai", "AI workflow");
-        // The prompt: the panel's own, whichever workflow is on (it fills the workflow's prompt).
-        const promptRow = el(d, "div", "r3-prompt");
-        const prompt = el(d, "textarea", "r3-prompt-in");
-        prompt.rows = 2;
-        prompt.addEventListener("keydown", (e) => {
-            e.stopPropagation();
-            if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); prompt.blur(); v.previzRenderPanelRender(st); }
-        });
-        prompt.addEventListener("input", () => {
-            const kk = keep();
-            if (!kk) return;
-            kk.prompt = prompt.value;
-            clearTimeout(ui.promptTimer);
-            ui.promptTimer = setTimeout(persist, 400);
-        });
-        prompt.addEventListener("change", persist);
-        promptRow.append(el(d, "span", "r3-label", "Prompt"), prompt);
-        // Reference pictures (a style, a product, a face): loaders named ref / ref2 ... take them.
-        const refsRow = el(d, "div", "r3-refs");
-        const refsList = el(d, "div", "r3-refs-list");
-        refsList.style.display = "contents";
-        const refAdd = el(d, "button", "r3-btn r3-ref-add", "+");
-        refAdd.title = "Add a reference picture: the History selection or a file (or drop one here)";
-        refAdd.onclick = () => {
-            const r = refAdd.getBoundingClientRect();
-            v._previzOpenMenu([
-                { label: "The History selection", run: () => {
-                    const got = (v.selectedHistorySnapshots ? v.selectedHistorySnapshots() : []).map((x) => x.imgObj)
-                        .filter((f) => f && A.isAtlasPicture(f) && A.pictureRef(f));
-                    if (!got.length) { notice("info", "Reference pictures", "Select pictures in the History strip first (Ctrl+click for several)."); return; }
-                    v.previzRenderPanelRefs(st, { add: got });
-                } },
-                { label: "From a file…", run: () => openFilePicker(v.container, {
-                    id: "render3d-refs", title: "Reference pictures", kind: "image", exts: [".png", ".jpg", ".jpeg", ".webp"],
-                    multiple: true, go: "Add", note: `Up to ${MAX_REFS} pictures the workflow takes beside the render.`,
-                    onPick: async (files) => { v.previzRenderPanelRefs(st, { add: files.map((f) => ({ path: f.path, name: f.name })) }); return { ok: true }; },
-                }) },
-                ...((mine().refs || []).length ? ["-", { label: "Remove all", run: () => v.previzRenderPanelRefs(st, { set: [] }) }] : []),
-            ], r.left, r.bottom + 2, refAdd);
-        };
-        const refHint = el(d, "span", "r3-hint r3-ref-hint");
-        refsRow.append(el(d, "span", "r3-label", "Refs"), refsList, refAdd, refHint);
-        wirePictureDrop(refsRow, {
-            onItems: (items) => v.previzRenderPanelRefs(st, { add: items }),
-            onSkipped: (n) => notice("warn", "Reference pictures", `${n} file(s) left out: only pictures (png, jpg, webp).`),
-            onStatus: (text, bad) => { if (bad) notice("error", "Reference pictures", text); },
-        });
-        root.append(bar, stage, promptRow, refsRow, scroll);
+        stage.addEventListener("wheel", (e) => {
+            e.preventDefault();
+            const r = stage.getBoundingClientRect();
+            const cx = e.clientX - r.left - r.width / 2, cy = e.clientY - r.top - r.height / 2;
+            const v0 = st.view || (st.view = { z: 1, x: 0, y: 0 });
+            const z = Math.min(32, Math.max(0.2, v0.z * Math.exp(-e.deltaY * 0.0016)));
+            const k = z / v0.z;
+            v0.x = cx - k * (cx - v0.x);
+            v0.y = cy - k * (cy - v0.y);
+            v0.z = z;
+            placeView(); placeRegion();
+            drawInfo();
+        }, { passive: false });
+
+        root.append(bar, stage);
         host.append(style, root);
         ui = { root, bar, render, aiBtn, iprBtn, regionBtn, passes, wipe, info, stage, imgA, imgB, line, regionEl, tagL, tagR, empty, busy,
-               aiFold, setBtn, setWin: null, camSel, prompt, promptRow, refsRow, refsList, refAdd, refHint, refSig: null, picRect, form: null, formScene: null, aiSig: null };
+               setBtn, setWin: null, camSel, picRect, placeView, form: null, formScene: null };
         buildForm();
-        buildAi();
         draw();
         return ui;
     }
@@ -626,272 +617,6 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         ui.formScene = sc;
     }
 
-    // ── the AI workflow ──────────────────────────────────────────────────────
-
-    function aiSig() {
-        const k = mine();
-        const c = k.custom;
-        return JSON.stringify([c ? [c.sig, c.name, c.source, c.path] : null, !!st.run, st.askDl ? 1 : 0, st.error,
-                               (k.stack || []).map((l) => (l.custom && [l.custom.sig, l.custom.name]) || null), st.sel || 0]);
-    }
-
-    /** Take layer `i` out of the stack; an empty stack takes the panel's result with it. */
-    function removeLayer(i) {
-        const kk = keep();
-        if (!kk) return;
-        stackSync(kk, st);                       // the selection back into its layer first
-        kk.stack.splice(i, 1);
-        // Select the layer that took its place (or the last one), without writing anything back:
-        // stackSync would mirror the still-current workflow into the shortened stack again.
-        const n = kk.stack.length;
-        const sel = (st.sel || 0) > i ? (st.sel || 0) - 1 : (st.sel || 0);
-        st.sel = Math.max(0, Math.min(sel, n - 1));
-        const l = n ? kk.stack[st.sel] : null;
-        if (l) { kk.custom = l.custom; kk.values = l.values || {}; }
-        else {
-            delete kk.custom; delete kk.values; delete kk.last;
-            st.ai = null;
-            if (st.pass && st.pass.startsWith("ai")) st.pass = "beauty";
-            st.wipe = false;
-        }
-        st.persist(); ui.aiSig = null; buildAi(); draw();
-    }
-
-    /** Right-click a stack layer: replace it, put it on the canvas, move it, take it away. */
-    function stackMenu(e, i) {
-        const k = mine();
-        const n = (k.stack || []).length;
-        const l = (k.stack || [])[i];
-        const move = (dir) => {
-            const kk = keep();
-            if (!kk) return;
-            stackSync(kk, st);
-            const j = i + dir;
-            if (j < 0 || j >= kk.stack.length) return;
-            [kk.stack[i], kk.stack[j]] = [kk.stack[j], kk.stack[i]];
-            if ((st.sel || 0) === i) st.sel = j; else if ((st.sel || 0) === j) st.sel = i;
-            stackSelect(kk, st, st.sel || 0);
-            st.persist(); ui.aiSig = null; buildAi(); draw();
-        };
-        v._previzOpenMenu([
-            { label: "Replace workflow…", run: () => {
-                const kk = keep();
-                if (!kk) return;
-                stackSelect(kk, st, i);
-                st.persist(); ui.aiSig = null; buildAi(); draw();
-                // The menu item that ran is gone with its menu: anchor to the row's own menu button.
-                const row = (ui.aiFold.body.querySelectorAll(".r3-stack-row") || [])[st.sel || 0];
-                v._r3PickMenu(st, (row && row.querySelector(".r3-menu")) || e.target);
-            } },
-            { label: "Load workflow in Canvas", disabled: !(l && l.custom && l.custom.graph),
-              title: "Put this layer's workflow on the open canvas",
-              run: () => { if (!loadCustomInCanvas(l.custom)) notice("error", "Workflow not loaded", "The canvas refused the workflow."); } },
-            "-",
-            { label: "Move up", disabled: i === 0, run: () => move(-1) },
-            { label: "Move down", disabled: i === n - 1, run: () => move(1) },
-            "-",
-            { label: "Remove", run: () => removeLayer(i) },
-        ], e.clientX, e.clientY);
-    }
-
-    function buildAi() {
-        if (!ui) return;
-        const sig = aiSig();
-        if (ui.aiSig === sig) return;
-        ui.aiSig = sig;
-        const d = doc();
-        const body = ui.aiFold.body;
-        body.textContent = "";
-        const k = mine();
-        const c = k.custom;
-        // The stack (Sebastian 2026-11-25, laid out as Blender's modifier stack on 2026-11-26):
-        // layer 1 runs on the passes, every next one on the picture the layer before gave; the
-        // selected layer is what the settings below edit.
-        const stack = stackSync(k, st);
-        const listBox = el(d, "div", "r3-stack");
-        const NS = "http://www.w3.org/2000/svg";
-        const ico = (paths, cls) => {
-            const s = d.createElementNS(NS, "svg");
-            s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
-            s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
-            if (cls) s.setAttribute("class", cls);
-            for (const p of paths) { const n = d.createElementNS(NS, "path"); n.setAttribute("d", p); s.append(n); }
-            return s;
-        };
-        const add = el(d, "button", "r3-stack-add", "+  " + (stack.length ? "Add workflow" : "Choose workflow"));
-        add.title = stack.length
-            ? "Put another workflow on top: what the last layer gives is what it gets"
-            : "The workflow this panel runs on its render";
-        add.onclick = () => {
-            const kk = keep();
-            if (!kk) return;
-            stackSync(kk, st);
-            stackSelect(kk, st, kk.stack.length);
-            st.persist(); ui.aiSig = null; buildAi(); draw();
-            // The rebuild above replaced this button: the menu anchors to the new one in its
-            // place, not to the detached element (a detached rect is 0,0 - the window's corner).
-            const now = (ui.aiFold && ui.aiFold.body.querySelector(".r3-stack-add")) || add;
-            v._r3PickMenu(st, now);
-        };
-        listBox.append(add);
-        stack.forEach((l, i) => {
-            const sel = i === (st.sel || 0);
-            const row = el(d, "div", "r3-stack-row" + (sel ? " sel" : ""));
-            const caret = el(d, "button", "r3-sbtn r3-caret");
-            caret.append(ico(["m9 6 6 6-6 6"]));
-            caret.title = sel ? "This layer's settings are below" : "Edit this layer's settings below";
-            row.append(caret, ico(["M4 4h6v6H4z", "M14 14h6v6h-6z", "M10 7h2a2 2 0 0 1 2 2v5"], "r3-ico"));
-            row.append(el(d, "span", "r3-stack-name", (l.custom && (l.custom.name || "My workflow")) || "—"));
-            const menuBtn = el(d, "button", "r3-sbtn r3-menu");
-            menuBtn.append(ico(["m6 9 6 6 6-6"]));
-            menuBtn.title = "Replace, load in Canvas, move, remove";
-            const x = el(d, "button", "r3-sbtn r3-x", "✕");
-            x.title = "Take this layer off the stack";
-            const grip = el(d, "button", "r3-sbtn r3-grip", "⋮⋮");
-            grip.title = "Drag to change the order";
-            row.append(menuBtn, x, grip);
-            row.title = "Click to edit this layer";
-            row.addEventListener("click", (ev) => {
-                if (ev.target.closest(".r3-sbtn")) return;
-                const kk = keep();
-                if (!kk || (st.sel || 0) === i) return;
-                stackSelect(kk, st, i);
-                st.persist(); ui.aiSig = null; buildAi(); draw();
-            });
-            caret.onclick = () => row.click();
-            menuBtn.onclick = (ev) => { ev.stopPropagation(); stackMenu(ev, i); };
-            x.onclick = (ev) => { ev.stopPropagation(); removeLayer(i); };
-            row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); stackMenu(ev, i); });
-            // Drag on the grip: an insertion line between the rows, the move on letting go.
-            grip.addEventListener("pointerdown", (ev) => {
-                if (ev.button !== 0) return;
-                ev.preventDefault(); ev.stopPropagation();
-                const n = stack.length;
-                let at = i;
-                const rows = () => [...listBox.querySelectorAll(".r3-stack-row")];
-                const mark = () => rows().forEach((r, j) => {
-                    r.classList.toggle("drop-before", at < n && j === at);
-                    r.classList.toggle("drop-after", at === n && j === n - 1);
-                });
-                const move = (e2) => {
-                    let want = n;
-                    const rs = rows();
-                    for (let j = 0; j < rs.length; j++) {
-                        const b = rs[j].getBoundingClientRect();
-                        if (e2.clientY < b.top + b.height / 2) { want = j; break; }
-                    }
-                    if (want === at) return;
-                    at = want;
-                    mark();
-                };
-                const up = () => {
-                    grip.removeEventListener("pointermove", move);
-                    grip.removeEventListener("pointerup", up);
-                    grip.removeEventListener("pointercancel", up);
-                    rows().forEach((r) => r.classList.remove("drop-before", "drop-after"));
-                    if (at === i || at === i + 1) return;
-                    const kk = keep();
-                    if (!kk) return;
-                    stackSync(kk, st);
-                    const [mv] = kk.stack.splice(i, 1);
-                    const to = at > i ? at - 1 : at;
-                    kk.stack.splice(to, 0, mv);
-                    st.sel = to;
-                    kk.custom = mv.custom; kk.values = mv.values || {};
-                    st.persist(); ui.aiSig = null; buildAi(); draw();
-                };
-                grip.addEventListener("pointermove", move);
-                grip.addEventListener("pointerup", up);
-                grip.addEventListener("pointercancel", up);
-                try { grip.setPointerCapture(ev.pointerId); } catch (_) { /* a synthetic event has no pointer */ }
-            });
-            listBox.append(row);
-        });
-        body.append(listBox);
-        const head = el(d, "div", "r3-row");
-        const pick = el(d, "button", "r3-btn r3-wf-pick", c ? "Change ▾" : "Choose workflow ▾");
-        pick.title = "The open canvas, a workflow saved in ComfyUI, a .json file, or a prepared one";
-        pick.onclick = () => v._r3PickMenu(st, pick);
-        head.append(el(d, "span", "r3-label", "Workflow"));
-        if (c) {
-            const name = el(d, "span", "r3-wfname", c.name || "My workflow");
-            name.title = `${c.name || ""} (${c.source === "canvas" ? "from the canvas" : c.source === "saved" ? `saved: ${c.path}` : c.source === "prepared" ? "prepared" : `file: ${c.path || ""}`})`;
-            head.append(name);
-        }
-        head.append(pick);
-        if (c && c.source !== "prepared") {
-            const again = el(d, "button", "r3-btn r3-wf-reload", "Reload");
-            again.title = "Take the workflow again from where it came";
-            again.onclick = () => v._r3Take(st, c.source === "canvas" ? { how: "canvas" } : c.source === "saved" ? { how: "saved", path: c.path } : { how: "file" });
-            head.append(again);
-        }
-        if (c) {
-            const off = el(d, "button", "r3-btn r3-wf-clear", "✕");
-            off.title = "Take this layer off the stack";
-            off.onclick = () => removeLayer(st.sel || 0);
-            head.append(off);
-        }
-        body.append(head);
-        if (!c) {
-            body.append(el(d, "div", "r3-hint", "A workflow's LoadImage nodes titled comp:beauty, comp:depth, comp:normals or comp:mask take those passes "
-                + "(an untitled one takes the beauty); nodes titled comp:<name> become its settings here; its first save is the result."));
-        } else {
-            const takes = [...new Set((c.inputs || []).map((x) => v._r3PassOf(x)))];
-            body.append(Object.assign(el(d, "div", "r3-hint r3-takes"),
-                { textContent: `Takes: ${takes.length ? takes.join(", ") : "nothing (it runs on its own)"} · gives: ${(c.outputs || []).map((o) => o.name).join(", ")}` }));
-            const vals = k.values || {};
-            const pp = promptParam(c);
-            for (const p of c.params || []) {
-                if (p === pp) continue;            // the prompt field under the picture is this one
-                const r = el(d, "div", "r3-row");
-                r.append(el(d, "span", "r3-label", p.name));
-                let inp;
-                const cur = vals[p.id] !== undefined ? vals[p.id] : p.def;
-                if (p.kind === "prompt" || (typeof p.def === "string" && p.def.length > 40)) {
-                    inp = el(d, "textarea", "rd-in r3-param");
-                    inp.value = String(cur ?? "");
-                } else if (p.kind === "bool") {
-                    inp = el(d, "input", "r3-param-bool"); inp.type = "checkbox"; inp.checked = !!cur;
-                } else if (p.kind === "int" || p.kind === "num") {
-                    inp = el(d, "input", "rd-in rd-num r3-param"); inp.type = "number";
-                    inp.step = p.kind === "int" ? "1" : "any"; inp.value = String(cur ?? "");
-                } else {
-                    inp = el(d, "input", "rd-in r3-param"); inp.value = String(cur ?? "");
-                }
-                inp.dataset.param = p.id;
-                inp.addEventListener("keydown", (e) => e.stopPropagation());
-                inp.addEventListener("change", () => {
-                    const kk = keep();
-                    if (!kk) return;
-                    kk.values = kk.values || {};
-                    kk.values[p.id] = p.kind === "bool" ? inp.checked : (p.kind === "int" || p.kind === "num") ? Number(inp.value) : inp.value;
-                    stackSync(kk, st);
-                    persist();
-                });
-                r.append(inp);
-                body.append(r);
-            }
-        }
-        if (st.askDl) {
-            const a = el(d, "div", "r3-ask", st.askDl.text);
-            const row = el(d, "div", "r3-row");
-            const yes = el(d, "button", "r3-btn primary r3-dl-yes", "Download");
-            const no = el(d, "button", "r3-btn r3-dl-no", "Not now");
-            yes.onclick = () => st.askDl.answer(true);
-            no.onclick = () => st.askDl.answer(false);
-            row.append(yes, no);
-            a.append(row);
-            body.append(a);
-        }
-        const go = el(d, "div", "r3-row");
-        const run = el(d, "button", "r3-btn r3-run", st.run ? "Stop" : "Run again");
-        run.title = "Run the stack again on this render: the layers in order, each on the picture the one before gave (a new seed; the frame is rendered first when it is not yet)";
-        run.disabled = !c && !st.run;
-        run.onclick = () => (st.run ? v._r3Stop(st) : v.previzRenderAi(st));
-        go.append(el(d, "span", "r3-label", ""), run);
-        body.append(go);
-        if (st.error) body.append(el(d, "div", "r3-error", st.error));
-    }
 
     // ── drawing ──────────────────────────────────────────────────────────────
 
@@ -931,38 +656,10 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         ui.imgB.style.clipPath = st.wipe ? `inset(0 ${(100 - st.wipeX * 100).toFixed(2)}% 0 0)` : "";
     }
 
-    /** The reference strip: a thumbnail per kept picture (× takes it away), and what the workflow does with them. */
-    function drawRefs(c) {
-        const refs = mine().refs || [];
-        const slots = refSlots(c);
-        const sig = JSON.stringify([refs, slots]);
-        if (ui.refSig === sig) return;
-        ui.refSig = sig;
-        const d = doc();
-        ui.refsList.textContent = "";
-        refs.forEach((r, i) => {
-            const t = el(d, "div", "r3-ref" + (c && i >= slots ? " unused" : ""));
-            t.title = r.name + (c && i >= slots ? " (this workflow does not take it)" : "");
-            const img = el(d, "img");
-            img.draggable = false;
-            try { img.src = v.thumbUrl ? v.thumbUrl(r.path ? { path: r.path, external: true } : r) : ""; } catch (_) { /* no picture */ }
-            const x = el(d, "button", "r3-ref-x", "×");
-            x.title = "Remove";
-            x.onclick = (e) => { e.stopPropagation(); v.previzRenderPanelRefs(st, { remove: i }); };
-            t.append(img, el(d, "span", "r3-ref-n", `ref${i + 1}`), x);
-            ui.refsList.append(t);
-        });
-        ui.refAdd.disabled = refs.length >= MAX_REFS;
-        ui.refHint.textContent = !refs.length
-            ? (!c ? "Drop pictures here for a workflow that takes references." : slots ? `This workflow takes ${slots === 1 ? "one reference picture" : `up to ${slots} reference pictures`}: drop them here.` : "")
-            : !c ? "" : !slots ? "This workflow takes no reference pictures (name a loader comp:ref1 in your own)."
-            : (c.source === "prepared" && REF_HINTS[c.path]) || `Used: ${Math.min(refs.length, slots)} of ${refs.length}.`;
-    }
 
     function draw() {
         if (!ui || !ui.root.isConnected) return;
         buildForm();
-        buildAi();
         const d = doc();
         const list = passList();
         if (!list.some(([k]) => k === st.pass)) st.pass = "beauty";
@@ -991,24 +688,14 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         }
         const camNow = sc ? v._renderCameraId(S.renderSettings(sc), sc) : "";
         if (ui.camSel.value !== camNow) ui.camSel.value = camNow;
-        const c = mine().custom;
-        const layers = (mine().stack || []).length;
-        ui.aiBtn.classList.toggle("on", !!(st.aiOn && c));
-        ui.aiBtn.disabled = !c;
-        ui.aiBtn.title = c ? (layers > 1
-            ? `Render runs the stack's ${layers} layers in order on the passes (off: the passes only)`
-            : `Render runs ${c.name || "the workflow"} on the passes (off: the passes only)`)
-            : "Choose a workflow (AI workflow below) to run it on the render";
+        const layers = (mine().stack || []).filter((l) => l && l.custom).length;
+        ui.aiBtn.classList.toggle("on", !!(st.aiOn && layers));
+        ui.aiBtn.disabled = !layers;
+        ui.aiBtn.title = layers
+            ? `Render runs the AI Render Stack's ${layers} layer${layers === 1 ? "" : "s"} in order on the passes (off: the passes only)`
+            : "Put a workflow on the stack (AI Render Stack panel) to run it on the render";
         ui.iprBtn.classList.toggle("on", !!st.ipr);
         ui.regionBtn.classList.toggle("on", !!st.region.on);
-        const pp = promptParam(c);
-        const want = mine().prompt || "";
-        if (ui.prompt.ownerDocument.activeElement !== ui.prompt && ui.prompt.value !== want) ui.prompt.value = want;
-        ui.prompt.disabled = !!(c && !pp);
-        ui.prompt.placeholder = !c ? "Describe the scene: what everything is made of, where, the light. Used by the workflow you choose."
-            : pp ? `Describe the scene (empty: the workflow's own - ${String(pp.def || "").slice(0, 90)}${String(pp.def || "").length > 90 ? "…" : ""})`
-            : "This workflow takes no prompt";
-        drawRefs(c);
         ui.wipe.disabled = !st.ai || !st.passes;
         ui.wipe.classList.toggle("on", st.wipe);
         ui.setBtn.classList.toggle("on", !!(ui.setWin && ui.setWin.shade.isConnected));
@@ -1024,6 +711,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         }
         placeWipe();
         placeRegion();
+        if (ui.placeView) ui.placeView();
         ui.empty.style.display = urlOf(st.wipe ? "beauty" : st.pass) ? "none" : "";
         const b = st.busy;
         ui.busy.classList.toggle("on", !!b);
@@ -1031,12 +719,15 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const going = !!(st.run || (b && b.kind === "render" && !st.iprBusy));
         ui.render.textContent = going ? "Stop" : st.region.on && st.region.box ? "Render region" : "Render";
         ui.render.disabled = !going && !!v._previzRendering;
-        // What the picture is, and whether the playhead has moved on since.
+        // What the picture is, whether the playhead has moved on, and the zoom when it is not 1:1.
         const f = Math.round(v.currentFrame || 0);
         const stale = st.frame !== null && st.frame !== f;
+        const z = (st.view && st.view.z) || 1;
         ui.info.classList.toggle("stale", stale);
-        ui.info.textContent = st.frame === null ? "" : `${st.size ? `${st.size.w}×${st.size.h} · ` : ""}frame ${st.frame}${st.passes && st.passes.preview ? " · preview" : ""}${stale ? ` (now ${f})` : ""}`;
-        ui.info.title = stale ? "The playhead has moved since this render: press Render again" : "";
+        ui.info.textContent = st.frame === null ? (z !== 1 ? `${Math.round(z * 100)}%` : "")
+            : `${st.size ? `${st.size.w}×${st.size.h} · ` : ""}frame ${st.frame}${st.passes && st.passes.preview ? " · preview" : ""}${z !== 1 ? ` · ${Math.round(z * 100)}%` : ""}${stale ? ` (now ${f})` : ""}`;
+        ui.info.title = stale ? "The playhead has moved since this render: press Render again"
+            : z !== 1 ? "Wheel zooms, drag pans, double-click fits" : "";
     }
 
     function refresh() {
@@ -1067,7 +758,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     st.persist = persist;
     st.panel = () => ui;
     st.settingsWin = settingsWin;
-    st.rebuildAi = () => { if (ui) { ui.aiSig = null; buildAi(); } };
+    st.rebuildAi = () => { if (v._r3Refresh) v._r3Refresh(); };
     build();
     if (st.ipr) { st.ipr = false; v.previzRenderPanelIpr(st, true); }
     return {
@@ -1096,6 +787,14 @@ export const PrevizRenderPanelMixin = {
             host.dataset.panel = id;
             return createRenderPanelInstance(v, host, {}, saved, id);
         };
+        this._dockMakers().renderStack = (v, id, saved) => {
+            const doc = (v._dockRootEl && v._dockRootEl.ownerDocument) || (v.renderStackPanel && v.renderStackPanel.ownerDocument);
+            if (!doc) return null;
+            const host = doc.createElement("div");
+            host.className = "previz-panel render3d-stack-panel";
+            host.dataset.panel = id;
+            return createStackPanelInstance(v, host, {}, saved, id);
+        };
     },
 
     /** The first Render panel: the markup's, its state on the viewer (this._r3St). */
@@ -1122,11 +821,26 @@ export const PrevizRenderPanelMixin = {
         return out;
     },
 
-    /** Draw the Render panels (cheap: the playhead's frame and the camera list). */
+    /** The first AI Render Stack panel: the markup's; it edits the primary Render panel's stack. */
+    _r3StackPrimary() {
+        this._r3RegisterMaker();
+        const host = this.renderStackPanel;
+        if (!host) return null;
+        if (!this._r3StackInst || this._r3StackInst.el !== host) {
+            this._r3StackInst = createStackPanelInstance(this, host, {}, null, "renderStack");
+        }
+        return this._r3StackInst;
+    },
+
+    /** Draw the Render panels and the AI Render Stack (cheap: the playhead's frame and the camera list). */
     _r3Refresh() {
         if (!this.isPrevizTab || !this.isPrevizTab()) return;
         this._r3RegisterMaker();
         for (const inst of this._r3All()) { try { inst.refresh(); } catch (e) { console.warn("[ImageViewer] Render panel", e); } }
+        const stacks = [];
+        if (this.isPanelDocked && this.isPanelDocked("renderStack")) { const p = this._r3StackPrimary(); if (p) stacks.push(p); }
+        for (const { inst } of (this._dockInstancesOf ? this._dockInstancesOf("renderStack") : [])) if (inst) stacks.push(inst);
+        for (const inst of new Set(stacks)) { try { inst.refresh(); } catch (e) { console.warn("[ImageViewer] AI Render Stack", e); } }
     },
 
     /** Render… and the Windows menu: the panel up and in front; `settings` unfolds the render settings. */
@@ -1153,10 +867,12 @@ export const PrevizRenderPanelMixin = {
     /** The panels go with the 3D tab and come back with the next one (as the Matchmove panels do). */
     _r3Hide() {
         if (this.isPanelDocked && this.isPanelDocked("render3d")) { this._r3Want = true; this.setPanelDocked("render3d", false); }
+        if (this.isPanelDocked && this.isPanelDocked("renderStack")) { this._r3StackWant = true; this.setPanelDocked("renderStack", false); }
     },
 
     _r3Restore() {
         if (this._r3Want) { this._r3Want = false; this.setPanelDocked("render3d", true); }
+        if (this._r3StackWant) { this._r3StackWant = false; this.setPanelDocked("renderStack", true); }
     },
 
     /** The pass a workflow input takes: as render3d_ai.pass_for on the server (its name, else its kind). */
@@ -1527,11 +1243,13 @@ export const PrevizRenderPanelMixin = {
         return s.state === "done";
     },
 
-    /** Change panel `st`'s reference pictures: `add` items ({path} | History items), `remove` an index, `set` a list. */
+    /** Change the selected layer's reference pictures: `add` items ({path} | History items), `remove` an index, `set` a list. */
     previzRenderPanelRefs(st, { add = null, remove = null, set = null } = {}) {
         const k = st.keep();
         if (!k) return [];
-        let refs = (set ? set : (k.refs || [])).map(cleanRef).filter(Boolean);
+        stackSync(k, st);
+        const layer = (k.stack || [])[st.sel || 0] || k;
+        let refs = (set ? set : (layer.refs || [])).map(cleanRef).filter(Boolean);
         if (Number.isInteger(remove)) refs.splice(remove, 1);
         if (add) {
             for (const r of add.map(cleanRef).filter(Boolean)) {
@@ -1543,8 +1261,10 @@ export const PrevizRenderPanelMixin = {
             notice("info", "Reference pictures", `The panel keeps ${MAX_REFS}: the first ${MAX_REFS} are kept.`);
             refs = refs.slice(0, MAX_REFS);
         }
-        if (refs.length) k.refs = refs; else delete k.refs;
+        if (refs.length) layer.refs = refs; else delete layer.refs;
+        if (layer !== k) { if (refs.length) k.refs = refs; else delete k.refs; }   // the agent's mirror
         st.persist();
+        if (this._r3Refresh) this._r3Refresh();
         st.draw && st.draw();
         return refs;
     },
@@ -1579,7 +1299,7 @@ export const PrevizRenderPanelMixin = {
      * Paint's Generate is, its outputs read back (the first as the layer's picture). `under` is
      * what a region's answer is pasted over. Answers { ai, last, answer }; throws when it failed.
      */
-    async _r3RunOne(st, c, values, passes, { box, rpx, run, tell, under, sameFrame }) {
+    async _r3RunOne(st, c, values, passes, { box, rpx, run, tell, under, sameFrame, layer = null }) {
         const k = st.mine();
         const doc = this.container.ownerDocument;
         tell(`${c.name || "Workflow"}: preparing`);
@@ -1591,8 +1311,9 @@ export const PrevizRenderPanelMixin = {
                     use = {};
                     for (const p of ["beauty", "depth", "normals", "mask"]) if (passes[p]) use[p] = await cropUrl(doc, passes[p], rpx);
                 }
-                const refs = await this._r3RefData(k.refs, refSlots(c));
-                prep = await post("/imageviewer/render3d_ai", { custom: c, values, passes: use, frame: st.frame, refs });
+                const refs = await this._r3RefData((layer && layer.refs) || k.refs, refSlots(c));
+                prep = await post("/imageviewer/render3d_ai", { custom: c, values, passes: use, frame: st.frame, refs,
+                                                               size: (layer && layer.size) || null });
                 break;
             } catch (e) {
                 const miss = e.data && e.data.missing;
@@ -1679,8 +1400,8 @@ export const PrevizRenderPanelMixin = {
                     passes = { ...st.passes, beauty: await asDataUrl(doc, ai.url) };
                     tell(`Layer ${i + 1} of ${stack.length}: ${c.name || "workflow"}`);
                 }
-                const one = await this._r3RunOne(st, c, runValues({ values: stack[i].values, prompt: k.prompt }, c), passes, {
-                    box, rpx, run, tell,
+                const one = await this._r3RunOne(st, c, runValues({ values: stack[i].values, prompt: stack[i].prompt }, c), passes, {
+                    box, rpx, run, tell, layer: stack[i],
                     under: i === 0 ? (sameFrame ? st.ai.url : st.passes.beauty) : ai.url,
                     sameFrame: i === 0 && sameFrame,
                 });
@@ -1713,3 +1434,388 @@ export const PrevizRenderPanelMixin = {
         return answer;
     },
 };
+
+// ── The AI Render Stack panel (Sebastian 2026-11-26: "make this its own panel") ──
+// The stack of workflows a Render panel runs, in a dock panel of its own: an Add bar over one row
+// per layer (Blender's modifier stack), each row's left caret folding that layer's own options -
+// its prompt, its reference pictures, its size and the workflow's settings. It edits the primary
+// Render panel's kept state (scene.renderAi.render3d), so the stack travels with the scene and the
+// Render panel's Run / AI button still run exactly what is stacked here.
+
+const STACK_SIZES = [["", "As the render"], ["1024x1024", "Square 1024"], ["1280x720", "HD 720"],
+    ["1920x1080", "HD 1080"], ["2048x2048", "Square 2048"], ["2048x1152", "2K 16:9"],
+    ["1080x1920", "Vertical 1080"], ["custom", "Own size…"]];
+
+/** Take layer `i` off the stack `k`; an empty stack takes the render panel's result with it. */
+function stackRemove(v, rst, k, i) {
+    stackSync(k, rst);
+    k.stack.splice(i, 1);
+    const n = k.stack.length;
+    const sel = (rst.sel || 0) > i ? (rst.sel || 0) - 1 : (rst.sel || 0);
+    rst.sel = Math.max(0, Math.min(sel, n - 1));
+    const l = n ? k.stack[rst.sel] : null;
+    if (l) { k.custom = l.custom; k.values = l.values || {}; k.prompt = l.prompt || ""; k.refs = l.refs || []; }
+    else {
+        delete k.custom; delete k.values; delete k.prompt; delete k.refs; delete k.last;
+        rst.ai = null;
+        if (rst.pass && rst.pass.startsWith("ai")) rst.pass = "beauty";
+        rst.wipe = false;
+    }
+    v.previzPersist && v.previzPersist();
+    if (v._r3Refresh) v._r3Refresh();
+}
+
+/** A layer's right-hand menu / right-click: replace, load in Canvas, move, remove. */
+function stackMenu(v, rst, k, e, i, anchor) {
+    const n = (k.stack || []).length;
+    const l = (k.stack || [])[i];
+    const refresh = () => { if (v._r3Refresh) v._r3Refresh(); };
+    const move = (dir) => {
+        stackSync(k, rst);
+        const j = i + dir;
+        if (j < 0 || j >= k.stack.length) return;
+        [k.stack[i], k.stack[j]] = [k.stack[j], k.stack[i]];
+        if ((rst.sel || 0) === i) rst.sel = j; else if ((rst.sel || 0) === j) rst.sel = i;
+        stackSelect(k, rst, rst.sel || 0);
+        v.previzPersist && v.previzPersist();
+        refresh();
+    };
+    v._previzOpenMenu([
+        { label: "Replace workflow…", run: () => {
+            stackSelect(k, rst, i);
+            v.previzPersist && v.previzPersist();
+            refresh();
+            // The menu item that ran is gone with its menu: anchor to the row's own menu button.
+            const host = anchor && anchor.ownerDocument;
+            const row = host && host.querySelector(`.r3-stack-row[data-i="${rst.sel || 0}"]`);
+            v._r3PickMenu(rst, (row && row.querySelector(".r3-menu")) || (anchor || e.target));
+        } },
+        { label: "Load workflow in Canvas", disabled: !(l && l.custom && l.custom.graph),
+          title: "Put this layer's workflow on the open canvas",
+          run: () => { if (!loadCustomInCanvas(l.custom)) notice("error", "Workflow not loaded", "The canvas refused the workflow."); } },
+        "-",
+        { label: "Move up", disabled: i === 0, run: () => move(-1) },
+        { label: "Move down", disabled: i === n - 1, run: () => move(1) },
+        "-",
+        { label: "Remove", run: () => stackRemove(v, rst, k, i) },
+    ], e.clientX, e.clientY);
+}
+
+/** One layer's reference-pictures strip (thumbnails, +, drop), editing `layer.refs`. */
+function stackRefsRow(v, rst, k, layer, d, changed) {
+    const row = el(d, "div", "r3-refs");
+    const list = el(d, "div", "r3-refs-list");
+    list.style.display = "contents";
+    const refs = layer.refs || [];
+    const slots = refSlots(layer.custom);
+    refs.forEach((r, i) => {
+        const t = el(d, "div", "r3-ref" + (layer.custom && i >= slots ? " unused" : ""));
+        t.title = r.name + (layer.custom && i >= slots ? " (this workflow does not take it)" : "");
+        const img = el(d, "img");
+        img.draggable = false;
+        try { img.src = v.thumbUrl ? v.thumbUrl(r.path ? { path: r.path, external: true } : r) : ""; } catch (_) { /* no picture */ }
+        const x = el(d, "button", "r3-ref-x", "×");
+        x.title = "Remove";
+        x.onclick = (e) => { e.stopPropagation(); layer.refs = (layer.refs || []).filter((_, j) => j !== i); changed(); };
+        t.append(img, el(d, "span", "r3-ref-n", `ref${i + 1}`), x);
+        list.append(t);
+    });
+    const add = el(d, "button", "r3-btn r3-ref-add", "+");
+    add.title = "Add a reference picture: the History selection or a file (or drop one here)";
+    add.disabled = refs.length >= MAX_REFS;
+    add.onclick = () => {
+        const r = add.getBoundingClientRect();
+        v._previzOpenMenu([
+            { label: "The History selection", run: () => {
+                const got = (v.selectedHistorySnapshots ? v.selectedHistorySnapshots() : []).map((x) => x.imgObj)
+                    .filter((f) => f && A.isAtlasPicture(f) && A.pictureRef(f));
+                if (!got.length) { notice("info", "Reference pictures", "Select pictures in the History strip first (Ctrl+click for several)."); return; }
+                layer.refs = (layer.refs || []).concat(got.map(cleanRef).filter(Boolean)).slice(0, MAX_REFS); changed();
+            } },
+            { label: "From a file…", run: () => openFilePicker(v.container, {
+                id: "render3d-refs", title: "Reference pictures", kind: "image", exts: [".png", ".jpg", ".jpeg", ".webp"],
+                multiple: true, go: "Add", note: `Up to ${MAX_REFS} pictures the workflow takes beside the render.`,
+                onPick: async (files) => { layer.refs = (layer.refs || []).concat(files.map((f) => cleanRef({ path: f.path, name: f.name })).filter(Boolean)).slice(0, MAX_REFS); changed(); return { ok: true }; },
+            }) },
+            ...(refs.length ? ["-", { label: "Remove all", run: () => { layer.refs = []; changed(); } }] : []),
+        ], r.left, r.bottom + 2, add);
+    };
+    const hint = el(d, "span", "r3-hint r3-ref-hint");
+    hint.textContent = !refs.length
+        ? (!layer.custom ? "Drop pictures here for a workflow that takes references." : slots ? `This workflow takes ${slots === 1 ? "one reference picture" : `up to ${slots} reference pictures`}: drop them here.` : "")
+        : !slots ? "This workflow takes no reference pictures (name a loader comp:ref1 in your own)."
+        : (layer.custom && layer.custom.source === "prepared" && REF_HINTS[layer.custom.path]) || `Used: ${Math.min(refs.length, slots)} of ${refs.length}.`;
+    row.append(el(d, "span", "r3-label", "Refs"), list, add, hint);
+    wirePictureDrop(row, {
+        onItems: (items) => { layer.refs = (layer.refs || []).concat(items.map(cleanRef).filter(Boolean)).slice(0, MAX_REFS); changed(); },
+        onSkipped: (n) => notice("warn", "Reference pictures", `${n} file(s) left out: only pictures (png, jpg, webp).`),
+        onStatus: (text, bad) => { if (bad) notice("error", "Reference pictures", text); },
+    });
+    return row;
+}
+
+/**
+ * One AI Render Stack panel in `host`. It shows and edits the primary Render panel's stack
+ * (scene.renderAi.render3d); `saved` keeps which layers are folded open.
+ */
+export function createStackPanelInstance(v, host, st, saved, id) {
+    Object.assign(st, { id, open: {} }, saved && saved.open ? { open: { ...saved.open } } : {});
+    const doc = () => host.ownerDocument;
+    let ui = null;
+    const rstate = () => { const p = v._r3Primary && v._r3Primary(); return p ? p.st : null; };
+    const keep = () => {
+        const sc = v.previzScene && v.previzScene();
+        if (!sc) return null;
+        if (!sc.renderAi || typeof sc.renderAi !== "object") sc.renderAi = {};
+        return sc.renderAi.render3d || (sc.renderAi.render3d = {});
+    };
+    const persist = () => { if (v.previzPersist) v.previzPersist(); };
+    const refreshBoth = () => { if (v._r3Refresh) v._r3Refresh(); };
+
+    function build() {
+        host.querySelectorAll(":scope > .r3-panel, :scope > style[data-r3s]").forEach((n) => n.remove());
+        const d = doc();
+        const style = el(d, "style"); style.dataset.r3s = "1"; style.textContent = STYLE;
+        const root = el(d, "div", "r3-panel r3-stack-panel");
+        const scroll = el(d, "div", "r3-scroll r3-stack-scroll");
+        const rst = rstate();
+        const k = keep();
+        if (!rst || !k) {
+            scroll.append(el(d, "div", "r3-empty", "The AI Render Stack: open a 3D scene to stack workflows on its render."));
+            root.append(scroll); host.append(style, root);
+            ui = { root, scroll, sig: null };
+            return ui;
+        }
+        const stack = stackSync(k, rst);
+        const changed = () => { persist(); refreshBoth(); };
+        const NS = "http://www.w3.org/2000/svg";
+        const ico = (paths, cls) => {
+            const s = d.createElementNS(NS, "svg");
+            s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor");
+            s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round");
+            if (cls) s.setAttribute("class", cls);
+            for (const p of paths) { const n = d.createElementNS(NS, "path"); n.setAttribute("d", p); s.append(n); }
+            return s;
+        };
+        const add = el(d, "button", "r3-stack-add", "+  Add workflow");
+        add.title = "Put a workflow on the stack: what the layer before gives is what it gets";
+        add.onclick = () => {
+            const kk = keep();
+            const rs = rstate();
+            if (!kk || !rs) return;
+            stackSync(kk, rs);
+            stackSelect(kk, rs, kk.stack.length);
+            persist(); refreshBoth();
+            const now = host.querySelector(".r3-stack-add");
+            v._r3PickMenu(rs, now || add);
+        };
+        scroll.append(add);
+        stack.forEach((layer, i) => {
+            const open = !!st.open[i];
+            const row = el(d, "div", "r3-stack-row" + (open ? " open" : "") + (i === (rst.sel || 0) ? " sel" : ""));
+            row.dataset.i = String(i);
+            const caret = el(d, "button", "r3-sbtn r3-caret");
+            caret.append(ico(["m9 6 6 6-6 6"]));
+            caret.title = open ? "Fold this layer's options away" : "Unfold this layer's options (prompt, references, size, settings)";
+            row.append(caret, ico(["M4 4h6v6H4z", "M14 14h6v6h-6z", "M10 7h2a2 2 0 0 1 2 2v5"], "r3-ico"));
+            const name = el(d, "span", "r3-stack-name", (layer.custom && (layer.custom.name || "My workflow")) || "—");
+            name.title = "Click to make this the layer the agent and the Run button's panel see";
+            row.append(name);
+            const menuBtn = el(d, "button", "r3-sbtn r3-menu");
+            menuBtn.append(ico(["M4 7h9", "M17 7h3", "M4 12h3", "M11 12h9", "M4 17h13", "M21 17h-1"], "r3-sliders"));
+            menuBtn.title = "Replace, load in Canvas, move, remove";
+            const x = el(d, "button", "r3-sbtn r3-x", "✕");
+            x.title = "Take this layer off the stack";
+            const grip = el(d, "button", "r3-sbtn r3-grip", "⋮⋮");
+            grip.title = "Drag to change the order";
+            row.append(menuBtn, x, grip);
+            caret.onclick = (ev) => { ev.stopPropagation(); st.open[i] = !st.open[i]; persist(); build(); };
+            name.onclick = (ev) => {
+                ev.stopPropagation();
+                const kk = keep(); const rs = rstate();
+                if (!kk || !rs || (rs.sel || 0) === i) return;
+                stackSelect(kk, rs, i);
+                changed();
+            };
+            menuBtn.onclick = (ev) => { ev.stopPropagation(); stackMenu(v, rst, k, ev, i, menuBtn); };
+            x.onclick = (ev) => { ev.stopPropagation(); stackRemove(v, rst, k, i); };
+            row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); stackMenu(v, rst, k, ev, i, menuBtn); });
+            grip.addEventListener("pointerdown", (ev) => {
+                if (ev.button !== 0) return;
+                ev.preventDefault(); ev.stopPropagation();
+                const n = stack.length;
+                let at = i;
+                const rows = () => [...scroll.querySelectorAll(".r3-stack-row")];
+                const mark = () => rows().forEach((r, j) => {
+                    r.classList.toggle("drop-before", at < n && j === at);
+                    r.classList.toggle("drop-after", at === n && j === n - 1);
+                });
+                const move = (e2) => {
+                    let want = n;
+                    const rs2 = rows();
+                    for (let j = 0; j < rs2.length; j++) {
+                        const b = rs2[j].getBoundingClientRect();
+                        if (e2.clientY < b.top + b.height / 2) { want = j; break; }
+                    }
+                    if (want === at) return;
+                    at = want; mark();
+                };
+                const up = () => {
+                    grip.removeEventListener("pointermove", move);
+                    grip.removeEventListener("pointerup", up);
+                    grip.removeEventListener("pointercancel", up);
+                    rows().forEach((r) => r.classList.remove("drop-before", "drop-after"));
+                    if (at === i || at === i + 1) return;
+                    const kk = keep(); const rs3 = rstate();
+                    if (!kk || !rs3) return;
+                    stackSync(kk, rs3);
+                    const [mv] = kk.stack.splice(i, 1);
+                    const to = at > i ? at - 1 : at;
+                    kk.stack.splice(to, 0, mv);
+                    rs3.sel = to;
+                    stackSelect(kk, rs3, to);
+                    changed();
+                };
+                grip.addEventListener("pointermove", move);
+                grip.addEventListener("pointerup", up);
+                grip.addEventListener("pointercancel", up);
+                try { grip.setPointerCapture(ev.pointerId); } catch (_) { /* a synthetic event has no pointer */ }
+            });
+            scroll.append(row);
+            if (!open) return;
+            // The layer's own options, folded under its row.
+            const body = el(d, "div", "r3-layer-body");
+            const c = layer.custom;
+            if (c) {
+                const takes = [...new Set((c.inputs || []).map((x) => v._r3PassOf(x)))];
+                body.append(Object.assign(el(d, "div", "r3-hint r3-takes"),
+                    { textContent: `Takes: ${takes.length ? takes.join(", ") : "nothing (it runs on its own)"} · gives: ${(c.outputs || []).map((o) => o.name).join(", ")}` }));
+            }
+            // Prompt.
+            const pp = promptParam(c);
+            const pRow = el(d, "div", "r3-prompt");
+            const pIn = el(d, "textarea", "r3-prompt-in");
+            pIn.rows = 2;
+            pIn.value = layer.prompt || "";
+            pIn.disabled = !!(c && !pp);
+            pIn.placeholder = !c ? "Describe the scene; used by the workflow you choose."
+                : pp ? `Describe the scene (empty: the workflow's own - ${String(pp.def || "").slice(0, 70)}${String(pp.def || "").length > 70 ? "…" : ""})`
+                : "This workflow takes no prompt";
+            pIn.addEventListener("keydown", (e) => {
+                e.stopPropagation();
+                if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); pIn.blur(); const rs = rstate(); if (rs) v.previzRenderAi(rs); }
+            });
+            pIn.addEventListener("input", () => { layer.prompt = pIn.value; if ((rst.sel || 0) === i) k.prompt = layer.prompt; clearTimeout(ui.pTimer); ui.pTimer = setTimeout(persist, 400); });
+            pIn.addEventListener("change", () => { layer.prompt = pIn.value; if ((rst.sel || 0) === i) k.prompt = layer.prompt; changed(); });
+            pRow.append(el(d, "span", "r3-label", "Prompt"), pIn);
+            body.append(pRow);
+            // Reference pictures.
+            body.append(stackRefsRow(v, rst, k, layer, d, changed));
+            // The size the workflow answers in.
+            const sRow = el(d, "div", "r3-row");
+            sRow.append(el(d, "span", "r3-label", "Size"));
+            const sz = el(d, "select", "r3-pass-select");
+            for (const [val, label] of STACK_SIZES) sz.append(Object.assign(el(d, "option"), { value: val, textContent: label }));
+            const cur = layer.size ? (STACK_SIZES.some(([s]) => s === `${layer.size.w}x${layer.size.h}`) ? `${layer.size.w}x${layer.size.h}` : "custom") : "";
+            sz.value = cur;
+            sz.addEventListener("change", () => {
+                if (sz.value === "") delete layer.size;
+                else if (sz.value === "custom") layer.size = layer.size || { w: 1920, h: 1080 };
+                else { const [w, h] = sz.value.split("x").map(Number); layer.size = { w, h }; }
+                szCustom.style.display = sz.value === "custom" ? "" : "none";
+                changed();
+            });
+            sz.addEventListener("keydown", (e) => e.stopPropagation());
+            const szCustom = el(d, "span", "r3-inline");
+            const sw = el(d, "input", "rd-in rd-num"); sw.type = "number"; sw.min = "64"; sw.max = "8192"; sw.value = String((layer.size && layer.size.w) || 1920);
+            const sh = el(d, "input", "rd-in rd-num"); sh.type = "number"; sh.min = "64"; sh.max = "8192"; sh.value = String((layer.size && layer.size.h) || 1080);
+            const onSz = () => { if (sz.value === "custom") { layer.size = { w: Number(sw.value) || 1920, h: Number(sh.value) || 1080 }; changed(); } };
+            sw.addEventListener("change", onSz); sh.addEventListener("change", onSz);
+            sw.addEventListener("keydown", (e) => e.stopPropagation()); sh.addEventListener("keydown", (e) => e.stopPropagation());
+            szCustom.append(sw, el(d, "span", "r3-sub", "×"), sh);
+            szCustom.style.display = sz.value === "custom" ? "" : "none";
+            sRow.append(sz, szCustom);
+            body.append(sRow);
+            // The workflow's own settings.
+            const vals = layer.values || {};
+            for (const p of (c && c.params) || []) {
+                if (p === pp) continue;
+                const r = el(d, "div", "r3-row");
+                r.append(el(d, "span", "r3-label", p.name));
+                let inp;
+                const cv = vals[p.id] !== undefined ? vals[p.id] : p.def;
+                if (p.kind === "prompt" || (typeof p.def === "string" && p.def.length > 40)) {
+                    inp = el(d, "textarea", "rd-in r3-param"); inp.value = String(cv ?? "");
+                } else if (p.kind === "bool") {
+                    inp = el(d, "input", "r3-param-bool"); inp.type = "checkbox"; inp.checked = !!cv;
+                } else if (p.kind === "int" || p.kind === "num") {
+                    inp = el(d, "input", "rd-in rd-num r3-param"); inp.type = "number"; inp.step = p.kind === "int" ? "1" : "any"; inp.value = String(cv ?? "");
+                } else {
+                    inp = el(d, "input", "rd-in r3-param"); inp.value = String(cv ?? "");
+                }
+                inp.addEventListener("keydown", (e) => e.stopPropagation());
+                inp.dataset.param = p.id;
+                inp.addEventListener("change", () => {
+                    layer.values = layer.values || {};
+                    layer.values[p.id] = p.kind === "bool" ? inp.checked : (p.kind === "int" || p.kind === "num") ? Number(inp.value) : inp.value;
+                    if ((rst.sel || 0) === i) stackSync(k, rst);
+                    changed();
+                });
+                r.append(inp);
+                body.append(r);
+            }
+            scroll.append(body);
+        });
+        if (rst.askDl) {
+            const a = el(d, "div", "r3-ask", rst.askDl.text);
+            const row = el(d, "div", "r3-row");
+            const yes = el(d, "button", "r3-btn primary r3-dl-yes", "Download");
+            const no = el(d, "button", "r3-btn r3-dl-no", "Not now");
+            yes.onclick = () => rst.askDl.answer(true);
+            no.onclick = () => rst.askDl.answer(false);
+            row.append(yes, no);
+            a.append(row);
+            scroll.append(a);
+        }
+        const go = el(d, "div", "r3-row");
+        const run = el(d, "button", "r3-btn r3-run", rst.run ? "Stop" : "Run stack");
+        run.title = "Run the stack on the current render: the layers in order, each on the picture the one before gave (a new seed; the frame is rendered first when it is not yet)";
+        run.disabled = !stack.some((l) => l && l.custom) && !rst.run;
+        run.onclick = () => (rst.run ? v._r3Stop(rst) : v.previzRenderAi(rst));
+        go.append(el(d, "span", "r3-label", ""), run);
+        scroll.append(go);
+        if (rst.error) scroll.append(el(d, "div", "r3-error", rst.error));
+        root.append(scroll);
+        host.append(style, root);
+        ui = { root, scroll, sig: null };
+        return ui;
+    }
+
+    function sig() {
+        const rst = rstate();
+        const k = keep();
+        if (!rst || !k) return "none";
+        return JSON.stringify([
+            (k.stack || []).map((l) => [(l.custom && [l.custom.sig, l.custom.name]) || null, l.prompt || "", (l.refs || []).length, l.size || null, l.values || {}]),
+            rst.sel || 0, !!rst.run, rst.askDl ? 1 : 0, rst.error, st.open,
+        ]);
+    }
+
+    function refresh() {
+        if (!ui || !ui.root.isConnected || ui.root.ownerDocument !== host.ownerDocument) { build(); return; }
+        const s = sig();
+        if (ui.sig !== s) { ui.sig = s; build(); }
+    }
+
+    build();
+    ui.sig = sig();
+    return {
+        el: host,
+        refresh,
+        build: () => { build(); ui.sig = sig(); },
+        wake: () => refresh(),
+        save: () => ({ open: { ...st.open } }),
+        dispose: () => {},
+        st,
+    };
+}

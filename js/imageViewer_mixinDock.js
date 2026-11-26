@@ -82,6 +82,9 @@ const DOCK_PANELS = {
     // The Render panel: the render settings, one frame's passes and an AI workflow over them
     // (imageViewer_previzRenderPanel.js; the Render dialog was merged into it, Sebastian 2026-11-24).
     render3d: { prop: "render3dPanel", label: "Render", minW: 260, minH: 220, defaultRail: "right", size: 2 },
+    // The AI Render Stack: the workflows the Render panel runs over its passes, in order
+    // (imageViewer_previzRenderPanel.js createStackPanelInstance).
+    renderStack: { prop: "renderStackPanel", label: "AI Render Stack", minW: 240, minH: 160, defaultRail: "right", size: 2 },
     // The scene's animation layers (imageViewer_animLayersPanel.js).
     animLayers: { prop: "animLayersPanel", label: "Anim Layers", minW: 240, minH: 120, defaultRail: "right" },
     // A graph is only readable with some height under it, so this one asks for

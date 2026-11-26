@@ -190,7 +190,7 @@ def drop_nodes(graph, gone):
 
 
 def prepare(custom, passes, input_dir, *, values=None, frame=0, folder_paths=None, node_classes=None, models=None,
-            refs=None):
+            refs=None, size=None):
     """The workflow filled in with the passes: {run, graph, outputs {node: name}, main, uses, seed, label}."""
     if not isinstance(custom, dict) or not isinstance(custom.get("graph"), dict):
         raise RenderAiError("no workflow: take one from the canvas, a saved workflow, a file or the prepared list")
@@ -247,8 +247,10 @@ def prepare(custom, passes, input_dir, *, values=None, frame=0, folder_paths=Non
         uses[x["name"]] = p
     drop_nodes(graph, unused)
     # The models answer in the render's own shape and size, as close as each of them can
-    # (Sebastian 2026-11-26); the beauty pass is the region's own when a region is rendered.
-    apply_render_size(graph, _png_size(passes.get("beauty")))
+    # (Sebastian 2026-11-26); a layer may ask for a size of its own, else the beauty pass's
+    # (the region's own when a region is rendered).
+    want = size if isinstance(size, (list, tuple)) and len(size) == 2 and all(isinstance(v, (int, float)) and v > 0 for v in size) else None
+    apply_render_size(graph, want or _png_size(passes.get("beauty")))
     vals = values if isinstance(values, dict) else {}
     for prm in custom.get("params") or []:
         k, inp = prm.get("node"), prm.get("input")
@@ -306,7 +308,8 @@ def register(add, *, web, path_access, folder_paths):
             res = await asyncio.get_running_loop().run_in_executor(None, lambda: prepare(
                 body.get("custom"), body.get("passes"), folder_paths.get_input_directory(),
                 values=body.get("values"), frame=body.get("frame") or 0, folder_paths=folder_paths,
-                node_classes=node_classes(), models=body.get("models"), refs=body.get("refs")))
+                node_classes=node_classes(), models=body.get("models"), refs=body.get("refs"),
+                size=body.get("size")))
         except G.Missing as e:
             return web.json_response({"error": str(e), "missing": e.missing}, status=409)
         except (RenderAiError, W.WorkflowError, G.GenerateError, ValueError, OSError) as e:
