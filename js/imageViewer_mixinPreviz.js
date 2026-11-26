@@ -24,7 +24,7 @@ import { viewerActionKeyLabel } from "./imageViewer_keymap.js";
 import { PrevizOutlinerMixin } from "./imageViewer_previzOutliner.js";
 import { createOutlinerInstance } from "./imageViewer_previzOutlinerInstance.js";
 import { PrevizUsdMixin } from "./imageViewer_previzUsd.js";
-import { notice, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
+import { notice, canvasContext, openExportDialog, openFilePicker } from "./imageViewer_exportUI.js";
 
 /** The scale that makes an FBX in `unitScaleFactor` cm units metres (1 when it already is, or says nothing). */
 export function fbxMetreScale(unitScaleFactor) {
@@ -1575,7 +1575,8 @@ export const PrevizMixin = {
         if (this._previzAddMenu) { this._previzCloseAddMenu(); return; }
         const a = anchor.getBoundingClientRect();
         this._previzOpenMenu([
-            { label: "Save scene\u2026", run: () => this.previzSaveSceneFile() },
+            { label: "Save scene", run: () => this.previzSaveScene() },
+            { label: "Save scene as\u2026", run: () => this.previzSaveSceneFile() },
             "-",
             { label: "Render\u2026", run: () => this.previzRenderDialog() },
         ], a.left, a.bottom + 2, anchor);
@@ -2023,6 +2024,38 @@ export const PrevizMixin = {
     },
 
     /**
+     * Write the scene out as `name` in `format` (usda / usdc / json), a new version where
+     * every export goes. Answers { ok, message, notes } as the export dialog's onExport wants.
+     */
+    async _previzSaveSceneWrite(scene, name, format, context) {
+        const usd = format === "usda" || format === "usdc";
+        const extra = usd ? this._previzUsdBody(scene) : { body: { scene }, skipped: [] };
+        const res = await fetch(api.apiURL("/imageviewer/scene"), {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...extra.body, name, format, rule: true, context }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return { ok: false, message: `Could not save: ${data.error || res.status}` };
+        const notes = [...(data.notes || []), ...extra.skipped.map((n) => `${n}: too big to send, kept as a path only`)];
+        return { ok: true, where: "output/" + (data.relative || data.name), notes };
+    },
+
+    /**
+     * Save the scene as it is: no dialog, the scene's own name and the format last saved in
+     * (USD until one is chosen). The file is a new version, as every save is.
+     */
+    async previzSaveScene() {
+        const scene = this.previzScene();
+        if (!scene) return;
+        const format = (this._previzSaveFormat && this._previzSaveFormat.format) || "usda";
+        const done = await this._previzSaveSceneWrite(scene, this.previzRenderName(), format, canvasContext());
+        if (!done.ok) { notice("error", "Scene not saved", done.message); return; }
+        notice("success", "Scene saved", done.where);
+        if (done.notes.length) notice("info", "Saved, with notes", done.notes.join("\n"));
+    },
+
+    /**
      * Save the scene as a file: a new version each time, where every export goes.
      * A USD scene by default (Sebastian 2026-11-17): every mesh referenced from it,
      * converted into assets/ beside it when it is not USD already; the older JSON
@@ -2032,7 +2065,7 @@ export const PrevizMixin = {
         const scene = this.previzScene();
         if (!scene) return;
         await openExportDialog(this.container, {
-            title: "Save scene",
+            title: "Save scene as",
             kind: "scene",
             name: this.previzRenderName(),
             fixed: [{ value: "usda", label: "USD scene (.usda)" }, { value: "usdc", label: "USD scene, binary (.usdc)" },
@@ -2044,18 +2077,10 @@ export const PrevizMixin = {
                 + "once into assets/ beside it. Open scene\u2026 reads any of them back.",
             onExport: async (v) => {
                 this._previzSaveFormat = { format: v.format };
-                const usd = v.format === "usda" || v.format === "usdc";
-                const extra = usd ? this._previzUsdBody(scene) : { body: { scene }, skipped: [] };
-                const res = await fetch(api.apiURL("/imageviewer/scene"), {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ ...extra.body, name: v.name, format: v.format, rule: true, context: v.context }),
-                });
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) return { ok: false, message: `Could not save: ${data.error || res.status}` };
-                notice("success", "Scene saved", "output/" + (data.relative || data.name));
-                const notes = [...(data.notes || []), ...extra.skipped.map((n) => `${n}: too big to send, kept as a path only`)];
-                if (notes.length) notice("info", "Saved, with notes", notes.join("\n"));
+                const done = await this._previzSaveSceneWrite(scene, v.name, v.format, v.context);
+                if (!done.ok) return done;
+                notice("success", "Scene saved", done.where);
+                if (done.notes.length) notice("info", "Saved, with notes", done.notes.join("\n"));
                 return { ok: true };
             },
         });

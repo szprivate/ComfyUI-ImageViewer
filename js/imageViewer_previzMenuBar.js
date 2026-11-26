@@ -131,7 +131,9 @@ export const PrevizMenuBarMixin = {
             { label: "Reference scene…", title: "Bring a saved scene in under a namespace, linked: "
                 + "a newer version of the file is picked up here", run: () => this.previzReferenceDialog() },
             "-",
-            { label: "Save scene…", cmd: "PrevizSaveScene", run: () => this.previzSaveSceneFile() },
+            { label: "Save scene", cmd: "PrevizSaveSceneNow", title: "Save the open scene under its own name, as the next version",
+              run: () => this.previzSaveScene() },
+            { label: "Save scene as…", cmd: "PrevizSaveScene", run: () => this.previzSaveSceneFile() },
             ...(exports.length ? [{ label: "Export character", sub: exports }] : []),
             "-",
             { label: "Render…", cmd: "PrevizRender", run: () => this.previzRenderDialog() },
