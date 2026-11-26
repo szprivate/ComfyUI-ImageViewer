@@ -31,6 +31,15 @@ def png(value, alpha=255):
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
 
+def png_wh(w, h, value=200):
+    from PIL import Image
+    a = np.full((h, w, 4), value, np.uint8)
+    a[..., 3] = 255
+    buf = io.BytesIO()
+    Image.fromarray(a, "RGBA").save(buf, "PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
 def flow():
     return {
         "1": {"class_type": "LoadImage", "inputs": {"image": "x.png", "upload": "image"}},
@@ -168,6 +177,48 @@ class RealisticRender(unittest.TestCase):
             e, g = G._builtin("comp_r3_zimage_depth")
             custom = W.make_custom(g, e["label"])
             self.assertIn("wf_layout_strength", [p["id"] for p in custom["params"]])
+        finally:
+            for k in [k for k in sys.modules if k == pkg or k.startswith(pkg + ".")]:
+                sys.modules.pop(k, None)
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_the_workflows_take_over_the_render_size(self):
+        tmp = tempfile.mkdtemp()
+        _app, dirs, pkg = _load(tmp, [])
+        try:
+            G = importlib.import_module(pkg + ".paint_generate")
+            W = importlib.import_module(pkg + ".comp_ai_workflow")
+            R = importlib.import_module(pkg + ".render3d_ai")
+            passes = {"beauty": png_wh(1920, 1080), "depth": png_wh(1920, 1080)}
+            # Seedream: the render's own size, as a Custom preset.
+            e, g = G._builtin("comp_r3_seedream")
+            res = R.prepare(W.make_custom(g, e["label"]), passes, dirs["input"])
+            n = res["graph"]["4"]["inputs"]
+            self.assertEqual((n["model.width"], n["model.height"]), (1920, 1080))
+            self.assertEqual(n["model.size_preset"], "Custom")
+            # A render smaller than the model's floor is scaled up, keeping the shape.
+            res = R.prepare(W.make_custom(g, e["label"]),
+                            {"beauty": png_wh(640, 360), "depth": png_wh(640, 360)}, dirs["input"])
+            n = res["graph"]["4"]["inputs"]
+            self.assertEqual((n["model.width"], n["model.height"]), (1820, 1024))
+            # The Gemini family: the nearest ratio and tier.
+            e, g = G._builtin("comp_r3_nano_banana_pro")
+            res = R.prepare(W.make_custom(g, e["label"]), passes, dirs["input"])
+            n = res["graph"]["4"]["inputs"]
+            self.assertEqual(n["aspect_ratio"], "16:9")
+            self.assertEqual(n["resolution"], "2K")
+            e, g = G._builtin("comp_r3_nano_banana2")
+            res = R.prepare(W.make_custom(g, e["label"]),
+                            {"beauty": png_wh(3840, 2160), "depth": png_wh(3840, 2160)}, dirs["input"])
+            n = res["graph"]["4"]["inputs"]
+            self.assertEqual(n["aspect_ratio"], "16:9")
+            self.assertEqual(n["resolution"], "4K")
+            # The GPT one: Custom in multiples of 16, held to its bounds.
+            e, g = G._builtin("comp_r3_gpt25")
+            res = R.prepare(W.make_custom(g, e["label"]), passes, dirs["input"])
+            n = res["graph"]["3"]["inputs"]
+            self.assertEqual(n["model.size"], "Custom")
+            self.assertEqual((n["model.custom_width"], n["model.custom_height"]), (1920, 1088))
         finally:
             for k in [k for k in sys.modules if k == pkg or k.startswith(pkg + ".")]:
                 sys.modules.pop(k, None)

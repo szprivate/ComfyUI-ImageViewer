@@ -33,6 +33,7 @@ import json
 import os
 import re
 import secrets
+import struct
 
 from . import comp_ai_workflow as W
 from . import paint_generate as G
@@ -89,6 +90,82 @@ def _png(dataurl):
     if len(raw) > MAX_PASS_BYTES:
         raise RenderAiError("a pass is too large")
     return raw
+
+
+def _png_size(dataurl):
+    """(w, h) of a PNG data URL, from its header; None when it is not one."""
+    m = _DATA.match(str(dataurl or ""))
+    if not m:
+        return None
+    raw = base64.b64decode(m.group(1)[:32], validate=False)
+    if len(raw) < 24 or raw[12:16] != b"IHDR":
+        return None
+    w, h = struct.unpack(">II", raw[16:24])
+    return (w, h) if w > 0 and h > 0 else None
+
+
+# What the picture models answer in (Sebastian 2026-11-26: "the workflows take over the
+# resolution / aspect ratio of the 3D render, closest possible"): the Gemini family picks a
+# ratio and a tier, Seedream and the GPT one the nearest size of their own that keeps the shape.
+GEMINI_ASPECTS = (("1:1", 1.0), ("2:3", 2 / 3), ("3:2", 3 / 2), ("3:4", 3 / 4), ("4:3", 4 / 3),
+                  ("4:5", 4 / 5), ("5:4", 5 / 4), ("9:16", 9 / 16), ("16:9", 16 / 9), ("21:9", 21 / 9))
+GEMINI_NODES = ("GeminiImage2Node", "GeminiNanoBanana2", "GeminiNanoBanana2V2")
+
+
+def _fit(w, h, lo, hi, mult=1):
+    """The closest to w x h that keeps the ratio with both sides in [lo, hi], in `mult` steps."""
+    if not (w > 0 and h > 0):
+        return None
+    k = min(hi / max(w, h), max(lo / min(w, h), 1.0))
+    tw, th = w * k, h * k
+    if min(tw, th) < lo:                       # a ratio too extreme for the bounds: keep the shape
+        k = hi / max(w, h)
+        tw, th = w * k, h * k
+    if mult > 1:
+        tw, th = round(tw / mult) * mult, round(th / mult) * mult
+        tw, th = max(lo, tw), max(lo, th)
+    return int(max(1, tw)), int(max(1, th))
+
+
+def apply_render_size(graph, size):
+    """Tell the picture models of *graph* to answer in the render's shape and size, as close as they can."""
+    if not size:
+        return
+    w, h = size
+    for node in graph.values():
+        if not isinstance(node, dict):
+            continue
+        ins = node.get("inputs")
+        c = node.get("class_type")
+        if not isinstance(ins, dict) or not c:
+            continue
+        if c == "ByteDanceSeedreamNodeV3":
+            lo, hi = (240, 8592) if str(ins.get("model", "")).startswith("seedream 5.5") else (1024, 4512)
+            got = _fit(w, h, lo, hi)
+            if not got:
+                continue
+            if "model.size_preset" in ins:
+                ins["model.size_preset"] = "Custom"
+            if "model.width" in ins:
+                ins["model.width"] = got[0]
+            if "model.height" in ins:
+                ins["model.height"] = got[1]
+        elif c in GEMINI_NODES:
+            if "aspect_ratio" in ins:
+                ins["aspect_ratio"] = min(GEMINI_ASPECTS, key=lambda a: abs(a[1] - w / h))[0]
+            if "resolution" in ins:
+                ins["resolution"] = "1K" if max(w, h) <= 1024 else "2K" if max(w, h) <= 2048 else "4K"
+        elif c in ("OpenAIGPTImageNodeV2", "OpenAIGPTImageNode"):
+            got = _fit(w, h, 1024, 3840, 16)
+            if not got:
+                continue
+            pre = "model." if any(str(k).startswith("model.") for k in ins) else ""
+            if f"{pre}size" in ins:
+                ins[f"{pre}size"] = "Custom"
+            if f"{pre}custom_width" in ins:
+                ins[f"{pre}custom_width"] = got[0]
+            if f"{pre}custom_height" in ins:
+                ins[f"{pre}custom_height"] = got[1]
 
 
 def _ref(dataurl):
@@ -169,6 +246,9 @@ def prepare(custom, passes, input_dir, *, values=None, frame=0, folder_paths=Non
             node["inputs"]["channel"] = "red"          # the mask pass is white where something is
         uses[x["name"]] = p
     drop_nodes(graph, unused)
+    # The models answer in the render's own shape and size, as close as each of them can
+    # (Sebastian 2026-11-26); the beauty pass is the region's own when a region is rendered.
+    apply_render_size(graph, _png_size(passes.get("beauty")))
     vals = values if isinstance(values, dict) else {}
     for prm in custom.get("params") or []:
         k, inp = prm.get("node"), prm.get("input")
