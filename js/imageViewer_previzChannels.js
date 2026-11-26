@@ -1027,6 +1027,10 @@ export const PrevizChannelsMixin = {
         }
         this.previzChanged();
         if (this.frameMaskSync) { this._fmSig = null; this.frameMaskSync(); }
+        // The gate's rectangle carries the mask it was told: make the view tell it again, so a
+        // mask switched here goes (or comes) at once, in every pane.
+        const view = this._modelView && this._modelView();
+        if (view && view._syncGate) view._syncGate();
     },
 
     previzSetResolution(res) {

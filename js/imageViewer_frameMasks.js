@@ -131,10 +131,49 @@ export const FrameMasksMixin = {
 
     /** On / off (the button, Shift+G). Switching on with a custom ratio that does not read takes the default preset. */
     frameMaskToggle(on) {
-        const st = this._frameMask();
-        const want = on === undefined ? !st.on : !!on;
+        const eff = this._frameMaskEffective();
+        const want = on === undefined ? !maskOf(eff) : !!on;
         const patch = { on: want };
-        if (want && st.key === "custom" && !parseRatio(st.custom)) patch.key = DEFAULT_STATE.key;
+        if (want && eff.key === "custom" && !parseRatio(eff.custom)) patch.key = DEFAULT_STATE.key;
+        this._frameMaskApply(patch);
+    },
+
+    /**
+     * The camera the 3D view looks through (its active camera, else the main view's default
+     * camera), or null off a 3D tab.
+     */
+    _previzLookedCamera() {
+        if (!(this.isPrevizTab && this.isPrevizTab())) return null;
+        const sc = this.previzScene && this.previzScene();
+        if (!sc || !Array.isArray(sc.items)) return null;
+        return sc.items.find((it) => it.id === sc.activeCamera && it.kind === "camera")
+            || sc.items.find((it) => it.kind === "camera" && it.view === "persp") || null;
+    },
+
+    /**
+     * The mask on show in the view: in 3D, the looked-through camera's own mask when it has one
+     * of its own, else the viewer's. What the button, the key and the menu switch is this one -
+     * switching off what is not on show is the "has no effect" of issue #290's second round.
+     */
+    _frameMaskEffective() {
+        const st = this._frameMask();
+        const cam = this._previzLookedCamera();
+        const m = cam && cam.frameMask;
+        return m && !m.inherit ? cameraMaskState(m) : st;
+    },
+
+    /** A change of the mask on show: the looked-through camera's own in 3D, the viewer's elsewhere. */
+    _frameMaskApply(patch) {
+        const cam = this._previzLookedCamera();
+        const m = cam && cam.frameMask;
+        if (m && !m.inherit) {
+            let key;
+            if (patch.on === false) key = "off";
+            else if (patch.on === true) key = patch.key || (m.on ? m.key : null) || this._frameMask().key;
+            else key = m.on ? (patch.key || m.key) : "off";      // a look-only patch keeps on or off as it is
+            this.previzSetCameraMask(key, patch);
+            return;
+        }
         this.frameMaskSet(patch);
     },
 
@@ -183,8 +222,7 @@ export const FrameMasksMixin = {
     _frameMaskDrawBtn() {
         const btn = this.frameMaskBtn;
         if (!btn) return;
-        const st = this._frameMask();
-        const m = maskOf(st);
+        const m = maskOf(this._frameMaskEffective());
         if (btn.dataset.icon !== "frameMask") setEditIcon(btn, "frameMask");
         btn.classList.toggle("active", !!m);
         btn.setAttribute("aria-pressed", m ? "true" : "false");
@@ -358,7 +396,7 @@ export const FrameMasksMixin = {
             b.dataset.mask = p.key;
             b.textContent = p.label;
             b.title = `${p.label} (${p.ratio.toFixed(2)}:1)`;
-            b.onclick = () => this.frameMaskSet({ on: true, key: p.key });
+            b.onclick = () => this._frameMaskApply({ on: true, key: p.key });
             grid.append(b);
             syncs.push(() => b.classList.toggle("on", st().on && st().key === p.key));
         }
@@ -374,7 +412,7 @@ export const FrameMasksMixin = {
         const tryCustom = () => {
             const ok = !!parseRatio(cInput.value);
             cInput.classList.toggle("bad", !ok && cInput.value.trim() !== "");
-            if (ok) this.frameMaskSet({ on: true, key: "custom", custom: cInput.value.trim() });
+            if (ok) this._frameMaskApply({ on: true, key: "custom", custom: cInput.value.trim() });
         };
         cInput.oninput = tryCustom;
         cInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); tryCustom(); } };
@@ -407,7 +445,7 @@ export const FrameMasksMixin = {
             const box = doc.createElement("input");
             box.type = "checkbox";
             box.className = "overlays-switch";
-            box.onchange = () => this.frameMaskSet({ [key]: box.checked });
+            box.onchange = () => this._frameMaskApply({ [key]: box.checked });
             el.append(t, box);
             menu.append(el);
             syncs.push(() => { box.checked = !!st()[key]; });
