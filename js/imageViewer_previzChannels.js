@@ -249,6 +249,9 @@ export const PrevizChannelsMixin = {
                 else if (e.key === "Escape") { input.dataset.cancel = "1"; input.blur(); }
             });
             input.addEventListener("focus", () => input.select());
+            // The value side selects the channel like the name does (Sebastian 2026-11-25),
+            // Ctrl toggles and Shift extends as in Maya; typing then goes to every selected one.
+            input.addEventListener("pointerdown", (e) => this._cbSelect(id, e));
             input.onchange = () => {
                 if (input.dataset.cancel) { delete input.dataset.cancel; this._previzRenderChannels(); return; }
                 // The live item: undo and redo replace the objects under unchanged rows.
@@ -283,6 +286,7 @@ export const PrevizChannelsMixin = {
             sel.className = "cb-val cb-sel";
             for (const v of ["on", "off"]) sel.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
             sel.onchange = () => this.previzSetVisible(sel.value === "on");
+            sel.addEventListener("pointerdown", (e) => this._cbSelect("visible", e));
             row.append(tag, sel);
             table.append(row);
             ui.rows.set("visible", { row, input: sel, kind: "visible" });
@@ -307,6 +311,9 @@ export const PrevizChannelsMixin = {
                 sl.className = "cb-val cb-sel";
                 for (const [v, txt] of opts) sl.append(Object.assign(doc.createElement("option"), { value: v, textContent: txt }));
                 sl.onchange = () => onchange(sl.value);
+                // A property that is a choice selects like any channel: name or value (Sebastian 2026-11-25).
+                tg.addEventListener("pointerdown", (e) => this._cbLabelDown(e, id, null, null, 0, tg));
+                sl.addEventListener("pointerdown", (e) => this._cbSelect(id, e));
                 r.append(tg, sl);
                 t.append(r);
                 ui.rows.set(id, { row: r, input: sl, kind: id });
@@ -368,10 +375,12 @@ export const PrevizChannelsMixin = {
                     r.className = "cb-row";
                     r.dataset.ch = "maskRatio";
                     const tg = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Mask Ratio" });
+                    tg.addEventListener("pointerdown", (e) => this._cbLabelDown(e, "maskRatio", null, null, 0, tg));
                     const inp = doc.createElement("input");
                     inp.className = "cb-val";
                     inp.placeholder = "2.39 or 21:9";
                     inp.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") inp.blur(); });
+                    inp.addEventListener("pointerdown", (e) => this._cbSelect("maskRatio", e));
                     inp.onchange = () => this.previzSetCameraMask("custom", { custom: inp.value });
                     r.append(tg, inp);
                     t.append(r);
@@ -388,10 +397,12 @@ export const PrevizChannelsMixin = {
                 r2.dataset.ch = "aim";
                 const tag2 = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Look At" });
                 tag2.title = "On: the camera turns to face its target, which is dragged in the viewport while the camera is selected; Rotate Z is then its roll";
+                tag2.addEventListener("pointerdown", (e) => this._cbLabelDown(e, "aim", null, null, 0, tag2));
                 const aimSel = doc.createElement("select");
                 aimSel.className = "cb-val cb-sel";
                 for (const v of ["off", "on"]) aimSel.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
                 aimSel.onchange = () => this.previzSetAimOn(aimSel.value === "on");
+                aimSel.addEventListener("pointerdown", (e) => this._cbSelect("aim", e));
                 r2.append(tag2, aimSel);
                 t.append(r2);
                 ui.rows.set("aim", { row: r2, input: aimSel, kind: "aim" });
@@ -416,12 +427,14 @@ export const PrevizChannelsMixin = {
             inp.className = "cb-val";
             inp.type = "number"; inp.min = "0.001"; inp.step = "0.1";
             inp.addEventListener("keydown", (e) => e.stopPropagation());
+            inp.addEventListener("pointerdown", (e) => this._cbSelect("locatorSize", e));
             inp.onchange = () => this.previzSetLocatorSize(Number(inp.value));
             this._cbScrub(tag, {
                 step: 0.01,
                 read: () => S.locatorSize(this.previzSelectedItem() || item),
                 write: (v) => this.previzSetLocatorSize(Math.max(0.001, Math.round(v * 1000) / 1000), { live: true }),
                 end: () => { this.previzEndDrag(); this.previzChanged(); },
+                select: (ev) => this._cbSelect("locatorSize", ev),
             });
             row.append(tag, inp);
             t.append(row);
@@ -433,13 +446,16 @@ export const PrevizChannelsMixin = {
             const pr = doc.createElement("div");
             pr.className = "cb-row cb-path-row";
             pr.dataset.ch = "planePath";
-            pr.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Path" }));
+            const pTag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Path" });
+            pTag.addEventListener("pointerdown", (e) => this._cbLabelDown(e, "planePath", null, null, 0, pTag));
+            pr.append(pTag);
             const pin = doc.createElement("input");
             pin.className = "cb-val cb-path";
             pin.type = "text";
             pin.spellcheck = false;
             pin.placeholder = "a picture, a film or shot.####.exr";
             pin.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") pin.blur(); });
+            pin.addEventListener("pointerdown", (e) => this._cbSelect("planePath", e));
             pin.onchange = () => {
                 const cur = S.planePath(this.previzSelectedItem() || item);
                 if (pin.value.trim() && pin.value.trim() !== cur) {
@@ -470,12 +486,14 @@ export const PrevizChannelsMixin = {
             oin.className = "cb-val";
             oin.type = "number"; oin.step = "1";
             oin.addEventListener("keydown", (e) => e.stopPropagation());
+            oin.addEventListener("pointerdown", (e) => this._cbSelect("offset", e));
             oin.onchange = () => this.previzSetPlane(null, { offset: Math.round(Number(oin.value) || 0) });
             this._cbScrub(oTag, {
                 step: 0.2,
                 read: () => S.planeSettings(this.previzSelectedItem() || item).offset,
                 write: (v) => this.previzSetPlane(null, { offset: Math.round(v) }, { live: true }),
                 end: () => { this.previzEndDrag(); this.previzChanged(); },
+                select: (ev) => this._cbSelect("offset", ev),
             });
             orow.append(oTag, oin);
             t.append(orow);
@@ -484,17 +502,20 @@ export const PrevizChannelsMixin = {
             const row = doc.createElement("div");
             row.className = "cb-row";
             const opTag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: "Opacity" });
+            opTag.addEventListener("pointerdown", (e) => this._cbLabelDown(e, "opacity", null, null, 0, opTag));
             row.append(opTag);
             const op = doc.createElement("input");
             op.className = "cb-val";
             op.type = "number"; op.min = "0"; op.max = "1"; op.step = "0.05";
             op.addEventListener("keydown", (e) => e.stopPropagation());
+            op.addEventListener("pointerdown", (e) => this._cbSelect("opacity", e));
             op.onchange = () => this.previzSetPlane(null, { opacity: Number(op.value) });
             this._cbScrub(opTag, {
                 step: 0.01,
                 read: () => S.planeSettings(this.previzSelectedItem() || item).opacity,
                 write: (v) => this.previzSetPlane(null, { opacity: Math.round(Math.min(1, Math.max(0, v)) * 100) / 100 }, { live: true }),
                 end: () => { this.previzEndDrag(); this.previzChanged(); },
+                select: (ev) => this._cbSelect("opacity", ev),
             });
             row.append(op);
             t.append(row);
@@ -503,13 +524,17 @@ export const PrevizChannelsMixin = {
             for (const [field, label] of [["lit", "Lit"], ["doubleSided", "Double-sided"]]) {
                 const r2 = doc.createElement("div");
                 r2.className = "cb-row";
-                r2.append(Object.assign(doc.createElement("span"), { className: "cb-label", textContent: label }));
+                r2.dataset.ch = field;
+                const l2 = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: label });
+                l2.addEventListener("pointerdown", (e) => this._cbLabelDown(e, field, null, null, 0, l2));
+                r2.append(l2);
                 const sel = doc.createElement("select");
                 sel.className = "cb-val cb-sel";
                 for (const v of ["on", "off"]) {
                     sel.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
                 }
                 sel.onchange = () => this.previzSetPlane(null, { [field]: sel.value === "on" });
+                sel.addEventListener("pointerdown", (e) => this._cbSelect(field, e));
                 r2.append(sel);
                 t.append(r2);
                 ui.rows.set(field, { row: r2, input: sel, kind: "plane", field });
@@ -626,7 +651,9 @@ export const PrevizChannelsMixin = {
                 if (focused !== r.input) r.input.value = L.filmFitOf(item);
             } else if (r.kind === "frameMask") {
                 const m = item.frameMask;
-                if (focused !== r.input) r.input.value = !m ? "viewer" : !m.on ? "off" : m.key;
+                // A default view camera with no mask of its own is off, not the viewer's (Sebastian 2026-11-25).
+                if (focused !== r.input) r.input.value = !m ? (item.view ? "off" : "viewer")
+                    : m.inherit ? "viewer" : !m.on ? "off" : m.key;
             } else if (r.kind === "maskRatio") {
                 if (focused !== r.input) r.input.value = (item.frameMask && item.frameMask.custom) || "";
             } else if (r.kind === "visible") {
@@ -984,7 +1011,11 @@ export const PrevizChannelsMixin = {
         if (!cams.length) return;
         this.previzSnapshot("set framing mask");
         for (const cam of cams) {
-            if (key === "viewer") { delete cam.frameMask; continue; }
+            if (key === "viewer") {
+                // Kept explicitly: a default view camera's absent mask means off, not the viewer's.
+                cam.frameMask = L.readCameraMask({ ...(cam.frameMask || {}), inherit: true });
+                continue;
+            }
             const was = cam.frameMask || {};
             const base = this._frameMask ? this._frameMask() : {};
             cam.frameMask = L.readCameraMask({
@@ -1056,7 +1087,7 @@ export const PrevizChannelsMixin = {
      * Ctrl ×0.1), one undo step for the whole drag. `read()` is the number at the
      * press, `write(v)` sets it live, `end()` closes the drag.
      */
-    _cbScrub(tag, { step, read, write, end }) {
+    _cbScrub(tag, { step, read, write, end, select = null }) {
         tag.classList.add("cb-scrub");
         tag.title = "Drag left/right to change (Shift ×10, Ctrl ×0.1)";
         tag.addEventListener("pointerdown", (e) => {
@@ -1075,11 +1106,12 @@ export const PrevizChannelsMixin = {
                 const scale = ev.shiftKey ? 10 : (ev.ctrlKey || ev.metaKey) ? 0.1 : 1;
                 write(from + dx * step * scale);
             };
-            const up = () => {
+            const up = (ev) => {
                 tag.removeEventListener("pointermove", move);
                 tag.removeEventListener("pointerup", up);
                 tag.removeEventListener("pointercancel", up);
                 if (from !== null) end();
+                else if (select) select(ev);      // a press without a drag selects, as a channel's name does
             };
             tag.addEventListener("pointermove", move);
             tag.addEventListener("pointerup", up);

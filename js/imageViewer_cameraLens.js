@@ -137,13 +137,16 @@ export function readLensFields(raw) {
  * A camera's own framing mask (imageViewer_frameMasks.js draws it while the
  * camera is looked through, in place of the viewer's): {on, key, custom,
  * opacity, line, label}, the same fields as the viewer's mask. Absent = the
- * camera shows the viewer's mask. Kept lightly here (the key is checked where
- * it is drawn, by the frame masks' own table).
+ * camera shows the viewer's mask, except a default view camera, whose absent
+ * mask is off (Sebastian 2026-11-25); `inherit` is "as the viewer's" chosen
+ * explicitly, kept so the two stay apart. Kept lightly here (the key is
+ * checked where it is drawn, by the frame masks' own table).
  */
 export function readCameraMask(raw) {
     if (!raw || typeof raw !== "object") return null;
     const op = Number(raw.opacity);
     return {
+        inherit: raw.inherit === true,
         on: raw.on !== false,
         key: typeof raw.key === "string" && raw.key ? raw.key.slice(0, 12) : "2.39",
         custom: typeof raw.custom === "string" ? raw.custom.slice(0, 20) : "",

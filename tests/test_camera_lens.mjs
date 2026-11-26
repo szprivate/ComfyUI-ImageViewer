@@ -50,7 +50,10 @@ test("a scene keeps a camera's film back, fit, clipping and its own framing mask
     assert.deepEqual(c.filmback, [24.89, 14]);
     assert.equal(c.filmFit, "vertical");
     assert.deepEqual(c.clip, [0.5, 500]);
-    assert.deepEqual(c.frameMask, { on: true, key: "1.85", custom: "", opacity: 0.4, line: true, label: true });
+    assert.deepEqual(c.frameMask, { inherit: false, on: true, key: "1.85", custom: "", opacity: 0.4, line: true, label: true });
+    // "as the viewer's" is kept as its own flag, so a default view camera (absent = off) can ask for it
+    const inh = parseScene({ items: [{ id: "c3", kind: "camera", fov: 30, frameMask: { inherit: true } }] }).items[0];
+    assert.equal(inh.frameMask.inherit, true);
     // a camera without them stays as it was
     const plain = parseScene({ items: [{ id: "c2", kind: "camera", fov: 30 }] }).items[0];
     for (const k of ["filmback", "filmFit", "clip", "frameMask"]) assert.equal(plain[k], undefined);

@@ -247,8 +247,10 @@ export const PrevizWorldMixin = {
         if (!fields.length) return;
         const t = shape(item.kind === "camera" ? "reference" : "object");
         for (const f of fields) {
+            const id = `world:${f.path}`;
             const row = doc.createElement("div");
             row.className = "cb-row";
+            row.dataset.ch = id;
             const tag = Object.assign(doc.createElement("span"), { className: "cb-label", textContent: f.label });
             row.append(tag);
             let input;
@@ -258,6 +260,7 @@ export const PrevizWorldMixin = {
                 const opts = f.type === "bool" ? ["on", "off"] : f.options;
                 for (const v of opts) input.append(Object.assign(doc.createElement("option"), { value: v, textContent: v }));
                 input.onchange = () => this.previzSetWorldField(f.path, f.type === "bool" ? input.value === "on" : input.value);
+                tag.addEventListener("pointerdown", (e) => this._cbLabelDown(e, id, null, null, 0, tag));
             } else if (f.type === "color") {
                 input = doc.createElement("input");
                 input.type = "color";
@@ -275,7 +278,7 @@ export const PrevizWorldMixin = {
                     if (v === null) { this._previzRenderChannels(); return; }
                     this.previzSetWorldField(f.path, v);
                 };
-                // Its name is a slider, as a channel's is (_cbScrub).
+                // Its name is a slider, as a channel's is (_cbScrub); a press without a drag selects.
                 this._cbScrub(tag, {
                     step: (f.step || 1) * WORLD_DRAG_SHARE,
                     read: () => {
@@ -288,12 +291,14 @@ export const PrevizWorldMixin = {
                         if (n !== null) this.previzSetWorldField(f.path, n, null, { live: true });
                     },
                     end: () => { this.previzEndDrag(); this.previzChanged({ reload: true }); },
+                    select: (ev) => this._cbSelect(id, ev),
                 });
             }
             input.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") input.blur(); });
+            if (f.type !== "color") input.addEventListener("pointerdown", (e) => this._cbSelect(id, e));
             row.append(input);
             t.append(row);
-            ui.rows.set(`world:${f.path}`, { row, input, kind: "world", field: f });
+            ui.rows.set(id, { row, input, kind: "world", field: f });
         }
         // A scatter that couldn't place everything says why.
         const note = this._modelView().itemNote(item.id);

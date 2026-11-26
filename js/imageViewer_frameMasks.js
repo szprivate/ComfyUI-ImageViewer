@@ -100,6 +100,9 @@ export function cameraMaskState(m) {
     return cleanState({ ...m, on: m && m.on !== false });
 }
 
+/** What a default view camera without a mask of its own shows: nothing (Sebastian 2026-11-25). */
+const OFF_STATE = cleanState({ on: false });
+
 // ── the panel ────────────────────────────────────────────────────────────────
 
 export const FrameMasksMixin = {
@@ -271,6 +274,10 @@ export const FrameMasksMixin = {
         if (!view || !view.stage) return;
         // One rectangle, or a list (split panes: one per pane looking through a camera).
         const list = !g ? [] : Array.isArray(g) ? g.filter(Boolean) : [g];
+        // The mask is read LIVE off the camera item: the rectangle the view told may carry an
+        // older snapshot, and a mask switched in the Parameters panel must go at once
+        // (Sebastian 2026-11-25: "displayed even if the Framing Mask is switched off").
+        const itemOf = (id) => { const e = id && view._entries && view._entries.get(id); return (e && e.item) || null; };
         const doc = view.stage.ownerDocument || document;
         const els = (view._fmEls || []).filter((e) => e.parentNode === view.stage);
         if (view._fmEl && view._fmEl.parentNode === view.stage && !els.includes(view._fmEl)) els.unshift(view._fmEl);
@@ -289,9 +296,13 @@ export const FrameMasksMixin = {
                 els[i] = el;
             }
             // A camera looked through may have a mask of its own (its Channel Box's Framing Mask): it stands in
-            // for the viewer's while that camera is looked through, on or off.
-            const st = r.mask ? cameraMaskState(r.mask) : this._frameMask();
-            el.dataset.source = r.mask ? "camera" : "viewer";
+            // for the viewer's while that camera is looked through, on or off. A default view camera with no
+            // mask of its own is off; any other camera without one shows the viewer's.
+            const it = r.camera ? itemOf(r.camera) : null;
+            const m = it ? it.frameMask : (r.mask || null);
+            const st = m ? (m.inherit ? this._frameMask() : cameraMaskState(m))
+                : (it && it.view ? OFF_STATE : this._frameMask());
+            el.dataset.source = m && !m.inherit ? "camera" : "viewer";
             el.dataset.camera = r.camera || "";
             if (!r.w || !r.h || !maskOf(st)) { el.style.display = "none"; return; }
             Object.assign(el.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px` });
