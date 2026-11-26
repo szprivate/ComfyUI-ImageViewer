@@ -142,11 +142,16 @@ class RealisticRender(unittest.TestCase):
             got = A.workflows_for("render3d")
             self.assertEqual(got["action"], "render")
             ids = [w["id"] for w in got["workflows"]]
-            self.assertEqual(ids, ["comp_r3_zimage_depth", "comp_r3_qwen2511", "comp_r3_gpt25"])
+            self.assertEqual(ids, ["comp_r3_zimage_depth", "comp_r3_qwen2511", "comp_r3_gpt25",
+                                   "comp_r3_seedream", "comp_r3_nano_banana_pro", "comp_r3_nano_banana2"])
             self.assertTrue(next(w for w in got["workflows"] if w["id"] == "comp_r3_gpt25")["api"])
             want = {"comp_r3_zimage_depth": {"depth": "depth"},
                     "comp_r3_qwen2511": {"beauty": "beauty", "depth": "depth"},
-                    "comp_r3_gpt25": {"beauty": "beauty", "depth": "depth"}}
+                    "comp_r3_gpt25": {"beauty": "beauty", "depth": "depth"},
+                    # the ref loader of the Seedream one goes without a picture: no ref sent here
+                    "comp_r3_seedream": {"beauty": "beauty", "depth": "depth"},
+                    "comp_r3_nano_banana_pro": {"beauty": "beauty", "depth": "depth"},
+                    "comp_r3_nano_banana2": {"beauty": "beauty", "depth": "depth"}}
             passes = {"beauty": png(200), "depth": png(120), "normals": png(128), "mask": png(255)}
             for wid, uses in want.items():
                 e, g = G._builtin(wid)

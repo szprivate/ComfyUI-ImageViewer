@@ -207,12 +207,12 @@ export const PrevizRenderMixin = {
         const addNode = check("Put a loader node on the graph", st.addNode);
 
         const summary = el("div", "rd-summary");
-        const progress = el("div", "rd-progress");
-        const bar = el("div", "rd-bar");
-        progress.append(bar);
         const message = el("div", "rd-message");
-        const go = el("button", "rd-btn rd-go", "Render shot");
-        go.title = "Render the frame range through the camera and write it out (Render in the panel's bar shows one frame here)";
+        // The settings are kept on the scene as they are typed; the button says so once more,
+        // and names the shot's node after the render name (Sebastian 2026-11-25: in place of
+        // the old "Render shot", which the panel's Render and the farm's shot render cover).
+        const go = el("button", "rd-btn rd-go", "Save settings");
+        go.title = "Write these settings to the scene: the panel's Render, the next panel and the next session start from them";
         const foot = el("div", "rd-foot");
         foot.append(go);
 
@@ -243,7 +243,7 @@ export const PrevizRenderMixin = {
             row("Range", rangeWrap),
             fpsRow,
             row("", addNode.wrap),
-            summary, progress, message, foot,
+            summary, message, foot,
         );
         host.append(box);
 
@@ -275,7 +275,7 @@ export const PrevizRenderMixin = {
                 const [w, h] = S.cameraResolution(cam);
                 width.value = String(w); height.value = String(h);
             }
-            width.disabled = height.disabled = preset.disabled = fromCam;
+            width.disabled = height.disabled = fromCam;
             qualityRow.style.display = isVideo ? "" : "none";
             // A traced frame has its own look and needs no supersampling (each sample is jittered).
             const traced = s.renderer === "pathtraced";
@@ -324,9 +324,10 @@ export const PrevizRenderMixin = {
             n.addEventListener("input", sync);
             n.addEventListener("change", () => { sync(); keep(); });
         }
+        // A preset is a picture size of its own: it takes the size over from the camera.
         preset.onchange = () => {
             const [w, h] = preset.value.split("x").map(Number);
-            if (w && h) { width.value = String(w); height.value = String(h); }
+            if (w && h) { width.value = String(w); height.value = String(h); useCam.box.checked = false; }
             preset.value = "";
             sync(); keep();
         };
@@ -338,34 +339,11 @@ export const PrevizRenderMixin = {
         };
         // Nothing typed here is a hotkey — neither the viewer's nor ComfyUI's.
         box.addEventListener("keydown", (e) => { e.stopPropagation(); });
-        go.onclick = async () => {
-            if (this._previzRendering) { this._previzRenderStop = true; return; }
-            const s = read();
-            this._renderKeep({ ...s, end: s.end >= last ? null : s.end,
-                               fps: Math.abs(s.fps - (scene.fps || 24)) < 1e-6 ? null : s.fps });
-            this._renderSetName(s.name);
-            const fields = [...box.querySelectorAll("input, select"), whole, here];
-            fields.forEach((n) => { n.disabled = true; });
-            go.textContent = "Stop";
-            message.textContent = "";
+        go.onclick = () => {
+            keep();
+            this._renderSetName(read().name);
+            message.textContent = "The settings are on the scene.";
             message.classList.remove("error");
-            box.classList.add("rendering");
-            const result = await this.previzRender(s, {
-                onProgress: (done, total, sample, samplesWanted) => {
-                    const part = sample && samplesWanted ? sample / samplesWanted : 0;
-                    bar.style.width = `${Math.round(100 * (done + part) / Math.max(1, total))}%`;
-                    message.textContent = done < total
-                        ? `Frame ${done + 1} of ${total}…` + (samplesWanted ? ` sample ${sample || 0} of ${samplesWanted}` : "")
-                        : "Encoding…";
-                },
-            });
-            box.classList.remove("rendering");
-            go.textContent = "Render shot";
-            fields.forEach((n) => { n.disabled = false; });
-            sync();
-            bar.style.width = "0";
-            message.textContent = result ? result.message : "Nothing was rendered.";
-            message.classList.toggle("error", !!(result && result.error));
         };
 
         sync();

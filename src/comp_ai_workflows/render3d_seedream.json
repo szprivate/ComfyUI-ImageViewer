@@ -1,0 +1,74 @@
+{
+ "1": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/beauty.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:beauty"
+  }
+ },
+ "2": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/depth.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:depth"
+  }
+ },
+ "3": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "render3d/ref1.png",
+   "upload": "image"
+  },
+  "_meta": {
+   "title": "comp:ref1"
+  }
+ },
+ "4": {
+  "class_type": "ByteDanceSeedreamNodeV3",
+  "inputs": {
+   "prompt": "Image 1 is a rough 3D layout, image 2 its depth (near = white). Turn image 1 into a photorealistic photograph: keep the camera, the framing and every object's shape and place exactly as in image 1; realistic materials, natural light.",
+   "model": "seedream 5.0 pro",
+   "model.size_preset": "Custom",
+   "model.width": 2048,
+   "model.height": 2048,
+   "model.images.image_1": [
+    "1",
+    0
+   ],
+   "model.images.image_2": [
+    "2",
+    0
+   ],
+   "model.images.image_3": [
+    "3",
+    0
+   ],
+   "model.prompt_optimization": "standard",
+   "model.seed": 0,
+   "model.watermark": false,
+   "model.thinking": true
+  },
+  "_meta": {
+   "title": "Positive prompt"
+  }
+ },
+ "5": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "4",
+    0
+   ],
+   "filename_prefix": "render3d/seedream"
+  },
+  "_meta": {
+   "title": "comp:out"
+  }
+ }
+}

@@ -66,7 +66,10 @@
    "workflows": [
     "comp_r3_zimage_depth",
     "comp_r3_qwen2511",
-    "comp_r3_gpt25"
+    "comp_r3_gpt25",
+    "comp_r3_seedream",
+    "comp_r3_nano_banana_pro",
+    "comp_r3_nano_banana2"
    ]
   }
  },
@@ -657,6 +660,74 @@
    "nodes": [
     "LoadImage",
     "OpenAIGPTImageNodeV2",
+    "SaveImage"
+   ],
+   "models": []
+  },
+  {
+   "id": "comp_r3_seedream",
+   "label": "Realistic render: Seedream 5.0 Pro, beauty + depth (API)",
+   "file": "render3d_seedream.json",
+   "api": true,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "api_bytedance_seedream_5_0_pro_image_edit (the depth as image 2, a reference as image 3)",
+   "nodes": [
+    "LoadImage",
+    "ByteDanceSeedreamNodeV3",
+    "SaveImage"
+   ],
+   "models": []
+  },
+  {
+   "id": "comp_r3_nano_banana_pro",
+   "label": "Realistic render: Nano Banana Pro, beauty + depth (API)",
+   "file": "render3d_nano_banana_pro.json",
+   "api": true,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "api_gemini_image_2 (the passes batched into its images)",
+   "nodes": [
+    "LoadImage",
+    "ImageBatch",
+    "GeminiImage2Node",
+    "SaveImage"
+   ],
+   "models": []
+  },
+  {
+   "id": "comp_r3_nano_banana2",
+   "label": "Realistic render: Nano Banana 2, beauty + depth (API)",
+   "file": "render3d_nano_banana2.json",
+   "api": true,
+   "format": "api",
+   "actions": [
+    "render"
+   ],
+   "size": {
+    "mp": 1.0,
+    "mult": 16,
+    "max": 2048
+   },
+   "from": "api_gemini_nano_banana_2 (the passes batched into its images)",
+   "nodes": [
+    "LoadImage",
+    "ImageBatch",
+    "GeminiNanoBanana2",
     "SaveImage"
    ],
    "models": []

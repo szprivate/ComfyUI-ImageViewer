@@ -22,6 +22,7 @@
 // The server fills the workflow in (POST /imageviewer/render3d_ai, render3d_ai.py), the page queues it as Paint's
 // Generate does (_paintQueue, with the sign-in) and waits for its outputs (_cpAiWaitNodes). One `this` with the panel.
 import { api } from "../../scripts/api.js";
+import { app } from "../../scripts/app.js";
 import * as S from "./imageViewer_scene3d.js";
 import { notice, canvasContext, openFilePicker } from "./imageViewer_exportUI.js";
 import { asPrompt } from "./imageViewer_compAiWorkflow.js";
@@ -121,6 +122,14 @@ select.r3-pass-select { background: #2d2d2d; color: #eee; border: 1px solid #444
 .r3-ref:hover .r3-ref-x { display: block; }
 .r3-ref.unused { opacity: 0.4; }
 .r3-refs .r3-hint { flex: 1 1 160px; min-width: 0; }
+.r3-stack { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 6px; }
+.r3-stack-row { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border: 1px solid #3a3a3a; border-radius: 4px;
+    background: #232323; color: #ccc; font-size: 12px; cursor: pointer; user-select: none; }
+.r3-stack-row:hover { border-color: #666; }
+.r3-stack-row.sel { border-color: #ff6600; background: rgba(255, 102, 0, 0.14); color: #fff; }
+.r3-stack-row .r3-stack-n { color: #888; flex: none; }
+.r3-stack-row .r3-stack-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.r3-stack-add { align-self: flex-start; }
 .r3-stage .r3-region { position: absolute; border: 1px dashed #ff6600; box-shadow: 0 0 0 9999px rgba(0,0,0,0.35); pointer-events: none; display: none; }
 .r3-stage.region-on { cursor: crosshair; }
 .r3-stage.region-on .r3-region.has { display: block; }
@@ -223,6 +232,42 @@ export function runValues(keep, custom) {
     const text = keep && typeof keep.prompt === "string" ? keep.prompt.trim() : "";
     if (p && text) out[p.id] = text;
     return out;
+}
+
+/**
+ * The panel's stack of AI workflows (Sebastian 2026-11-25, as Blender's modifier stack): layer 1
+ * runs on the render's passes, every next one on the picture the layer before it gave. The layer
+ * selected in the list is mirrored in the panel's `custom` / `values`, so everything that reads
+ * one workflow (the settings below the list, the agent, the references) keeps working as it did.
+ * Answers the stack. `st.sel` is the selected layer's index (a panel's own, not saved).
+ */
+function stackSync(k, st) {
+    if (!k) return [];
+    if (!Array.isArray(k.stack)) k.stack = k.custom ? [{ custom: k.custom, values: k.values || {} }] : [];
+    const i = Math.max(0, Math.min(st.sel || 0, k.stack.length));
+    if (k.custom) k.stack[i] = { custom: k.custom, values: k.values || {} };
+    st.sel = i;
+    return k.stack;
+}
+
+/** Select layer `i` (the stack's length = a fresh, empty slot a picked workflow becomes). */
+function stackSelect(k, st, i) {
+    stackSync(k, st);
+    const n = Math.max(0, Math.min(i, k.stack.length));
+    const l = k.stack[n];
+    st.sel = n;
+    if (l) { k.custom = l.custom; k.values = l.values || {}; }
+    else { delete k.custom; delete k.values; }
+}
+
+/** A picture the panel shows (a file URL or a data URL) as a PNG data URL, for the next layer's passes. */
+async function asDataUrl(doc, url) {
+    if (/^data:image\/png;/.test(url)) return url;
+    const img = await loadImg(doc, url);
+    const c = doc.createElement("canvas");
+    c.width = img.naturalWidth; c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0);
+    return c.toDataURL("image/png");
 }
 
 const loadImg = (doc, url) => new Promise((resolve, reject) => {
@@ -346,7 +391,13 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         const setBtn = el(d, "button", "r3-btn r3-settings-btn", "Settings");
         setBtn.title = "The render settings (camera, size, renderer, samples, output) in a floating window";
         setBtn.onclick = () => settingsWin(!(ui.setWin && ui.setWin.shade.isConnected));
-        bar.append(render, aiBtn, iprBtn, regionBtn, setBtn, el(d, "span", "r3-sep"), passes, wipe, info);
+        // The camera this panel renders through (Sebastian 2026-11-25): the settings' Camera,
+        // reachable without the settings window.
+        const camSel = el(d, "select", "r3-pass-select r3-cam-select");
+        camSel.title = "The camera this panel renders through";
+        camSel.addEventListener("change", () => v.previzRenderPanelCamera(st, camSel.value));
+        camSel.addEventListener("keydown", (e) => e.stopPropagation());
+        bar.append(render, aiBtn, iprBtn, regionBtn, setBtn, camSel, el(d, "span", "r3-sep"), passes, wipe, info);
 
         const stage = el(d, "div", "r3-stage");
         stage.tabIndex = -1;
@@ -460,7 +511,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         root.append(bar, stage, promptRow, refsRow, scroll);
         host.append(style, root);
         ui = { root, bar, render, aiBtn, iprBtn, regionBtn, passes, wipe, info, stage, imgA, imgB, line, regionEl, tagL, tagR, empty, busy,
-               aiFold, setBtn, setWin: null, prompt, promptRow, refsRow, refsList, refAdd, refHint, refSig: null, picRect, form: null, formScene: null, aiSig: null };
+               aiFold, setBtn, setWin: null, camSel, prompt, promptRow, refsRow, refsList, refAdd, refHint, refSig: null, picRect, form: null, formScene: null, aiSig: null };
         buildForm();
         buildAi();
         draw();
@@ -506,7 +557,65 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
     function aiSig() {
         const k = mine();
         const c = k.custom;
-        return JSON.stringify([c ? [c.sig, c.name, c.source, c.path] : null, !!st.run, st.askDl ? 1 : 0, st.error]);
+        return JSON.stringify([c ? [c.sig, c.name, c.source, c.path] : null, !!st.run, st.askDl ? 1 : 0, st.error,
+                               (k.stack || []).map((l) => (l.custom && [l.custom.sig, l.custom.name]) || null), st.sel || 0]);
+    }
+
+    /** Take layer `i` out of the stack; an empty stack takes the panel's result with it. */
+    function removeLayer(i) {
+        const kk = keep();
+        if (!kk) return;
+        stackSync(kk, st);                       // the selection back into its layer first
+        kk.stack.splice(i, 1);
+        // Select the layer that took its place (or the last one), without writing anything back:
+        // stackSync would mirror the still-current workflow into the shortened stack again.
+        const n = kk.stack.length;
+        const sel = (st.sel || 0) > i ? (st.sel || 0) - 1 : (st.sel || 0);
+        st.sel = Math.max(0, Math.min(sel, n - 1));
+        const l = n ? kk.stack[st.sel] : null;
+        if (l) { kk.custom = l.custom; kk.values = l.values || {}; }
+        else {
+            delete kk.custom; delete kk.values; delete kk.last;
+            st.ai = null;
+            if (st.pass && st.pass.startsWith("ai")) st.pass = "beauty";
+            st.wipe = false;
+        }
+        st.persist(); ui.aiSig = null; buildAi(); draw();
+    }
+
+    /** Right-click a stack layer: replace it, put it on the canvas, move it, take it away. */
+    function stackMenu(e, i) {
+        const k = mine();
+        const n = (k.stack || []).length;
+        const l = (k.stack || [])[i];
+        const move = (dir) => {
+            const kk = keep();
+            if (!kk) return;
+            stackSync(kk, st);
+            const j = i + dir;
+            if (j < 0 || j >= kk.stack.length) return;
+            [kk.stack[i], kk.stack[j]] = [kk.stack[j], kk.stack[i]];
+            if ((st.sel || 0) === i) st.sel = j; else if ((st.sel || 0) === j) st.sel = i;
+            stackSelect(kk, st, st.sel || 0);
+            st.persist(); ui.aiSig = null; buildAi(); draw();
+        };
+        v._previzOpenMenu([
+            { label: "Replace workflow…", run: () => {
+                const kk = keep();
+                if (!kk) return;
+                stackSelect(kk, st, i);
+                st.persist(); ui.aiSig = null; buildAi(); draw();
+                v._r3PickMenu(st, e.target);
+            } },
+            { label: "Load workflow in Canvas", disabled: !(l && l.custom && l.custom.graph),
+              title: "Put this layer's workflow on the open canvas",
+              run: () => { app.loadGraphData(l.custom.graph, true, true, l.custom.name || "render3d"); } },
+            "-",
+            { label: "Move up", disabled: i === 0, run: () => move(-1) },
+            { label: "Move down", disabled: i === n - 1, run: () => move(1) },
+            "-",
+            { label: "Remove", run: () => removeLayer(i) },
+        ], e.clientX, e.clientY);
     }
 
     function buildAi() {
@@ -519,6 +628,38 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         body.textContent = "";
         const k = mine();
         const c = k.custom;
+        // The stack (Sebastian 2026-11-25): layer 1 runs on the passes, every next one on the
+        // picture the layer before gave; the selected layer is what the settings below edit.
+        const stack = stackSync(k, st);
+        const listBox = el(d, "div", "r3-stack");
+        stack.forEach((l, i) => {
+            const row = el(d, "div", "r3-stack-row" + (i === (st.sel || 0) ? " sel" : ""));
+            row.append(el(d, "span", "r3-stack-n", `${i + 1}`),
+                       el(d, "span", "r3-stack-name", (l.custom && (l.custom.name || "My workflow")) || "—"));
+            row.title = "Click to edit this layer; right-click: replace, move, load in Canvas, remove";
+            row.addEventListener("click", () => {
+                const kk = keep();
+                if (!kk || (st.sel || 0) === i) return;
+                stackSelect(kk, st, i);
+                st.persist(); ui.aiSig = null; buildAi(); draw();
+            });
+            row.addEventListener("contextmenu", (ev) => { ev.preventDefault(); ev.stopPropagation(); stackMenu(ev, i); });
+            listBox.append(row);
+        });
+        const add = el(d, "button", "r3-btn r3-stack-add", stack.length ? "+ Add layer" : "+ Choose workflow");
+        add.title = stack.length
+            ? "Put another workflow on top: what the last layer gives is what it gets"
+            : "The workflow this panel runs on its render";
+        add.onclick = () => {
+            const kk = keep();
+            if (!kk) return;
+            stackSync(kk, st);
+            stackSelect(kk, st, kk.stack.length);
+            st.persist(); ui.aiSig = null; buildAi(); draw();
+            v._r3PickMenu(st, add);
+        };
+        listBox.append(add);
+        body.append(listBox);
         const head = el(d, "div", "r3-row");
         const pick = el(d, "button", "r3-btn r3-wf-pick", c ? "Change ▾" : "Choose workflow ▾");
         pick.title = "The open canvas, a workflow saved in ComfyUI, a .json file, or a prepared one";
@@ -538,8 +679,8 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         }
         if (c) {
             const off = el(d, "button", "r3-btn r3-wf-clear", "✕");
-            off.title = "Take the workflow off this panel";
-            off.onclick = () => { const kk = keep(); if (kk) { delete kk.custom; delete kk.values; delete kk.last; } st.ai = null; if (st.pass.startsWith("ai")) st.pass = "beauty"; st.wipe = false; persist(); ui.aiSig = null; buildAi(); draw(); };
+            off.title = "Take this layer off the stack";
+            off.onclick = () => removeLayer(st.sel || 0);
             head.append(off);
         }
         body.append(head);
@@ -576,6 +717,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
                     if (!kk) return;
                     kk.values = kk.values || {};
                     kk.values[p.id] = p.kind === "bool" ? inp.checked : (p.kind === "int" || p.kind === "num") ? Number(inp.value) : inp.value;
+                    stackSync(kk, st);
                     persist();
                 });
                 r.append(inp);
@@ -595,7 +737,7 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         }
         const go = el(d, "div", "r3-row");
         const run = el(d, "button", "r3-btn r3-run", st.run ? "Stop" : "Run again");
-        run.title = "Run the workflow again on this render (a new seed; the frame is rendered first when it is not yet)";
+        run.title = "Run the stack again on this render: the layers in order, each on the picture the one before gave (a new seed; the frame is rendered first when it is not yet)";
         run.disabled = !c && !st.run;
         run.onclick = () => (st.run ? v._r3Stop(st) : v.previzRenderAi(st));
         go.append(el(d, "span", "r3-label", ""), run);
@@ -690,10 +832,25 @@ export function createRenderPanelInstance(v, host, st, saved, id) {
         for (const o of ui.passes.options) o.disabled = o.value.startsWith("ai") ? !urlOf(o.value) : !st.passes;
         if (ui.passes.value !== st.pass) ui.passes.value = st.pass;
         ui.passes.disabled = !st.passes && !st.ai;
+        // The bar's camera list: the scene's cameras, the one the settings render through ticked by value.
+        const sc = scene();
+        const camWant = [["", "Free view"], ...(sc ? S.cameras(sc) : []).map((cc) => [cc.id, cc.name])];
+        const camSig = JSON.stringify(camWant);
+        if (ui.camSig !== camSig) {
+            ui.camSig = camSig;
+            ui.camSel.textContent = "";
+            for (const [k, label] of camWant) ui.camSel.append(Object.assign(el(d, "option"), { value: k, textContent: label }));
+        }
+        const camNow = sc ? v._renderCameraId(S.renderSettings(sc), sc) : "";
+        if (ui.camSel.value !== camNow) ui.camSel.value = camNow;
         const c = mine().custom;
+        const layers = (mine().stack || []).length;
         ui.aiBtn.classList.toggle("on", !!(st.aiOn && c));
         ui.aiBtn.disabled = !c;
-        ui.aiBtn.title = c ? `Render runs ${c.name || "the workflow"} on the passes (off: the passes only)` : "Choose a workflow (AI workflow below) to run it on the render";
+        ui.aiBtn.title = c ? (layers > 1
+            ? `Render runs the stack's ${layers} layers in order on the passes (off: the passes only)`
+            : `Render runs ${c.name || "the workflow"} on the passes (off: the passes only)`)
+            : "Choose a workflow (AI workflow below) to run it on the render";
         ui.iprBtn.classList.toggle("on", !!st.ipr);
         ui.regionBtn.classList.toggle("on", !!st.region.on);
         const pp = promptParam(c);
@@ -834,6 +991,15 @@ export const PrevizRenderPanelMixin = {
         inst.refresh();
         if (settings && inst.st.settingsWin) inst.st.settingsWin(true);
         return inst;
+    },
+
+    /** The camera a Render panel renders through, chosen in its bar: the settings' Camera, kept on the scene. */
+    previzRenderPanelCamera(st, id) {
+        const scene = this.previzScene();
+        if (!scene) return;
+        const camera = S.cameras(scene).some((c) => c.id === id) ? id : "";
+        this._renderKeep({ ...S.renderSettings(scene), camera });
+        this._r3Refresh();
     },
 
     /** The panels go with the 3D tab and come back with the next one (as the Matchmove panels do). */
@@ -1150,6 +1316,7 @@ export const PrevizRenderPanelMixin = {
             const ids = new Set((custom.params || []).map((p) => p.id));
             for (const id of Object.keys(k.values)) if (!ids.has(id)) delete k.values[id];
         }
+        stackSync(k, st);
         st.error = "";
         st.persist();
         if (st.rebuildAi) st.rebuildAi();
@@ -1260,20 +1427,92 @@ export const PrevizRenderPanelMixin = {
     },
 
     /**
-     * Run panel `st`'s workflow on the frame: rendered first when the panel has no render of this frame, then
-     * filled in by the server, queued, and its outputs shown (the first as "AI", the others beside it).
+     * One workflow of the stack over `passes` (PNG data URLs): filled in by the server, queued as
+     * Paint's Generate is, its outputs read back (the first as the layer's picture). `under` is
+     * what a region's answer is pasted over. Answers { ai, last, answer }; throws when it failed.
+     */
+    async _r3RunOne(st, c, values, passes, { box, rpx, run, tell, under, sameFrame }) {
+        const k = st.mine();
+        const doc = this.container.ownerDocument;
+        tell(`${c.name || "Workflow"}: preparing`);
+        let prep;
+        for (let tries = 0; ; tries++) {
+            try {
+                let use = passes;
+                if (rpx) {
+                    use = {};
+                    for (const p of ["beauty", "depth", "normals", "mask"]) if (passes[p]) use[p] = await cropUrl(doc, passes[p], rpx);
+                }
+                const refs = await this._r3RefData(k.refs, refSlots(c));
+                prep = await post("/imageviewer/render3d_ai", { custom: c, values, passes: use, frame: st.frame, refs });
+                break;
+            } catch (e) {
+                const miss = e.data && e.data.missing;
+                if (e.status === 404 || e.status === 405) throw new Error("this ComfyUI does not know the route yet: restart ComfyUI after updating the viewer");
+                if (miss && miss.length && c.source === "prepared" && tries === 0 && miss.every((m) => m.kind !== "node")) {
+                    if (await this._r3ModelsReady(st, c.path, c.name, run)) continue;
+                }
+                if (miss && miss.length) {
+                    throw new Error("The workflow needs what is not here: " + miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ")
+                        + " - install the node pack or put the model file into its ComfyUI folder");
+                }
+                throw e;
+            }
+        }
+        if (run.stopped) throw Object.assign(new Error("stopped"), { stopped: true });
+        tell(`${c.name || "Workflow"}: queued`);
+        const pid = await this._paintQueue(prep.graph);
+        const outs = Object.keys(prep.outputs || {});
+        tell(`${c.name || "Workflow"}: running`);
+        let images;
+        try {
+            images = await this._cpAiWaitNodes(pid, outs, run, (n) => tell(`${c.name || "Workflow"}: ${n} of ${outs.length} outputs in`));
+        } catch (e) {
+            if (e.images && Object.keys(e.images).length) images = e.images; else throw e;
+        }
+        const last = { frame: st.frame, main: null, more: {} };
+        const ai = { url: null, more: {}, frame: st.frame };
+        for (const [node, name] of Object.entries(prep.outputs)) {
+            const ref = (images[node] || []).find(shown) || (images[node] || [])[0];
+            if (!ref) continue;
+            if (name === prep.main) { last.main = ref; ai.url = viewUrl(ref); } else { last.more[name] = ref; ai.more[name] = viewUrl(ref); }
+        }
+        if (!ai.url) {
+            const first = Object.keys(ai.more)[0];
+            if (!first) throw new Error("the workflow gave no pictures");
+            ai.url = ai.more[first]; last.main = last.more[first];
+            delete ai.more[first]; delete last.more[first];
+        }
+        ai.size = st.size ? { ...st.size } : null;
+        if (rpx) {
+            // Over the picture the layer before gave (the beauty for the first), the other outputs are the box's own.
+            ai.url = await pasteUrl(doc, under, ai.url, rpx, featherOf(rpx), st.size);
+            last.region = box;
+            last.size = { ...st.size };
+            const prev = st.mine().last;
+            last.under = sameFrame && prev && prev.frame === st.frame ? trimChain(prev) : null;
+            if (!last.under) last.base = "beauty";
+        }
+        return { ai, last, answer: { ok: true, frame: st.frame, outputs: Object.keys(images).length, uses: prep.uses,
+                                     region: box, prompt: values[(promptParam(c) || {}).id] ?? null, main: last.main } };
+    },
+
+    /**
+     * Run panel `st`'s stack on the frame: rendered first when the panel has no render of this frame,
+     * then each layer in order - the first on the passes, every next one on the picture the layer
+     * before gave - and the last one's outputs shown (the first as "AI", the others beside it).
      */
     async previzRenderAi(st, { fresh = false } = {}) {
         const k = st.mine();
-        const c = k.custom;
-        if (!c) { st.error = "Choose a workflow first."; if (st.rebuildAi) st.rebuildAi(); return null; }
+        const stack = stackSync(k, st).filter((l) => l && l.custom);
+        if (!stack.length) { st.error = "Choose a workflow first."; if (st.rebuildAi) st.rebuildAi(); return null; }
         if (st.run) return null;
         const f = Math.round(this.currentFrame || 0);
         const sc = this.previzScene();
         if (fresh || !st.passes || st.passes.preview || st.frame !== f || st.camera !== this._renderCameraId(S.renderSettings(sc), sc)) {
             if (!(await this.previzRenderStill(st))) return { ok: false, error: st.error || "the render did not draw" };
         }
-        // A region: only the box goes through the workflow, and its answer is pasted back over the frame.
+        // A region: only the box goes through the workflows, and each answer is pasted back over the frame.
         const box = st.region && st.region.on ? cleanBox(st.region.box) : null;
         const doc = this.container.ownerDocument;
         const rpx = box && st.size ? boxPixels(box, st.size.w, st.size.h) : null;
@@ -1284,74 +1523,27 @@ export const PrevizRenderPanelMixin = {
         const tell = (text) => { st.busy = { kind: "ai", text }; st.draw && st.draw(); };
         let answer = null;
         try {
-            tell(`${c.name || "Workflow"}: preparing`);
-            let prep;
-            for (let tries = 0; ; tries++) {
-                try {
-                    let passes = st.passes;
-                    if (rpx) {
-                        passes = {};
-                        for (const p of ["beauty", "depth", "normals", "mask"]) if (st.passes[p]) passes[p] = await cropUrl(doc, st.passes[p], rpx);
-                    }
-                    const refs = await this._r3RefData(k.refs, refSlots(c));
-                    prep = await post("/imageviewer/render3d_ai", { custom: c, values: runValues(k, c), passes, frame: st.frame, refs });
-                    break;
-                } catch (e) {
-                    const miss = e.data && e.data.missing;
-                    if (e.status === 404 || e.status === 405) throw new Error("this ComfyUI does not know the route yet: restart ComfyUI after updating the viewer");
-                    if (miss && miss.length && c.source === "prepared" && tries === 0 && miss.every((m) => m.kind !== "node")) {
-                        if (await this._r3ModelsReady(st, c.path, c.name, run)) continue;
-                    }
-                    if (miss && miss.length) {
-                        throw new Error("The workflow needs what is not here: " + miss.map((m) => (m.kind === "model" ? `${m.what} (${m.folder})` : `node ${m.what}`)).join(", ")
-                            + " - install the node pack or put the model file into its ComfyUI folder");
-                    }
-                    throw e;
+            let passes = st.passes, ai = null, last = null;
+            for (let i = 0; i < stack.length; i++) {
+                const c = stack[i].custom;
+                if (i > 0) {
+                    if (!ai || !ai.url) throw new Error("a layer gave no picture for the next");
+                    passes = { ...st.passes, beauty: await asDataUrl(doc, ai.url) };
+                    tell(`Layer ${i + 1} of ${stack.length}: ${c.name || "workflow"}`);
                 }
-            }
-            if (run.stopped) throw Object.assign(new Error("stopped"), { stopped: true });
-            tell(`${c.name || "Workflow"}: queued`);
-            const pid = await this._paintQueue(prep.graph);
-            const outs = Object.keys(prep.outputs || {});
-            tell(`${c.name || "Workflow"}: running`);
-            let images;
-            try {
-                images = await this._cpAiWaitNodes(pid, outs, run, (n) => tell(`${c.name || "Workflow"}: ${n} of ${outs.length} outputs in`));
-            } catch (e) {
-                if (e.images && Object.keys(e.images).length) images = e.images; else throw e;
-            }
-            const last = { frame: st.frame, main: null, more: {} };
-            const ai = { url: null, more: {}, frame: st.frame };
-            for (const [node, name] of Object.entries(prep.outputs)) {
-                const ref = (images[node] || []).find(shown) || (images[node] || [])[0];
-                if (!ref) continue;
-                if (name === prep.main) { last.main = ref; ai.url = viewUrl(ref); } else { last.more[name] = ref; ai.more[name] = viewUrl(ref); }
-            }
-            if (!ai.url) {
-                const first = Object.keys(ai.more)[0];
-                if (!first) throw new Error("the workflow gave no pictures");
-                ai.url = ai.more[first]; last.main = last.more[first];
-                delete ai.more[first]; delete last.more[first];
+                const one = await this._r3RunOne(st, c, runValues({ values: stack[i].values, prompt: k.prompt }, c), passes, {
+                    box, rpx, run, tell,
+                    under: i === 0 ? (sameFrame ? st.ai.url : st.passes.beauty) : ai.url,
+                    sameFrame: i === 0 && sameFrame,
+                });
+                ai = one.ai; last = one.last; answer = one.answer;
             }
             if (last.main && !shown(last.main)) st.error = `${last.main.filename}: the browser cannot show this file type here`;
-            ai.size = st.size ? { ...st.size } : null;
-            if (rpx) {
-                // Over the last AI picture of this frame, else over the beauty; the other outputs are the box's own.
-                const under = sameFrame ? st.ai.url : st.passes.beauty;
-                ai.url = await pasteUrl(doc, under, ai.url, rpx, featherOf(rpx), st.size);
-                last.region = box;
-                last.size = { ...st.size };
-                const prev = st.mine().last;
-                last.under = sameFrame && prev && prev.frame === st.frame ? trimChain(prev) : null;
-                if (!last.under) last.base = "beauty";
-            }
             st.ai = ai;
             st.pass = "ai";
-            this._r3History(st, "AI", ai.url);
+            this._r3History(st, stack.length > 1 ? `AI stack ${stack.length}` : "AI", ai.url);
             const kk = st.keep();
             if (kk) { kk.last = last; st.persist(); }
-            answer = { ok: true, frame: st.frame, outputs: Object.keys(images).length, uses: prep.uses, region: box,
-                       prompt: (runValues(k, c)[(promptParam(c) || {}).id]) ?? null, main: last.main };
         } catch (e) {
             if (run.stopped || e.stopped || String(e.message) === "stopped") { st.error = "Stopped."; answer = { ok: false, stopped: true }; }
             else {
@@ -1365,7 +1557,11 @@ export const PrevizRenderPanelMixin = {
             if (st.rebuildAi) st.rebuildAi();
             st.draw && st.draw();
         }
-        if (answer && answer.ok) notice("info", `${c.name || "The workflow"}: the result is in`, `Frame ${answer.frame}, in the Render panel.`);
+        if (answer && answer.ok) {
+            const top = stack[stack.length - 1].custom;
+            notice("info", `${stack.length > 1 ? `The stack (${stack.length} layers, last ${top.name || "workflow"})` : (top.name || "The workflow")}: the result is in`,
+                   `Frame ${answer.frame}, in the Render panel.`);
+        }
         return answer;
     },
 };
