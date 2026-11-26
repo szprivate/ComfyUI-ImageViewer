@@ -1240,11 +1240,22 @@ export const DockMixin = {
                            title: here ? "Shown here" : "Show this tab here",
                            run: () => { if (!here && this.switchTab) this.switchTab(k); } });
         }
-        const mates = DT.panels(this.dockLayout.root).filter((p) => !p.hidden && !p.behind && !p.tab && this._dockPanelEl(p.id));
-        if (mates.length) {
-            entries.push("-", { head: "Trade places with" });
-            for (const p of mates) entries.push({ label: "     " + _dockLabel(p.id), title: "The main view and this panel swap places",
-                                                  run: () => this.dockViewSwap(p.id) });
+        // The same grouped list of panels every panel's switch shows (Sebastian 2026-11-25:
+        // "should look and act like any of the other panels"); picking one trades places
+        // with the view, as the panel switches trade places between their places.
+        for (const g of this._dockSwitchGroups()) {
+            entries.push("-", { head: g.title });
+            for (const it of g.items) {
+                const e = this._dockEntryOf(it.id);
+                const grouped = !!(e && (e.tab || e.behind));
+                entries.push({
+                    label: "     " + it.label,
+                    title: grouped ? "In a tab group beside its own panels: drag it out to move it into the main view"
+                        : e && !e.hidden ? "Open in another place: the two swap places" : "Show it in the main view",
+                    disabled: grouped,
+                    run: () => this.dockViewSwitchPanel(it.id),
+                });
+            }
         }
         const r = btn.getBoundingClientRect();
         const menu = this._previzOpenMenu && this._previzOpenMenu(entries, r.left, r.bottom + 3, btn);
@@ -1255,6 +1266,20 @@ export const DockMixin = {
         const win = btn.ownerDocument.defaultView || window;
         const off = () => { if (!menu.isConnected) { btn.classList.remove("open"); this._dockSwitchOpen = null; } else win.requestAnimationFrame(off); };
         win.requestAnimationFrame(off);
+    },
+
+    /**
+     * Show panel `toId` in the main view's place: the view and the panel trade places, as the
+     * panel switches do. A panel that is put away comes up first; one in a tab group stays put
+     * (its group would be torn apart).
+     */
+    dockViewSwitchPanel(toId) {
+        toId = _dockId(toId);
+        const e = this._dockEntryOf(toId);
+        if (e && (e.tab || e.behind)) return false;
+        if (!e) this.setPanelDocked(toId, true);
+        else if (e.hidden) { e.hidden = false; this.applyDockLayout(); }
+        return this.dockViewSwap(toId);
     },
 
     /** Take the view node out of the tree as it is (no tidy: tidy would put a new one back). */
