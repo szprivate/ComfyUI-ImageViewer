@@ -1504,7 +1504,7 @@ export function createCompEditor(host, opts = {}) {
         });
     }
     const tipped = (elm, text) => { const t = svgEl(doc, "title", {}); t.textContent = text; elm.append(t); return elm; };
-    const ROUND = { translate: 10, center: 10, rotate: 100, scale: 1000, skew: 1000, topleft: 10, bottomright: 10, focal_point: 10, focus: 1e5 };
+    const ROUND = { translate: 1e5, center: 1e5, rotate: 100, scale: 1000, skew: 1000, topleft: 10, bottomright: 10, focal_point: 10, focus: 1e5 };
     const rounded = (p, v) => { const k = ROUND[p] || 1000, r = (x) => Math.round(x * k) / k; return Array.isArray(v) ? v.map(r) : r(v); };
     /** The Transform's jack: move (the middle), the centre (Ctrl), the ring and its squares (scale), the bars (turn, skew). */
     function drawJack(n) {
@@ -1517,7 +1517,13 @@ export function createCompEditor(host, opts = {}) {
             elm.addEventListener("pointerdown", (e) => {
                 const which = name === "move" && (e.ctrlKey || e.metaKey) ? "centre" : name;
                 const v0 = J.transformValues((p) => C.paramAt(node(n.id), p, st.frame), inFmt(n));
-                dragPatch(e, n.id, (xy0, xy, ev) => J.jackDrag(which, v0, xy0, xy, z, { shift: ev.shiftKey }));
+                dragPatch(e, n.id, (xy0, xy, ev) => {
+                    const d = J.jackDrag(which, v0, xy0, xy, z, { shift: ev.shiftKey });
+                    const F = inFmt(n);
+                    if (d.translate) d.translate = J.toStored(d.translate, F);   // the jack works in pixels
+                    if (d.center) d.center = J.toStored(d.center, F);
+                    return d;
+                });
             });
             layer.append(elm);
             return elm;

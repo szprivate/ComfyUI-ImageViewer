@@ -818,7 +818,7 @@ test("a picture with no alpha of its own goes into an alpha as its luminance; wr
 test("bounding boxes: a small thing carries its box through transform, blur and merge, and the numbers stay", () => {
     const comp = C.newComp({ width: 40, height: 30 });
     const r = C.addNode(comp, read(comp, "a.png"));
-    const t = C.addNode(comp, C.makeNode(comp, "transform", { inputs: [r.id], translate: [5, 3] }));
+    const t = C.addNode(comp, C.makeNode(comp, "transform", { inputs: [r.id], translate: [0.125, 0.1] }));   // 5px, 3px of a 40x30 picture
     const b = C.addNode(comp, C.makeNode(comp, "blur", { inputs: [t.id], size: 3 }));
     const bg = C.addNode(comp, C.makeNode(comp, "constant", { color: [0.2, 0.3, 0.4, 1] }));
     const m = C.addNode(comp, C.makeNode(comp, "merge", { inputs: [bg.id, b.id] }));

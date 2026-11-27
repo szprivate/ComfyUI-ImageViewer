@@ -32,13 +32,19 @@ function invert(A) {
     return [A[3] / det, -A[1] / det, -A[2] / det, A[0] / det];
 }
 
-/** A Transform's values at a frame: {t, r, s, k, c} (c the centre, the comp's middle when empty). */
+/** A Transform's values at a frame, in comp pixels for the jack: {t, r, s, k, c}. The stored
+ *  translate/center are fractions of the picture (#291); the jack works in pixels, so they are
+ *  scaled up here and divided back with `toStored` where a drag writes them. */
 export function transformValues(get, fmt) {
+    const t = get("translate") || [0, 0], c = get("center");
     return {
-        t: (get("translate") || [0, 0]).slice(), r: +get("rotate") || 0, s: (get("scale") || [1, 1]).slice(),
-        k: (get("skew") || [0, 0]).slice(), c: (get("center") || [fmt.width / 2, fmt.height / 2]).slice(),
+        t: [t[0] * fmt.width, t[1] * fmt.height], r: +get("rotate") || 0, s: (get("scale") || [1, 1]).slice(),
+        k: (get("skew") || [0, 0]).slice(), c: c ? [c[0] * fmt.width, c[1] * fmt.height] : [fmt.width / 2, fmt.height / 2],
     };
 }
+
+/** Jack pixels back to stored fractions, for a translate or center a drag wrote. */
+export const toStored = (v, fmt) => [v[0] / fmt.width, v[1] / fmt.height];
 
 /** Where the jack's parts lie: {O, R0, ring: [[x, y]...], e, w, n, s, rot, skew, ux}. */
 export function jackGeom(v, z) {

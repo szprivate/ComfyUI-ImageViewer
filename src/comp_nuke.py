@@ -314,9 +314,10 @@ def _native(n, t, ins, pos, label, write, out, A, W, H, F, y_, note, info_of, nk
     fi = M.format_at(A.comp, ins[0]) if ins and ins[0] else {"width": W, "height": H}
     IW, IH = fi["width"], fi["height"]
     if t == "transform":
-        mid = [IW / 2, IH / 2]
-        tr = A.knob(n, "translate", lambda v: [(v or [0, 0])[0], -(v or [0, 0])[1]], 2)
-        ce = A.knob(n, "center", lambda v: [(v or mid)[0], IH - (v or mid)[1]], 2)
+        # The comp holds translate/center as fractions of the picture (#291); Nuke's are in its
+        # pixels, so they are scaled up here (and Nuke's y is up from the bottom).
+        tr = A.knob(n, "translate", lambda v: [(v or [0, 0])[0] * IW, -(v or [0, 0])[1] * IH], 2)
+        ce = A.knob(n, "center", lambda v: [(v or [0.5, 0.5])[0] * IW, IH - (v or [0.5, 0.5])[1] * IH], 2)
         note("Transform: Nuke filters with cubic, the comp with bilinear")
         return out.add("Transform", label, [("inputs", "1"), ("translate", tr), ("rotate", A.knob(n, "rotate", lambda v: -(v or 0))),
                                             ("scale", A.knob(n, "scale", lambda v: list(v or [1, 1]), 2)),

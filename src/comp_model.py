@@ -653,7 +653,7 @@ def new_comp(width=1920, height=1080, fps=24, frames=48):
             "nodes": [{"id": "Constant1", "type": "constant", "name": "Background", "x": 0, "y": 0,
                        "color": [0, 0, 0, 1], "inputs": []},
                       {"id": "Output1", "type": "output", "x": 0, "y": 200, "inputs": ["Constant1"]}],
-            "output": "Output1"}
+            "output": "Output1", "tx": "frac"}
 
 
 def normalize(raw):
@@ -676,6 +676,32 @@ def normalize(raw):
     if not out or out.get("type") != "output":
         first = next((n for n in comp["nodes"] if n["type"] == "output"), None)
         comp["output"] = first["id"] if first else None
+    # Transforms are fractions of the picture now (#291): a comp saved before that held their
+    # translate/center in pixels - divide them by the format once, on load, and mark the comp.
+    if raw.get("tx") != "frac":
+        FW, FH = comp["format"]["width"], comp["format"]["height"]
+
+        def _div(v):
+            return [v[0] / FW, v[1] / FH] if isinstance(v, list) and len(v) == 2 else v
+
+        def _walk(nodes):
+            for n in nodes:
+                if not isinstance(n, dict):
+                    continue
+                if n.get("type") == "transform":
+                    if isinstance(n.get("translate"), list):
+                        n["translate"] = _div(n["translate"])
+                    if isinstance(n.get("center"), list):
+                        n["center"] = _div(n["center"])
+                    tr = n.get("tracks") or {}
+                    for p in ("translate", "center"):
+                        for k in (tr.get(p) or []):
+                            if isinstance(k.get("v"), list):
+                                k["v"] = _div(k["v"])
+                if isinstance(n.get("nodes"), list):
+                    _walk(n["nodes"])
+        _walk(comp["nodes"])
+    comp["tx"] = "frac"
     views = clean_views(f.get("views"))
     if views:
         comp["format"]["views"] = views
@@ -1147,13 +1173,15 @@ def fit_matrix(sw, sh, w, h, fit, k=1.0):
 
 
 def transform_matrix(node, frame, fmt, scale=1.0):
+    # translate and center are fractions of the picture that comes in (#291); scale is the proxy scale.
     t = param_at(node, "translate", frame) or [0, 0]
     r = param_at(node, "rotate", frame) or 0
     sc = param_at(node, "scale", frame) or [1, 1]
     k = param_at(node, "skew", frame) or [0, 0]
-    c = param_at(node, "center", frame) or [fmt["width"] / 2, fmt["height"] / 2]
-    cx, cy = c[0] * scale, c[1] * scale
-    return _mul(_t(t[0] * scale + cx, t[1] * scale + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
+    c = param_at(node, "center", frame) or [0.5, 0.5]
+    cx, cy = c[0] * fmt["width"] * scale, c[1] * fmt["height"] * scale
+    tx, ty = t[0] * fmt["width"] * scale, t[1] * fmt["height"] * scale
+    return _mul(_t(tx + cx, ty + cy), _mul(_r(r), _mul(_s(sc[0], sc[1]), _mul(_k(k[0], k[1]), _t(-cx, -cy)))))
 
 
 def link_matrix(comp, s, f):

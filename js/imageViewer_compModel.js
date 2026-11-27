@@ -95,11 +95,11 @@ export const NODE_TYPES = {
         mix: { kind: "num", def: 1, min: 0, max: 1, step: 0.01, key: true },
     } },
     transform: { label: "Transform", cat: "Transform", inputs: ["src"], params: {
-        translate: { kind: "vec2", def: [0, 0], key: true, step: 1 },
+        translate: { kind: "vec2", def: [0, 0], key: true, step: 0.01, help: "The shift, as a fraction of the picture that comes in (0.1 = a tenth of its width / height) - it keeps its place when the resolution changes" },
         rotate: { kind: "num", def: 0, key: true, step: 0.5 },
         scale: { kind: "vec2", def: [1, 1], key: true, step: 0.01 },
         skew: { kind: "vec2", def: [0, 0], key: true, step: 0.01, help: "Shear: x moves with y, then y with x" },
-        center: { kind: "vec2", def: null, key: true, step: 1, help: "Empty: the middle of the picture that comes in" },
+        center: { kind: "vec2", def: null, key: true, step: 0.01, help: "The pivot, as a fraction of the picture (empty: its middle)" },
     } },
     grade: { label: "Grade", cat: "Color", inputs: ["src"], params: {
         blackpoint: { kind: "num", def: 0, key: true, step: 0.01 },
@@ -601,7 +601,7 @@ export function isCompPath(p) { return typeof p === "string" && p.toLowerCase().
 
 /** A new comp: a Constant into an Output, ready for a Read to be merged over it. */
 export function newComp({ width = 1920, height = 1080, fps = 24, frames = 48 } = {}) {
-    const comp = { comp: COMP_VERSION, format: { width, height, fps, frames }, nodes: [], output: "Output1" };
+    const comp = { comp: COMP_VERSION, format: { width, height, fps, frames }, nodes: [], output: "Output1", tx: "frac" };
     const bg = addNode(comp, makeNode(comp, "constant", { x: 0, y: 0, color: [0, 0, 0, 1], name: "Background" }));
     addNode(comp, makeNode(comp, "output", { x: 0, y: 200, inputs: [bg.id] }));
     return comp;
@@ -625,6 +625,28 @@ export function normalizeComp(raw) {
         const o = comp.nodes.find((n) => n.type === "output");
         comp.output = o ? o.id : null;
     }
+    // Transforms are fractions of the picture now (#291). A comp saved before that held their
+    // translate/center in pixels: divide them by the format once, on load, and mark the comp so
+    // it is never scaled twice.
+    if (raw.tx !== "frac") {
+        const W = comp.format.width, H = comp.format.height;
+        const div = (v) => (Array.isArray(v) ? [v[0] / W, v[1] / H] : v);
+        const walk = (list) => {
+            for (const n of list) {
+                if (n && n.type === "transform") {
+                    if (Array.isArray(n.translate)) n.translate = div(n.translate);
+                    if (Array.isArray(n.center)) n.center = div(n.center);
+                    for (const p of ["translate", "center"]) {
+                        const tr = n.tracks && n.tracks[p];
+                        if (Array.isArray(tr)) for (const k of tr) if (Array.isArray(k.v)) k.v = div(k.v);
+                    }
+                }
+                if (n && Array.isArray(n.nodes)) walk(n.nodes);
+            }
+        };
+        walk(comp.nodes);
+    }
+    comp.tx = "frac";
     const views = cleanViews(f.views);
     if (views.length) comp.format.views = views;
     const layers = CH.cleanLayers(raw.layers);
@@ -1760,15 +1782,18 @@ const conformExtras = (ex, w0, h0, w, h) => {
     return out;
 };
 
-/** A Transform node's matrix at `frame`, in pixels of a picture `scale` times ``format`` (the size that comes in). */
+/** A Transform node's matrix at `frame`. `translate` and `center` are fractions of the picture
+ *  that comes in (``format``, in pixels of the comp), so a transform keeps its composition when the
+ *  resolution changes (#291); ``scale`` is the render/proxy scale. */
 export function transformMatrix(node, frame, format, scale = 1) {
     const t = paramAt(node, "translate", frame) || [0, 0];
     const r = paramAt(node, "rotate", frame) || 0;
     const sc = paramAt(node, "scale", frame) || [1, 1];
     const k = paramAt(node, "skew", frame) || [0, 0];
-    const c = paramAt(node, "center", frame) || [format.width / 2, format.height / 2];
-    const cx = c[0] * scale, cy = c[1] * scale;
-    return mat.mul(mat.t(t[0] * scale + cx, t[1] * scale + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.mul(mat.k(k[0], k[1]), mat.t(-cx, -cy)))));
+    const c = paramAt(node, "center", frame) || [0.5, 0.5];
+    const cx = c[0] * format.width * scale, cy = c[1] * format.height * scale;
+    const tx = t[0] * format.width * scale, ty = t[1] * format.height * scale;
+    return mat.mul(mat.t(tx + cx, ty + cy), mat.mul(mat.r(r), mat.mul(mat.s(sc[0], sc[1]), mat.mul(mat.k(k[0], k[1]), mat.t(-cx, -cy)))));
 }
 
 /** A Paint stroke's link at frame f: the matrix (full-size pixels) its points move by - the linked node's matrix at
@@ -2726,6 +2751,7 @@ export function bakeTrack(comp, trackerId, how) {
     const probe = pin && n.type === "tracker" ? Object.assign({}, n, { motion: "perspective" }) : n;
     const frames = trackFrames(comp, probe);
     if (!frames.length) return null;
+    const F = comp.format;
     const key = (f, v) => ({ f, v, ease: "linear" });
     const r4 = (v) => Math.round(v * 1e4) / 1e4;
     const at = { x: n.x + NODE_W + 30, y: n.y, name: undefined };
@@ -2744,14 +2770,14 @@ export function bakeTrack(comp, trackerId, how) {
         const t = [], r = [], sc = [], c = [];
         for (const f of frames) {
             const mo = trackMotion(n, f);
-            if (how === "match-move") { t.push(key(f, [r4(mo.cQ[0] - mo.cP[0]), r4(mo.cQ[1] - mo.cP[1])])); r.push(key(f, r4(mo.angle))); sc.push(key(f, [r4(mo.s), r4(mo.s)])); }
-            else { t.push(key(f, [r4(mo.cP[0] - mo.cQ[0]), r4(mo.cP[1] - mo.cQ[1])])); r.push(key(f, r4(-mo.angle))); sc.push(key(f, [r4(1 / mo.s), r4(1 / mo.s)])); c.push(key(f, mo.cQ.map(r4))); }
+            if (how === "match-move") { t.push(key(f, [r4((mo.cQ[0] - mo.cP[0]) / F.width), r4((mo.cQ[1] - mo.cP[1]) / F.height)])); r.push(key(f, r4(mo.angle))); sc.push(key(f, [r4(mo.s), r4(mo.s)])); }
+            else { t.push(key(f, [r4((mo.cP[0] - mo.cQ[0]) / F.width), r4((mo.cP[1] - mo.cQ[1]) / F.height)])); r.push(key(f, r4(-mo.angle))); sc.push(key(f, [r4(1 / mo.s), r4(1 / mo.s)])); c.push(key(f, [r4(mo.cQ[0] / F.width), r4(mo.cQ[1] / F.height)])); }
         }
         const mo0 = trackMotion(n, frames[0]);
         node.tracks = { translate: t };
         if (n.motion === "rotate" || n.motion === "scale") node.tracks.rotate = r;
         if (n.motion === "scale") node.tracks.scale = sc;
-        if (how === "match-move") node.center = mo0.cP.map(r4); else node.tracks.center = c;
+        if (how === "match-move") node.center = [r4(mo0.cP[0] / F.width), r4(mo0.cP[1] / F.height)]; else node.tracks.center = c;
     }
     if (!node.name) delete node.name;
     addNode(comp, node);
