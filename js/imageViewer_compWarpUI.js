@@ -30,6 +30,7 @@ export const CSS = `
 .cp-over .cp-tbox.search{stroke-dasharray:4 3;opacity:.7}
 .cp-over .cp-tbox.sel{stroke:#ffcf3a}
 .cp-over .cp-tgrab{fill:transparent;pointer-events:all;cursor:move}
+.cp-over .cp-tresize{cursor:nwse-resize;stroke:#3ad1ff;stroke-width:1px;vector-effect:non-scaling-stroke;opacity:.8}
 .cp-over .cp-tpath{fill:none;stroke:#3ad1ff;stroke-width:1px;vector-effect:non-scaling-stroke;opacity:.6}
 .cp-over .cp-tpath.sel{stroke:#ffcf3a;opacity:.9}
 .cp-over .cp-tlost{stroke:#ff3b30!important}
@@ -220,7 +221,21 @@ function drawTracker(E, n) {
             if (e.button === 0) E.renderOverlay();
         });
         const k = 6 / E.z;
-        E.layer.append(box, grab,
+        // The search area's corner: drag it to grow or shrink the box the tracker looks in (#291).
+        const hs = 8 / E.z;
+        const shr = E.svg("rect", { class: "cp-tgrab cp-tresize", x: at[0] + sw / 2 - hs / 2, y: at[1] + sh / 2 - hs / 2, width: hs, height: hs });
+        E.tip(shr, `${pt.name || pt.id}: drag the corner to size the search area`);
+        shr.addEventListener("pointerdown", (e) => {
+            E.st.trkSel = pt.id;
+            drag(E, e, n.id, (m, xy0, xy) => {
+                const odd = (v) => 2 * Math.max(1, Math.round(v)) + 1;
+                const nw = Math.min(4001, odd(sw / 2 + (xy[0] - xy0[0])));
+                const nh = Math.min(4001, odd(sh / 2 + (xy[1] - xy0[1])));
+                m.points = { points: m.points.points.map((p) => (p.id === pt.id ? Object.assign({}, p, { search: [nw, nh] }) : p)) };
+            });
+            if (e.button === 0) E.renderOverlay();
+        });
+        E.layer.append(box, grab, shr,
             E.svg("line", { class: "cp-hline solid", x1: at[0] - k, y1: at[1], x2: at[0] + k, y2: at[1] }),
             E.svg("line", { class: "cp-hline solid", x1: at[0], y1: at[1] - k, x2: at[0], y2: at[1] + k }));
         const t = E.svg("text", { class: "cp-wlabel", x: at[0] + pw / 2 + 3 / E.z, y: at[1] - ph / 2, "font-size": 10 / E.z });
