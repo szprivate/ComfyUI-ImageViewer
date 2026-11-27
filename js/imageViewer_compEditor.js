@@ -1648,6 +1648,9 @@ export function createCompEditor(host, opts = {}) {
         Object.assign(st.grid, patch);
         keepGrid(st.grid);
         placeWorld();
+        // Every further node view draws the grid itself: repaint them too, or a grid button
+        // pressed in one view only ever changed the first panel's grid (issue #291).
+        for (const fn of graphViews) { try { fn(); } catch (e) { console.warn("[ImageViewer] a node view missed the grid", e); } }
     }
     /** The Align menu: the selected nodes lined up (one undo step); "Snap to grid" takes every node when none is. */
     function alignItems() {
@@ -3884,14 +3887,8 @@ export function createCompEditor(host, opts = {}) {
             pane.append(field("metadata", show), box);
         }
         if (n.type === "output") pane.append(el(doc, "div", "mg-empty", "What the comp renders: Render… writes it by the export rule, into the History and onto the ComfyUI canvas."));
-        const keys = C.nodeKeyFrames(n);
-        if (keys.length) {
-            const row = el(doc, "div", "mg-prop");
-            row.append(el(doc, "label", "", "keys"));
-            for (const f of keys.slice(0, 24)) { const b = btn(String(f), "Go to this key", () => o.onFrame && o.onFrame(f), f === st.frame ? "on" : ""); row.append(b); }
-            row.style.flexWrap = "wrap";
-            pane.append(row);
-        }
+        // (No "keys" row here any more: the curve editor and the timeline show and edit a node's
+        // keys, so a second list of them in the Properties was only a place to be out of date.)
     }
 
     // ── layers (the same graph as a stack, on a timeline) ────────────────────
