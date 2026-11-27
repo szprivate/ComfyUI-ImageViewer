@@ -39,6 +39,10 @@ export function createCompGraphView(host, editor, saved) {
     const gv = (saved && saved.view && Number.isFinite(saved.view.s))
         ? { s: saved.view.s, x: saved.view.x || 0, y: saved.view.y || 0, fitted: !!saved.view.fitted }
         : { s: 1, x: 0, y: 0, fitted: false };
+    // Each Node Graph is its own view on the same comp (#291): the grid on/off and snap are this
+    // view's, not the editor's - a fresh view starts as the editor's is, then goes its own way.
+    gv.grid = (saved && saved.grid) ? { show: !!saved.grid.show, snap: !!saved.grid.snap }
+        : { show: !!(st.grid && st.grid.show), snap: !!(st.grid && st.grid.snap) };
     // While a node is dragged its place is drawn ahead of the model; the move lands as one undo step on release.
     let drag = null;
 
@@ -66,9 +70,9 @@ export function createCompGraphView(host, editor, saved) {
     addBtn.addEventListener("pointerdown", (e) => e.stopPropagation());
     addBtn.addEventListener("click", (e) => { e.stopPropagation(); editor.graphMenus.add(graph); });
     const gridBtn = ib("cp-grid-btn", '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
-        "Show the grid (G)", () => editor.graphMenus.grid({ show: !editor.graphMenus.gridState().show }));
+        "Show the grid (G)", () => { gv.grid.show = !gv.grid.show; placeWorld(); syncGridBtns(); });
     const snapBtn = ib("cp-snap-btn", '<path d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15"/><path d="m5 8 4 4"/><path d="m12 15 4 4"/>',
-        "Snap nodes to the grid (S)", () => editor.graphMenus.grid({ snap: !editor.graphMenus.gridState().snap }));
+        "Snap nodes to the grid (S)", () => { gv.grid.snap = !gv.grid.snap; syncGridBtns(); });
     const alignBtn = ib("cp-align-btn", '<rect width="6" height="16" x="4" y="6" rx="2"/><rect width="6" height="9" x="14" y="6" rx="2"/><path d="M22 2H2"/>',
         "Align the selected nodes", (b) => editor.graphMenus.align(b));
     gbar.append(addBtn, gridBtn, snapBtn, alignBtn, crumbs);
@@ -84,7 +88,7 @@ export function createCompGraphView(host, editor, saved) {
     function placeWorld() {
         world.style.transform = `translate(${gv.x}px, ${gv.y}px) scale(${gv.s})`;
         const g = C.GRID * gv.s, GG = g * 4;
-        if (!st.grid || !st.grid.show) { graph.style.backgroundImage = ""; graph.dataset.grid = "off"; }
+        if (!gv.grid.show) { graph.style.backgroundImage = ""; graph.dataset.grid = "off"; }
         else {
             const line = (c) => [`linear-gradient(${c} 1px, transparent 1px)`, `linear-gradient(90deg, ${c} 1px, transparent 1px)`];
             const minor = g >= 6;
@@ -94,6 +98,10 @@ export function createCompGraphView(host, editor, saved) {
             graph.style.backgroundPosition = [at, at, ...(minor ? [at, at] : [])].join(",");
             graph.dataset.grid = minor ? "cells" : "major";
         }
+    }
+    function syncGridBtns() {
+        gridBtn.classList.toggle("on", !!gv.grid.show);
+        snapBtn.classList.toggle("on", !!gv.grid.snap);
     }
 
     function frameAll() {
@@ -215,9 +223,7 @@ export function createCompGraphView(host, editor, saved) {
         }
         placeWorld();
         if (!gv.fitted && graph.clientWidth) frameAll();
-        const gs = editor.graphMenus.gridState();
-        gridBtn.classList.toggle("on", !!(gs && gs.show));
-        snapBtn.classList.toggle("on", !!(gs && gs.snap));
+        syncGridBtns();
     }
 
     // ── Looking around ───────────────────────────────────────────────────────
@@ -363,7 +369,7 @@ export function createCompGraphView(host, editor, saved) {
     return {
         el: host,
         render,
-        save() { return { view: { s: gv.s, x: gv.x, y: gv.y, fitted: gv.fitted } }; },
+        save() { return { view: { s: gv.s, x: gv.x, y: gv.y, fitted: gv.fitted }, grid: { show: gv.grid.show, snap: gv.grid.snap } }; },
         dispose() {
             editor.removeGraphView(render);
             if (ro) ro.disconnect();

@@ -1656,12 +1656,10 @@ export function createCompEditor(host, opts = {}) {
         snapBtn.classList.toggle("on", st.grid.snap);
     }
     function setGrid(patch) {
+        // This editor's own graph only: every Node Graph view keeps its own grid (#291).
         Object.assign(st.grid, patch);
         keepGrid(st.grid);
         placeWorld();
-        // Every further node view draws the grid itself: repaint them too, or a grid button
-        // pressed in one view only ever changed the first panel's grid (issue #291).
-        for (const fn of graphViews) { try { fn(); } catch (e) { console.warn("[ImageViewer] a node view missed the grid", e); } }
     }
     /** The Align menu: the selected nodes lined up (one undo step); "Snap to grid" takes every node when none is. */
     function alignItems() {
