@@ -37,8 +37,8 @@ export function createCompGraphView(host, editor, saved) {
     const doc = host.ownerDocument;
     const st = editor.state;
     const gv = (saved && saved.view && Number.isFinite(saved.view.s))
-        ? { s: saved.view.s, x: saved.view.x || 0, y: saved.view.y || 0, fitted: !!saved.view.fitted }
-        : { s: 1, x: 0, y: 0, fitted: false };
+        ? { s: saved.view.s, x: saved.view.x || 0, y: saved.view.y || 0, fitted: !!saved.view.fitted, didFit: true }
+        : { s: 1, x: 0, y: 0, fitted: false, didFit: false };
     // Each Node Graph is its own view on the same comp (#291): the grid on/off and snap are this
     // view's, not the editor's - a fresh view starts as the editor's is, then goes its own way.
     gv.grid = (saved && saved.grid) ? { show: !!saved.grid.show, snap: !!saved.grid.snap }
@@ -112,7 +112,7 @@ export function createCompGraphView(host, editor, saved) {
         const y0 = Math.min(...ys) - 40, y1 = Math.max(...ns.map((n) => n.y + C.nodeSize(n)[1])) + 40;
         const W = graph.clientWidth || 400, H = graph.clientHeight || 300;
         const s = Math.max(0.2, Math.min(1.5, Math.min(W / (x1 - x0), H / (y1 - y0))));
-        gv.s = s; gv.x = (W - (x1 - x0) * s) / 2 - x0 * s; gv.y = (H - (y1 - y0) * s) / 2 - y0 * s; gv.fitted = true;
+        gv.s = s; gv.x = (W - (x1 - x0) * s) / 2 - x0 * s; gv.y = (H - (y1 - y0) * s) / 2 - y0 * s; gv.fitted = true; gv.didFit = true;
         placeWorld();
     }
 
@@ -132,7 +132,7 @@ export function createCompGraphView(host, editor, saved) {
             b.addEventListener("click", (e) => {
                 e.stopPropagation();
                 if (last) return;
-                st.scope = path.slice(); st.sel = []; st.graph.fitted = false; gv.fitted = false;
+                st.scope = path.slice(); st.sel = []; st.graph.fitted = false; gv.fitted = false; gv.didFit = false;
                 editor.refresh();
             });
             crumbs.append(b);
@@ -222,7 +222,9 @@ export function createCompGraphView(host, editor, saved) {
             }
         }
         placeWorld();
-        if (!gv.fitted && graph.clientWidth) frameAll();
+        // Frame the graph once, when the view first has a size; a hand pan or zoom (fitted false)
+        // must survive the renders that follow, or the view would snap back (#291).
+        if (!gv.didFit && graph.clientWidth) frameAll();
         syncGridBtns();
     }
 
@@ -328,7 +330,7 @@ export function createCompGraphView(host, editor, saved) {
         const n = node(box.dataset.id);
         if (!n) return;
         if (n.type === "group") {
-            st.scope = [...st.scope, n.id]; st.sel = []; st.graph.fitted = false; gv.fitted = false;
+            st.scope = [...st.scope, n.id]; st.sel = []; st.graph.fitted = false; gv.fitted = false; gv.didFit = false;
             editor.refresh();
             return;
         }
@@ -354,13 +356,13 @@ export function createCompGraphView(host, editor, saved) {
         if (e.key === "1") { const id = editor.selection()[0]; if (id) { e.preventDefault(); e.stopPropagation(); editor.view(id); } return; }
         if (e.key === "Backspace" && (e.ctrlKey || e.metaKey) && st.scope.length) {
             e.preventDefault(); e.stopPropagation();
-            st.scope = st.scope.slice(0, -1); st.sel = []; st.graph.fitted = false; gv.fitted = false;
+            st.scope = st.scope.slice(0, -1); st.sel = []; st.graph.fitted = false; gv.fitted = false; gv.didFit = false;
             editor.refresh();
         }
     });
 
     const RO = (graph.ownerDocument.defaultView || window).ResizeObserver;
-    const ro = RO ? new RO(() => { if (!gv.fitted) frameAll(); else placeWorld(); }) : null;
+    const ro = RO ? new RO(() => { if (!gv.didFit) frameAll(); else placeWorld(); }) : null;
     if (ro) ro.observe(graph);
 
     editor.addGraphView(render);
