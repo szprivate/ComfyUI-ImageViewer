@@ -209,6 +209,7 @@ NODE_TYPES = {
     }},
     "constant": {"inputs": [], "params": {
         "color": {"kind": "color", "def": [0, 0, 0, 1], "key": True},
+        "resolution": {"kind": "vec2", "def": None},
         "write": {"kind": "target", "def": "rgba"},
     }},
     "merge": {"inputs": ["B", "A", "mask"], "params": {
@@ -427,6 +428,7 @@ NODE_TYPES = {
     }},
     "lensflare": {"inputs": ["src", "dirt"], "params": {
         "position": {"kind": "vec2", "def": None, "key": True},
+        "resolution": {"kind": "vec2", "def": None},
         "color": {"kind": "color", "def": [1, 0.85, 0.7, 1]},
         "intensity": {"kind": "num", "def": 1, "min": 0, "key": True},
         "size": {"kind": "num", "def": 1, "min": 0.01, "key": True},
@@ -1229,6 +1231,14 @@ def with_read_sizes(comp, source):
     return dict(comp, nodes=nodes) if changed else comp
 
 
+def own_size(n, frame=0):
+    """A Constant's or LensFlare's own Resolution in whole pixels, else None (it renders at the comp's / input's size)."""
+    r = param_at(n, "resolution", frame)
+    if isinstance(r, (list, tuple)) and len(r) == 2 and all(isinstance(v, (int, float)) and v == v and v >= 1 for v in r):
+        return [max(1, int(round(r[0]))), max(1, int(round(r[1])))]
+    return None
+
+
 def format_at(comp, nid, depth=0):
     """The size of the picture node ``nid`` makes, in pixels of the comp (the page's ``formatAt``)."""
     if not depth:
@@ -1258,6 +1268,10 @@ def format_at(comp, nid, depth=0):
     if not n.get("disable") and n["type"] == "ai_upscale":
         u, k = up(), _X.upscale_factor(n)
         return {"width": max(1, int(math.floor(u["width"] * k + 0.5))), "height": max(1, int(math.floor(u["height"] * k + 0.5)))}
+    if not n.get("disable") and n["type"] in ("constant", "lensflare"):
+        z = own_size(n)
+        if z:
+            return {"width": z[0], "height": z[1]}
     if n.get("disable") or n["type"] != "reformat":
         if n["type"] == "read":
             z = read_size(n)
@@ -3248,7 +3262,8 @@ def render_node(comp, nid, frame, source=None, scale=1.0, memo=None, ocio=None, 
         if t == "lensflare":
             p = P(n, f, NODE_TYPES["lensflare"]["params"])
             src = run(ins[0], f, d1) if ins and ins[0] else None
-            w, h = (src.shape[1], src.shape[0]) if src is not None else (W, H)
+            own = own_size(n, f)
+            w, h = (own if own else (src.shape[1], src.shape[0]) if src is not None else (W, H))
             dirt = conform(run(ins[1], f, d1), w, h) if len(ins) > 1 and ins[1] else None
             return flare_image(src, dirt, p, w, h, scale)
         if t == "colorcorrect":

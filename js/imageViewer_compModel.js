@@ -87,6 +87,7 @@ export const NODE_TYPES = {
     } },
     constant: { label: "Constant", cat: "Image", inputs: [], params: {
         color: { kind: "color", def: [0, 0, 0, 1], key: true },
+        resolution: { kind: "vec2", def: null, step: 1, help: "The size this node renders into (empty: the comp's)" },
         write: { kind: "target", def: "rgba", label: "channel", help: "What it writes into: rgba (its whole picture, as before), one channel, or a layer (its r g b a); the rest of what comes in passes" },
     } },
     merge: { label: "Merge", cat: "Merge", inputs: ["B", "A", "mask"], params: {
@@ -135,6 +136,7 @@ export const NODE_TYPES = {
     } },
     lensflare: { label: "LensFlare", cat: "Draw", inputs: ["src", "dirt"], params: {
         position: { kind: "vec2", def: null, key: true, step: 1, help: "The light, pixels of the comp (empty: the middle)" },
+        resolution: { kind: "vec2", def: null, step: 1, help: "The size this node renders into (empty: the picture that comes in, or the comp's)" },
         color: { kind: "color", def: [1, 0.85, 0.7, 1] },
         intensity: { kind: "num", def: 1, min: 0, key: true, step: 0.05 },
         size: { kind: "num", def: 1, min: 0.01, key: true, step: 0.05, help: "Everything's size, as a share of the frame's diagonal" },
@@ -1706,6 +1708,12 @@ export function readSize(n) {
     const z = n && n.size;
     return Array.isArray(z) && z.length === 2 && z.every((v) => Number.isInteger(v) && v >= 1 && v <= 65536) ? z : null;
 }
+/** A Constant's or LensFlare's own Resolution, in whole pixels, or null when it renders at the comp's / input's size. */
+export function ownSize(n, frame = 0) {
+    const r = paramAt(n, "resolution", frame);
+    return Array.isArray(r) && r.length === 2 && r.every((v) => Number.isFinite(v) && v >= 1)
+        ? [Math.max(1, Math.round(r[0])), Math.max(1, Math.round(r[1]))] : null;
+}
 export function formatAt(comp, id, depth = 0) {
     if (!depth) { comp = G.flattenComp(comp); id = G.resolveId(comp, id); }
     const F = { width: comp.format.width, height: comp.format.height };
@@ -1718,6 +1726,8 @@ export function formatAt(comp, id, depth = 0) {
     if (n.type === "ai_workflow") { const z = EX.workflowSize(n); if (z) return z; }
     if (!n.disable && n.type === "ai_upscale") { const u = up(), k = EX.upscaleFactor(n); return { width: Math.max(1, Math.round(u.width * k)), height: Math.max(1, Math.round(u.height * k)) }; }
     if (n.type === "read") { const z = readSize(n); return z ? { width: z[0], height: z[1] } : F; }
+    // A Constant or LensFlare with a Resolution of its own renders into that size (#291).
+    if (!n.disable && (n.type === "constant" || n.type === "lensflare")) { const z = ownSize(n); if (z) return { width: z[0], height: z[1] }; }
     if (n.disable || n.type !== "reformat") return n.type === "constant" || PLAIN_SIZE.has(n.type) ? F : up();
     const [w, h] = reformatSize(n, 0, up());
     return { width: w, height: h };
@@ -2380,8 +2390,10 @@ export function renderNode(comp, id, frame, ctx) {
         case "lensflare": {
             const p = {};
             for (const k of Object.keys(NODE_TYPES.lensflare.params)) p[k] = paramAt(n, k, f);
-            // On a picture: that picture's size (the light in its pixels); without one, the comp's.
-            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, w = src ? src.w : W, h = src ? src.h : H;
+            // On a picture: that picture's size (the light in its pixels); without one, the comp's;
+            // a Resolution of its own wins over both (#291).
+            const src = n.inputs[0] ? run(n.inputs[0], f, d1) : null, own = ownSize(n, f);
+            const w = own ? own[0] : src ? src.w : W, h = own ? own[1] : src ? src.h : H;
             return LT.flareImage(src, n.inputs[1] ? conform(run(n.inputs[1], f, d1), w, h) : null, p, w, h, scale);
         }
         case "ocio_colorspace": case "ocio_display": {
