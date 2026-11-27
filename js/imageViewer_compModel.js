@@ -154,6 +154,7 @@ export const NODE_TYPES = {
         ghost_amount: { kind: "num", def: 0.15, min: 0, key: true, step: 0.01 },
         ghost_size: { kind: "num", def: 0.04, min: 0, key: true, step: 0.005 },
         ghost_spread: { kind: "num", def: 1, key: true, step: 0.05 },
+        ghost_dir: { kind: "vec2", def: null, key: true, step: 1, help: "Where the ghosts run to (empty: the frame's middle) - the second on-screen control" },
         ghost_shape: { kind: "enum", def: "polygon", choices: LT.GHOST_SHAPES },
         blades: { kind: "int", def: 6, min: 3, max: 16 },
         ghost_rotation: { kind: "num", def: 0, key: true, step: 1 },

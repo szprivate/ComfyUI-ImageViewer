@@ -102,14 +102,17 @@ export function flareImage(src, dirt, p, W, H, scale) {
     const out = blank(W, H), o = out.data;
     const D = Math.hypot(W, H) * p.size;
     const pos = p.position || [W / scale / 2, H / scale / 2];
-    const lx = pos[0] * scale, ly = pos[1] * scale, cx = W / 2, cy = H / 2;
+    const lx = pos[0] * scale, ly = pos[1] * scale;
+    // The ghosts run along the axis from the light to `ghost_dir` (the frame's middle when empty).
+    const gd = p.ghost_dir;
+    const tx = gd ? gd[0] * scale : W / 2, ty = gd ? gd[1] * scale : H / 2;
     const tint = p.color || [1, 1, 1, 1], I = p.intensity;
     const Rg = p.glow_size * D, Rg2 = Rg * Rg;
     const nS = Math.round(p.streak_count), Ls = p.streak_length * D, Ws = Math.max(1e-3, p.streak_width * scale);
     const rays = [];
     for (let i = 0; i < nS; i++) { const a = ((p.streak_angle + (360 * i) / Math.max(1, nS)) * Math.PI) / 180; rays.push([Math.cos(a), Math.sin(a)]); }
     const Rh = p.halo_radius * D, Wh = Math.max(1e-3, p.halo_width * D);
-    const ghosts = flareGhosts(p).map((g) => ({ ...g, x: lx + g.t * 2 * (cx - lx), y: ly + g.t * 2 * (cy - ly), R: Math.max(1e-3, g.r * p.ghost_size * D) }));
+    const ghosts = flareGhosts(p).map((g) => ({ ...g, x: lx + g.t * 2 * (tx - lx), y: ly + g.t * 2 * (ty - ly), R: Math.max(1e-3, g.r * p.ghost_size * D) }));
     const poly = p.ghost_shape === "polygon", nB = Math.max(3, Math.round(p.blades)), rot = (p.ghost_rotation * Math.PI) / 180;
     const soft = clamp01(p.ghost_softness);
     // The dirt map: the input's luminance, or the seed's spots stamped.

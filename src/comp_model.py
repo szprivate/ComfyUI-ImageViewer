@@ -446,6 +446,7 @@ NODE_TYPES = {
         "ghost_amount": {"kind": "num", "def": 0.15, "min": 0, "key": True},
         "ghost_size": {"kind": "num", "def": 0.04, "min": 0, "key": True},
         "ghost_spread": {"kind": "num", "def": 1, "key": True},
+        "ghost_dir": {"kind": "vec2", "def": None, "key": True},
         "ghost_shape": {"kind": "enum", "def": "polygon", "choices": GHOST_SHAPES},
         "blades": {"kind": "int", "def": 6, "min": 3, "max": 16},
         "ghost_rotation": {"kind": "num", "def": 0, "key": True},
@@ -2516,7 +2517,9 @@ def _poly_edge(n, rot, a):
 def flare_image(src, dirt, p, W, H, scale):
     D = math.hypot(W, H) * p["size"]
     pos = p.get("position") or [W / scale / 2, H / scale / 2]
-    lx, ly, cx, cy = pos[0] * scale, pos[1] * scale, W / 2, H / 2
+    lx, ly = pos[0] * scale, pos[1] * scale
+    gd = p.get("ghost_dir")
+    cx, cy = (gd[0] * scale, gd[1] * scale) if gd else (W / 2, H / 2)
     tint = p.get("color") or [1, 1, 1, 1]
     I = p["intensity"]
     X = np.arange(W, dtype=np.float64)[None, :] + 0.5

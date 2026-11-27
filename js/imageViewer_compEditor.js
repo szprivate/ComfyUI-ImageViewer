@@ -1448,7 +1448,12 @@ export function createCompEditor(host, opts = {}) {
         const F = inFmt(n), mid = [F.width / 2, F.height / 2];
         const at = (p, def) => C.paramAt(n, p, st.frame) || def;
         const r1 = (v) => Math.round(v * 10) / 10;
-        if (n.type === "lensflare") return [{ param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" }];
+        if (n.type === "lensflare") return [
+            { param: "position", at: at("position", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], title: "The light" },
+            // The second control (#291): where the ghosts run to, the axis the light's own handle starts.
+            { param: "ghost_dir", at: at("ghost_dir", mid), set: (xy) => [r1(xy[0]), r1(xy[1])], small: true,
+              title: "Where the ghosts run to (the frame's middle when it sits there)" },
+        ];
         if (n.type === "zdefocus") return [{ param: "focal_point", at: at("focal_point", mid), set: (xy) => [r1(xy[0]), r1(xy[1])],
             title: "The focal point: drag it onto what should be sharp (the focus plane follows the depth under it)",
             patch: (xy) => { const pt = [r1(xy[0]), r1(xy[1])], z = depthUnder(n, pt); return z === null ? { focal_point: pt } : { focal_point: pt, focus: z }; } }];
