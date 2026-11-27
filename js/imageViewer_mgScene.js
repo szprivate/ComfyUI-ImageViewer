@@ -196,6 +196,15 @@ function interpolate(kind, a, b, frame) {
     const va = toVec(kind, a.v), vb = toVec(kind, b.v);
     const hasTan = a.to !== undefined || b.ti !== undefined;
     const bez = hasTan ? null : bezierProgress(a.ease, t);
+    // A cloud of points (a grid warp's destinations): no tangents per axis, every point
+    // travels from its a to its b on the key's own curve (#291: the grid warp animates).
+    if (Array.isArray(va) && Array.isArray(va[0])) {
+        const k = bez !== null ? bez : t;
+        return va.map((pt, i) => {
+            const q = (vb && vb[i]) || pt;
+            return pt.map((c, j) => c + ((q[j] !== undefined ? q[j] : c) - c) * k);
+        });
+    }
     const each = (axis) => {
         const p0 = comp(va, axis), p1 = comp(vb, axis);
         if (hasTan || a.ease === "smooth" || a.ease === undefined) {

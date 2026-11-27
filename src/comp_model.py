@@ -904,6 +904,15 @@ def _interpolate(a, b, frame):
     va, vb = a["v"], b["v"]
     has_tan = "to" in a or "ti" in b
     bez = None if has_tan else _bezier_progress(a.get("ease"), t)
+    if isinstance(va, list) and va and isinstance(va[0], list):
+        # A cloud of points (a grid warp's destinations): every point travels from its a to
+        # its b on the key's own curve (#291: the grid warp animates).
+        k = bez if bez is not None else t
+        out = []
+        for i, pt in enumerate(va):
+            q = vb[i] if i < len(vb) else pt
+            out.append([c + ((q[j] if j < len(q) else c) - c) * k for j, c in enumerate(pt)])
+        return out
 
     def each(axis):
         p0, p1 = _comp(va, axis), _comp(vb, axis)
